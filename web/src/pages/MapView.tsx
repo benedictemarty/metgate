@@ -9,7 +9,7 @@ import {
   Layer,
 } from 'react-map-gl/maplibre'
 import 'maplibre-gl/dist/maplibre-gl.css'
-import { Layers as LayersIcon, Loader2, X } from 'lucide-react'
+import { Clock, Layers as LayersIcon, Loader2, Pause, Play, X } from 'lucide-react'
 import type { Aggregate, Family } from '../types'
 
 interface MapViewProps {
@@ -76,23 +76,49 @@ const styleFor = (familyName: string): LayerStyle => {
 const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'
 
 interface FetchedLayer {
-  data: GeoJSON.FeatureCollection
+  rawData: GeoJSON.FeatureCollection // brut, contient toutes les forecasttime
+  data: GeoJSON.FeatureCollection // filtré selon le step temporel courant
   count: number
   total: number
 }
 
-// Garde uniquement les features dont forecasttime est absent ou nul (= analyse
-// courante). MetGate publie pour RDT_MSG les prévisions T+15/30/45/60 sur le
-// même trackingid, ce qui empile visuellement 5 contours par cellule.
-function keepAnalysisOnly(geo: GeoJSON.FeatureCollection): GeoJSON.FeatureCollection {
+const FORECAST_STEPS = [0, 15, 30, 45, 60] as const
+type ForecastStep = (typeof FORECAST_STEPS)[number]
+
+function featureForecastTime(f: GeoJSON.Feature): number | null {
+  const ft = (f.properties as Record<string, unknown> | null)?.forecasttime
+  if (ft === undefined || ft === null || ft === '') return null
+  const n = typeof ft === 'string' ? parseFloat(ft) : (ft as number)
+  return Number.isFinite(n) ? n : null
+}
+
+// Filtre les features pour ne garder que celles correspondant au step
+// temporel demandé. Les features sans forecasttime (cas METAR/TAF/SIGMET/...)
+// passent toujours, parce qu'elles ne sont pas concernées par cette logique.
+function filterByForecast(
+  geo: GeoJSON.FeatureCollection,
+  minutes: number,
+): GeoJSON.FeatureCollection {
   return {
     ...geo,
     features: geo.features.filter((f) => {
-      const ft = f.properties?.forecasttime as string | undefined
-      if (ft === undefined || ft === null) return true
-      return ft === '0' || ft === '0.0' || ft === ''
+      const ft = featureForecastTime(f)
+      if (ft === null) return true
+      return ft === minutes
     }),
   }
+}
+
+// True dès qu'au moins une feature chargée a une forecasttime > 0 :
+// dans ce cas on affiche le slider temporel.
+function hasAnyForecast(layers: Record<string, FetchedLayer>): boolean {
+  for (const l of Object.values(layers)) {
+    for (const f of l.rawData.features) {
+      const ft = featureForecastTime(f)
+      if (ft !== null && ft > 0) return true
+    }
+  }
+  return false
 }
 
 interface PopupState {
@@ -103,12 +129,14 @@ interface PopupState {
 }
 
 export default function MapView({ data }: MapViewProps) {
-  const [active, setActive] = useState<Set<string>>(() => new Set(['METAR_last']))
+  const [active, setActive] = useState<Set<string>>(() => new Set(['METAR']))
   const [loaded, setLoaded] = useState<Record<string, FetchedLayer>>({})
   const [loading, setLoading] = useState<Set<string>>(new Set())
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [popup, setPopup] = useState<PopupState | null>(null)
+  const [forecastMinutes, setForecastMinutes] = useState<ForecastStep>(0)
+  const [playing, setPlaying] = useState(false)
 
   const candidates: Family[] = useMemo(() => {
     if (!data) return []
@@ -144,10 +172,11 @@ export default function MapView({ data }: MapViewProps) {
           throw new Error(`HTTP ${r.status}: ${detail.slice(0, 80)}`)
         }
         const geo = (await r.json()) as GeoJSON.FeatureCollection
-        const filtered = keepAnalysisOnly(geo)
+        const filtered = filterByForecast(geo, forecastMinutes)
         setLoaded((prev) => ({
           ...prev,
           [name]: {
+            rawData: geo,
             data: filtered,
             count: filtered.features.length,
             total: geo.features?.length ?? 0,
@@ -183,6 +212,38 @@ export default function MapView({ data }: MapViewProps) {
       return next
     })
   }
+
+  // Re-filter chaque couche dès que le step temporel change.
+  useEffect(() => {
+    setLoaded((prev) => {
+      const next: Record<string, FetchedLayer> = {}
+      let changed = false
+      for (const [name, l] of Object.entries(prev)) {
+        const filtered = filterByForecast(l.rawData, forecastMinutes)
+        if (filtered.features.length === l.data.features.length && filtered === l.data) {
+          next[name] = l
+          continue
+        }
+        next[name] = { ...l, data: filtered, count: filtered.features.length }
+        changed = true
+      }
+      return changed ? next : prev
+    })
+  }, [forecastMinutes])
+
+  // Animation play : avance d'un step toutes les ~1.4 s.
+  useEffect(() => {
+    if (!playing) return
+    const id = window.setInterval(() => {
+      setForecastMinutes((prev) => {
+        const idx = FORECAST_STEPS.indexOf(prev)
+        return FORECAST_STEPS[(idx + 1) % FORECAST_STEPS.length]
+      })
+    }, 1400)
+    return () => window.clearInterval(id)
+  }, [playing])
+
+  const showTimeSlider = useMemo(() => hasAnyForecast(loaded), [loaded])
 
   const interactiveLayerIds = useMemo(() => {
     const ids: string[] = []
@@ -324,6 +385,69 @@ export default function MapView({ data }: MapViewProps) {
         errors={errors}
         onToggleLayer={toggle}
       />
+
+      {showTimeSlider && (
+        <TimeSlider
+          value={forecastMinutes}
+          onChange={(v) => {
+            setForecastMinutes(v)
+            setPlaying(false)
+          }}
+          playing={playing}
+          onTogglePlay={() => setPlaying((p) => !p)}
+        />
+      )}
+    </div>
+  )
+}
+
+interface TimeSliderProps {
+  value: ForecastStep
+  onChange: (v: ForecastStep) => void
+  playing: boolean
+  onTogglePlay: () => void
+}
+
+function TimeSlider({ value, onChange, playing, onTogglePlay }: TimeSliderProps) {
+  const label = value === 0 ? 'Analyse · T+0' : `Prévision · T+${value} min`
+  return (
+    <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 rounded-xl border border-slate-800/70 bg-slate-950/85 backdrop-blur-md px-3 py-2 shadow-2xl">
+      <button
+        onClick={onTogglePlay}
+        className="size-8 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 flex items-center justify-center transition"
+        aria-label={playing ? 'Pause' : 'Play'}
+      >
+        {playing ? (
+          <Pause className="size-4 text-sky-300" />
+        ) : (
+          <Play className="size-4 text-sky-300 translate-x-[1px]" />
+        )}
+      </button>
+
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center gap-1.5 text-[11px] text-slate-300">
+          <Clock className="size-3 text-slate-500" />
+          <span className="font-medium tabular-nums">{label}</span>
+        </div>
+        <div className="flex gap-1">
+          {FORECAST_STEPS.map((m) => {
+            const active = value === m
+            return (
+              <button
+                key={m}
+                onClick={() => onChange(m)}
+                className={`min-w-12 h-7 px-2 rounded-md text-[11px] font-mono tabular-nums transition border ${
+                  active
+                    ? 'bg-sky-500/25 text-sky-100 border-sky-400/50 shadow-[0_0_10px_rgba(56,189,248,0.25)]'
+                    : 'bg-slate-900/60 text-slate-400 border-slate-800/60 hover:bg-slate-800/60 hover:text-slate-200'
+                }`}
+              >
+                {m === 0 ? 'Now' : `+${m}'`}
+              </button>
+            )
+          })}
+        </div>
+      </div>
     </div>
   )
 }
