@@ -20,6 +20,7 @@ func (a *API) Routes() *http.ServeMux {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /healthz", a.healthz)
 	m.HandleFunc("GET /api/catalog", a.handleCatalog)
+	m.HandleFunc("GET /api/products", a.handleProducts)
 	return m
 }
 
@@ -66,6 +67,15 @@ func (a *API) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "service must be RAW, WFS or WCS", http.StatusBadRequest)
 	}
+}
+
+func (a *API) handleProducts(w http.ResponseWriter, r *http.Request) {
+	agg, err := a.catalog.AggregateProducts(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, http.StatusOK, agg)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
