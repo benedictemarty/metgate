@@ -12,6 +12,7 @@ run:
 # Build du frontend uniquement (sortie dans internal/web/dist/).
 web:
 	cd web && npm run build
+	touch internal/web/dist/.gitkeep
 
 # Frontend en mode dev (hot reload, proxy /api → :8080). Lancer le backend
 # avec `make run` dans un autre terminal.

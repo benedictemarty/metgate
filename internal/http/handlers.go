@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -22,6 +23,10 @@ func (a *API) Routes() *http.ServeMux {
 	m.HandleFunc("GET /healthz", a.healthz)
 	m.HandleFunc("GET /api/catalog", a.handleCatalog)
 	m.HandleFunc("GET /api/products", a.handleProducts)
+	m.HandleFunc("GET /api/wfs", a.proxyTo("/broker_service/WFS"))
+	m.HandleFunc("GET /api/wcs", a.proxyTo("/broker_service/WCS"))
+	m.HandleFunc("GET /api/raw", a.proxyTo("/broker_service/RAW"))
+	m.HandleFunc("GET /api/feature", a.handleFeature)
 	m.Handle("GET /", web.Handler())
 	return m
 }
@@ -71,6 +76,28 @@ func (a *API) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleFeature relaie un WFS GetFeature de MetGate (GML) en GeoJSON.
+// Usage: /api/feature?type=METAR_last&count=200
+func (a *API) handleFeature(w http.ResponseWriter, r *http.Request) {
+	typeName := r.URL.Query().Get("type")
+	if typeName == "" {
+		http.Error(w, "param 'type' requis (ex: METAR_last)", http.StatusBadRequest)
+		return
+	}
+	count := 0
+	if c := r.URL.Query().Get("count"); c != "" {
+		fmt.Sscanf(c, "%d", &count)
+	}
+	geo, err := a.catalog.FeatureGeoJSON(r.Context(), typeName, count)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/geo+json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(geo)
+}
+
 func (a *API) handleProducts(w http.ResponseWriter, r *http.Request) {
 	agg, err := a.catalog.AggregateProducts(r.Context())
 	if err != nil {
@@ -78,6 +105,26 @@ func (a *API) handleProducts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, agg)
+}
+
+// proxyTo relaie GET ?... vers le path MetGate donné, en réinjectant les query
+// params reçus, et en restituant content-type/status/body. Le token Bearer
+// reste côté serveur.
+func (a *API) proxyTo(metgatePath string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		resp, err := a.catalog.Proxy(r.Context(), metgatePath, r.URL.Query())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		ct := resp.ContentType
+		if ct == "" {
+			ct = "application/octet-stream"
+		}
+		w.Header().Set("Content-Type", ct)
+		w.WriteHeader(resp.Status)
+		_, _ = w.Write(resp.Body)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
