@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -81,10 +82,15 @@ func parseMember(dec *xml.Decoder) (map[string]any, error) {
 				}
 				depth--
 			case "opmet_msg":
-				// CDATA IWXXM volumineux — on saute.
-				if err := dec.Skip(); err != nil {
+				// CDATA IWXXM volumineux : on n'embarque PAS l'XML brut dans
+				// le GeoJSON. On en extrait soit le TAC d'origine (IWXXM
+				// 2021-2 et antérieur conservait translatedFailedTAC), soit
+				// on reconstruit un TAC minimal à partir des champs IWXXM 3.0.
+				txt, err := readNestedText(dec, t)
+				if err != nil {
 					return nil, err
 				}
+				enrichFromIWXXM(props, txt)
 				depth--
 			case "msGeometry", "geom", "geometry", "the_geom":
 				g, err := parseGeometry(dec)
@@ -215,6 +221,121 @@ func readText(dec *xml.Decoder) (string, error) {
 			sb.WriteString(inner)
 		}
 	}
+}
+
+var (
+	// IWXXM 2021-2 et antérieurs conservaient le TAC d'origine en attribut.
+	rxTACAttr = regexp.MustCompile(`translated(?:Failed)?TAC="([^"]*)"`)
+
+	// IWXXM 3.0 : champs scalaires utiles pour reconstruire un TAC compact.
+	rxAirTemp  = regexp.MustCompile(`<iwxxm:airTemperature[^>]*uom="([^"]+)"[^>]*>([^<]+)</iwxxm:airTemperature>`)
+	rxDewTemp  = regexp.MustCompile(`<iwxxm:dewpointTemperature[^>]*uom="([^"]+)"[^>]*>([^<]+)</iwxxm:dewpointTemperature>`)
+	rxQNH      = regexp.MustCompile(`<iwxxm:qnh[^>]*uom="([^"]+)"[^>]*>([^<]+)</iwxxm:qnh>`)
+	rxWindDir  = regexp.MustCompile(`<iwxxm:meanWindDirection[^>]*uom="([^"]+)"[^>]*>([^<]+)</iwxxm:meanWindDirection>`)
+	rxWindSpd  = regexp.MustCompile(`<iwxxm:meanWindSpeed[^>]*uom="([^"]+)"[^>]*>([^<]+)</iwxxm:meanWindSpeed>`)
+	rxCAVOK    = regexp.MustCompile(`cloudAndVisibilityOK="(true|false)"`)
+	rxICAOInfo = regexp.MustCompile(`<aixm:designator>([^<]+)</aixm:designator>`)
+)
+
+// enrichFromIWXXM extrait du payload IWXXM les champs courants et les ajoute
+// aux properties GeoJSON ; calcule également un champ `tac` (texte court)
+// soit en reprenant l'attribut translatedFailedTAC s'il existe, soit en
+// reconstruisant un TAC minimal à partir des champs IWXXM 3.0.
+func enrichFromIWXXM(props map[string]any, opmet string) {
+	if m := rxTACAttr.FindStringSubmatch(opmet); len(m) >= 2 && strings.TrimSpace(m[1]) != "" {
+		props["tac"] = strings.TrimSpace(m[1])
+		return
+	}
+
+	get := func(rx *regexp.Regexp) (val, uom string) {
+		m := rx.FindStringSubmatch(opmet)
+		if len(m) >= 3 {
+			return strings.TrimSpace(m[2]), m[1]
+		}
+		return "", ""
+	}
+
+	temp, _ := get(rxAirTemp)
+	dew, _ := get(rxDewTemp)
+	qnh, _ := get(rxQNH)
+	wdir, _ := get(rxWindDir)
+	wspd, _ := get(rxWindSpd)
+	cavok := false
+	if m := rxCAVOK.FindStringSubmatch(opmet); len(m) >= 2 && m[1] == "true" {
+		cavok = true
+	}
+
+	if temp != "" {
+		props["airTemperature_C"] = temp
+	}
+	if dew != "" {
+		props["dewpointTemperature_C"] = dew
+	}
+	if qnh != "" {
+		props["qnh_hPa"] = qnh
+	}
+	if wdir != "" {
+		props["windDirection_deg"] = wdir
+	}
+	if wspd != "" {
+		props["windSpeed_kt"] = wspd
+	}
+	if cavok {
+		props["cavok"] = true
+	}
+
+	icao, _ := props["locationIndicatorICAO"].(string)
+	if icao == "" {
+		if m := rxICAOInfo.FindStringSubmatch(opmet); len(m) >= 2 {
+			icao = strings.TrimSpace(m[1])
+		}
+	}
+
+	if temp != "" || wspd != "" {
+		props["tac"] = formatTAC(icao, props, temp, dew, qnh, wdir, wspd, cavok)
+	}
+}
+
+// formatTAC compose un TAC simplifié dans l'esprit OACI mais lisible :
+// `METAR LFPG 252210Z 240/10KT CAVOK 09/03 Q1018=`
+func formatTAC(icao string, props map[string]any, temp, dew, qnh, wdir, wspd string, cavok bool) string {
+	var sb strings.Builder
+	sb.WriteString("METAR ")
+	if icao != "" {
+		sb.WriteString(icao)
+		sb.WriteByte(' ')
+	}
+	if t, ok := props["observationTime"].(string); ok && len(t) >= 16 {
+		// 2026-04-25T22:50:00Z → 252250Z
+		sb.WriteString(t[8:10] + t[11:13] + t[14:16] + "Z ")
+	}
+	if wdir != "" || wspd != "" {
+		if wdir == "" {
+			wdir = "VRB"
+		}
+		if wspd == "" {
+			wspd = "//"
+		}
+		fmt.Fprintf(&sb, "%s/%sKT ", trimDecimals(wdir), trimDecimals(wspd))
+	}
+	if cavok {
+		sb.WriteString("CAVOK ")
+	}
+	if temp != "" || dew != "" {
+		fmt.Fprintf(&sb, "%s/%s ", trimDecimals(temp), trimDecimals(dew))
+	}
+	if qnh != "" {
+		fmt.Fprintf(&sb, "Q%s ", trimDecimals(qnh))
+	}
+	return strings.TrimSpace(sb.String()) + "="
+}
+
+func trimDecimals(s string) string {
+	if i := strings.IndexByte(s, '.'); i >= 0 {
+		// "31.0" → "31", "1007.0" → "1007"
+		return s[:i]
+	}
+	return s
 }
 
 // readNestedText lit le contenu textuel d'un élément, en tolérant un seul

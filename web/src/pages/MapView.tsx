@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Map as MapGL, NavigationControl, ScaleControl, Source, Layer } from 'react-map-gl/maplibre'
+import type { MapLayerMouseEvent } from 'maplibre-gl'
+import {
+  Map as MapGL,
+  NavigationControl,
+  Popup,
+  ScaleControl,
+  Source,
+  Layer,
+} from 'react-map-gl/maplibre'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { Layers as LayersIcon, Loader2, X } from 'lucide-react'
 import type { Aggregate, Family } from '../types'
@@ -61,12 +69,20 @@ interface FetchedLayer {
   count: number
 }
 
+interface PopupState {
+  lng: number
+  lat: number
+  family: string
+  props: Record<string, unknown>
+}
+
 export default function MapView({ data }: MapViewProps) {
   const [active, setActive] = useState<Set<string>>(() => new Set(['METAR_last']))
   const [loaded, setLoaded] = useState<Record<string, FetchedLayer>>({})
   const [loading, setLoading] = useState<Set<string>>(new Set())
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [popup, setPopup] = useState<PopupState | null>(null)
 
   const candidates: Family[] = useMemo(() => {
     if (!data) return []
@@ -113,6 +129,29 @@ export default function MapView({ data }: MapViewProps) {
     })
   }
 
+  const interactiveLayerIds = useMemo(
+    () => Array.from(active).map((name) => `${name}-circle`),
+    [active],
+  )
+
+  const handleMapClick = (e: MapLayerMouseEvent) => {
+    const f = e.features?.[0]
+    if (!f) {
+      setPopup(null)
+      return
+    }
+    const layerId = f.layer?.id ?? ''
+    const family = layerId.replace(/-circle$/, '')
+    const geom = f.geometry as GeoJSON.Point | undefined
+    const [lng, lat] = geom?.coordinates ?? [e.lngLat.lng, e.lngLat.lat]
+    setPopup({
+      lng,
+      lat,
+      family,
+      props: (f.properties ?? {}) as Record<string, unknown>,
+    })
+  }
+
   return (
     <div className="relative h-[calc(100vh-72px)] w-full overflow-hidden">
       <MapGL
@@ -120,6 +159,9 @@ export default function MapView({ data }: MapViewProps) {
         mapStyle={MAP_STYLE}
         style={{ width: '100%', height: '100%' }}
         attributionControl={{ compact: true }}
+        interactiveLayerIds={interactiveLayerIds}
+        onClick={handleMapClick}
+        cursor={interactiveLayerIds.length > 0 ? 'pointer' : 'grab'}
       >
         <NavigationControl position="bottom-right" />
         <ScaleControl position="bottom-left" />
@@ -154,6 +196,26 @@ export default function MapView({ data }: MapViewProps) {
             </Source>
           )
         })}
+
+        {popup && (
+          <Popup
+            longitude={popup.lng}
+            latitude={popup.lat}
+            anchor="bottom"
+            offset={14}
+            closeOnClick={false}
+            closeButton={false}
+            onClose={() => setPopup(null)}
+            maxWidth="380px"
+            className="metgate-popup"
+          >
+            <FeaturePopup
+              family={popup.family}
+              props={popup.props}
+              onClose={() => setPopup(null)}
+            />
+          </Popup>
+        )}
       </MapGL>
 
       <Sidebar
@@ -166,6 +228,87 @@ export default function MapView({ data }: MapViewProps) {
         errors={errors}
         onToggleLayer={toggle}
       />
+    </div>
+  )
+}
+
+function FeaturePopup({
+  family,
+  props,
+  onClose,
+}: {
+  family: string
+  props: Record<string, unknown>
+  onClose: () => void
+}) {
+  const icao = (props.locationIndicatorICAO as string | undefined) ?? '—'
+  const obsTime = props.observationTime as string | undefined
+  const tac = props.tac as string | undefined
+  const status = props.status as string | undefined
+  const cavok = props.cavok === true
+  const fields: Array<[string, string]> = []
+  const push = (label: string, key: string, suffix = '') => {
+    const v = props[key]
+    if (typeof v === 'string' && v !== '') fields.push([label, v + suffix])
+  }
+  push('T', 'airTemperature_C', '°C')
+  push('Td', 'dewpointTemperature_C', '°C')
+  push('QNH', 'qnh_hPa', ' hPa')
+  push('Wind dir', 'windDirection_deg', '°')
+  push('Wind speed', 'windSpeed_kt', ' kt')
+
+  const s = styleFor(family)
+
+  return (
+    <div className="font-sans">
+      <div className="flex items-start justify-between gap-3 mb-2">
+        <div>
+          <div
+            className="text-base font-semibold tracking-tight"
+            style={{ color: s.color }}
+          >
+            {icao}
+          </div>
+          <div className="text-[10px] uppercase tracking-wider text-slate-400">
+            {family.replace(/_last$/, '')}
+            {obsTime && ' · ' + obsTime.replace('T', ' ').replace('Z', ' UTC')}
+          </div>
+        </div>
+        <button
+          onClick={onClose}
+          className="text-slate-500 hover:text-slate-200 transition shrink-0"
+          aria-label="Fermer"
+        >
+          <X className="size-4" />
+        </button>
+      </div>
+      {tac && (
+        <pre className="text-[11px] font-mono text-slate-200 bg-slate-950/60 border border-slate-800/60 rounded-md p-2 whitespace-pre-wrap break-words">
+          {tac}
+        </pre>
+      )}
+      {fields.length > 0 && (
+        <dl className="grid grid-cols-2 gap-x-3 gap-y-1 mt-2 text-[11px]">
+          {fields.map(([k, v]) => (
+            <div key={k} className="flex justify-between">
+              <dt className="text-slate-500">{k}</dt>
+              <dd className="text-slate-200 font-mono">{v}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      <div className="mt-2 flex items-center gap-2 text-[10px] text-slate-500">
+        {cavok && (
+          <span className="px-1.5 py-0.5 rounded bg-emerald-900/40 text-emerald-300 border border-emerald-800/60">
+            CAVOK
+          </span>
+        )}
+        {status && status !== 'NORMAL' && (
+          <span className="px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300 border border-amber-800/60">
+            {status}
+          </span>
+        )}
+      </div>
     </div>
   )
 }
