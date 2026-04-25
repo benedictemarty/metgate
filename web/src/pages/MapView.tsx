@@ -306,6 +306,45 @@ export default function MapView({ data }: MapViewProps) {
   )
 }
 
+// Champs verbeux à exclure de l'affichage générique (UUIDs, ids techniques
+// MetGate, attributs déjà rendus en haut de la popup, etc.).
+const POPUP_EXCLUDE_KEYS = new Set([
+  'locationIndicatorICAO',
+  'observationTime',
+  'tac',
+  'status',
+  'cavok',
+  'message_id',
+  'gml_id',
+  'ogc_fid',
+  'swpid',
+  'opmet_msg',
+])
+
+function fmtKey(k: string): string {
+  // analysistime → Analysis time, validitystarttime → Validity start time
+  return k
+    .replace(/_uom$/, '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/(time|date)\b/gi, ' $1')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^\w/, (c) => c.toUpperCase())
+}
+
+function fmtVal(v: unknown, key: string, props: Record<string, unknown>): string {
+  if (v === null || v === undefined) return ''
+  if (typeof v === 'boolean') return v ? 'yes' : 'no'
+  let s = String(v)
+  // ISO date → YYYY-MM-DD HH:mm UTC
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):/)
+  if (m) s = `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]} UTC`
+  // Apparier <key>_uom si présent (movingspeed → m/s)
+  const uom = props[`${key}_uom`]
+  if (typeof uom === 'string' && uom !== '') s += ' ' + uom
+  return s
+}
+
 function FeaturePopup({
   family,
   props,
@@ -315,37 +354,56 @@ function FeaturePopup({
   props: Record<string, unknown>
   onClose: () => void
 }) {
-  const icao = (props.locationIndicatorICAO as string | undefined) ?? '—'
+  const icao = props.locationIndicatorICAO as string | undefined
   const obsTime = props.observationTime as string | undefined
   const tac = props.tac as string | undefined
   const status = props.status as string | undefined
   const cavok = props.cavok === true
-  const fields: Array<[string, string]> = []
-  const push = (label: string, key: string, suffix = '') => {
+
+  const headerTitle = icao ?? (props.trackingid as string | undefined) ?? family.replace(/_last$/, '')
+  const headerTime =
+    obsTime ?? (props.timeposition as string | undefined) ?? (props.analysistime as string | undefined)
+
+  const metarFields: Array<[string, string]> = []
+  const pushMetar = (label: string, key: string, suffix = '') => {
     const v = props[key]
-    if (typeof v === 'string' && v !== '') fields.push([label, v + suffix])
+    if (typeof v === 'string' && v !== '') metarFields.push([label, v + suffix])
   }
-  push('T', 'airTemperature_C', '°C')
-  push('Td', 'dewpointTemperature_C', '°C')
-  push('QNH', 'qnh_hPa', ' hPa')
-  push('Wind dir', 'windDirection_deg', '°')
-  push('Wind speed', 'windSpeed_kt', ' kt')
+  pushMetar('T', 'airTemperature_C', '°C')
+  pushMetar('Td', 'dewpointTemperature_C', '°C')
+  pushMetar('QNH', 'qnh_hPa', ' hPa')
+  pushMetar('Wind dir', 'windDirection_deg', '°')
+  pushMetar('Wind speed', 'windSpeed_kt', ' kt')
+
+  // Toutes les autres props scalaires non exclues, hors champs *_uom
+  // (déjà concaténés à leur valeur principale).
+  const otherFields: Array<[string, string]> = []
+  for (const [k, v] of Object.entries(props)) {
+    if (POPUP_EXCLUDE_KEYS.has(k)) continue
+    if (k.endsWith('_uom')) continue
+    if (k.startsWith('airTemperature') || k.startsWith('dewpointTemperature')) continue
+    if (k.startsWith('qnh') || k.startsWith('windDirection') || k.startsWith('windSpeed')) continue
+    if (typeof v === 'object') continue
+    const s = fmtVal(v, k, props)
+    if (s !== '') otherFields.push([fmtKey(k), s])
+  }
 
   const s = styleFor(family)
 
   return (
     <div className="font-sans">
       <div className="flex items-start justify-between gap-3 mb-2">
-        <div>
+        <div className="min-w-0">
           <div
-            className="text-base font-semibold tracking-tight"
+            className="text-base font-semibold tracking-tight truncate"
             style={{ color: s.color }}
+            title={headerTitle}
           >
-            {icao}
+            {headerTitle}
           </div>
-          <div className="text-[10px] uppercase tracking-wider text-slate-400">
+          <div className="text-[10px] uppercase tracking-wider text-slate-400 truncate">
             {family.replace(/_last$/, '')}
-            {obsTime && ' · ' + obsTime.replace('T', ' ').replace('Z', ' UTC')}
+            {headerTime && ' · ' + fmtVal(headerTime, '_t', props)}
           </div>
         </div>
         <button
@@ -356,14 +414,16 @@ function FeaturePopup({
           <X className="size-4" />
         </button>
       </div>
+
       {tac && (
         <pre className="text-[11px] font-mono text-slate-200 bg-slate-950/60 border border-slate-800/60 rounded-md p-2 whitespace-pre-wrap break-words">
           {tac}
         </pre>
       )}
-      {fields.length > 0 && (
+
+      {metarFields.length > 0 && (
         <dl className="grid grid-cols-2 gap-x-3 gap-y-1 mt-2 text-[11px]">
-          {fields.map(([k, v]) => (
+          {metarFields.map(([k, v]) => (
             <div key={k} className="flex justify-between">
               <dt className="text-slate-500">{k}</dt>
               <dd className="text-slate-200 font-mono">{v}</dd>
@@ -371,6 +431,20 @@ function FeaturePopup({
           ))}
         </dl>
       )}
+
+      {otherFields.length > 0 && (
+        <dl className="mt-2 text-[10px] max-h-56 overflow-y-auto pr-1">
+          {otherFields.map(([k, v]) => (
+            <div key={k} className="flex justify-between gap-3 py-0.5 border-b border-slate-800/40 last:border-0">
+              <dt className="text-slate-500 shrink-0">{k}</dt>
+              <dd className="text-slate-200 font-mono text-right truncate" title={v}>
+                {v}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+
       <div className="mt-2 flex items-center gap-2 text-[10px] text-slate-500">
         {cavok && (
           <span className="px-1.5 py-0.5 rounded bg-emerald-900/40 text-emerald-300 border border-emerald-800/60">
