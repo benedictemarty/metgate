@@ -16,25 +16,31 @@ interface MapViewProps {
   data: Aggregate | null
 }
 
-// MetGate WFS ne sort que du GML et on ne convertit pour l'instant que les
-// Points en GeoJSON. On filtre les familles dont la géométrie est ponctuelle
-// (aérodromes / observations / advisories).
+// Familles WFS qu'on sait afficher sur la carte. Géométries supportées par
+// le backend : Point, Polygon, MultiPolygon.
 //
 // Les noms ici sont des *familles* (sortie de /api/products) — pas des
 // FeatureTypes WFS. Le typeName réel envoyé à MetGate vient de family.latest
 // (ex: "METAR_last").
-const POINT_FAMILIES = new Set([
+const MAPPABLE_FAMILIES = new Set([
+  // Points (aérodromes / observations / advisories)
   'METAR',
   'SPECI',
   'TAF',
-  'AIRMET',
   'LocalReport',
-  'SIGMET',
   'VolcanicAshAdvisory',
-  'VolcanicAshSIGMET',
   'TropicalCycloneAdvisory',
-  'TropicalCycloneSIGMET',
   'SpaceWeatherAdvisory',
+  // Polygones / MultiPolygones (zones)
+  'AIRMET',
+  'SIGMET',
+  'VolcanicAshSIGMET',
+  'TropicalCycloneSIGMET',
+  'CAT_EURAT01',
+  'GIVRAGE_EURAT01',
+  'RDT_MSG',
+  'OPIC_GTD',
+  'QVACIS',
 ])
 
 interface LayerStyle {
@@ -52,6 +58,11 @@ const LAYER_STYLES: Record<string, LayerStyle> = {
   Volcanic: { color: '#fb923c', glow: '#f97316' },
   Tropical: { color: '#f472b6', glow: '#ec4899' },
   Space: { color: '#c084fc', glow: '#a855f7' },
+  CAT: { color: '#c084fc', glow: '#a855f7' },
+  GIVRAGE: { color: '#7dd3fc', glow: '#38bdf8' },
+  RDT: { color: '#f472b6', glow: '#ec4899' },
+  OPIC: { color: '#94a3b8', glow: '#64748b' },
+  QVACIS: { color: '#fb923c', glow: '#f97316' },
 }
 
 const styleFor = (familyName: string): LayerStyle => {
@@ -89,7 +100,7 @@ export default function MapView({ data }: MapViewProps) {
     // On veut que la famille soit dans la liste des points connus ET
     // qu'elle dispose d'une version interrogeable (latest non vide).
     return data.wfs.families.filter(
-      (f) => POINT_FAMILIES.has(f.name) && Boolean(f.latest),
+      (f) => MAPPABLE_FAMILIES.has(f.name) && Boolean(f.latest),
     )
   }, [data])
 
@@ -151,10 +162,13 @@ export default function MapView({ data }: MapViewProps) {
     })
   }
 
-  const interactiveLayerIds = useMemo(
-    () => Array.from(active).map((name) => `${name}-circle`),
-    [active],
-  )
+  const interactiveLayerIds = useMemo(() => {
+    const ids: string[] = []
+    active.forEach((name) => {
+      ids.push(`${name}-circle`, `${name}-fill`)
+    })
+    return ids
+  }, [active])
 
   const handleMapClick = (e: MapLayerMouseEvent) => {
     const f = e.features?.[0]
@@ -163,9 +177,16 @@ export default function MapView({ data }: MapViewProps) {
       return
     }
     const layerId = f.layer?.id ?? ''
-    const family = layerId.replace(/-circle$/, '')
-    const geom = f.geometry as GeoJSON.Point | undefined
-    const [lng, lat] = geom?.coordinates ?? [e.lngLat.lng, e.lngLat.lat]
+    const family = layerId.replace(/-(circle|fill)$/, '')
+    // Pour les Points on prend les coords de la feature ; pour les polygones,
+    // on retient le clic (centroïde approximatif suffirait, mais le clic est
+    // déjà l'endroit qui intéresse l'utilisateur).
+    const geom = f.geometry as GeoJSON.Geometry | undefined
+    let lng = e.lngLat.lng
+    let lat = e.lngLat.lat
+    if (geom?.type === 'Point') {
+      ;[lng, lat] = (geom as GeoJSON.Point).coordinates
+    }
     setPopup({
       lng,
       lat,
@@ -194,9 +215,39 @@ export default function MapView({ data }: MapViewProps) {
           const s = styleFor(name)
           return (
             <Source key={name} id={`src-${name}`} type="geojson" data={layer.data}>
+              {/* Polygones / multipolygones : remplissage + bordure */}
+              <Layer
+                id={`${name}-fill`}
+                type="fill"
+                filter={[
+                  'in',
+                  ['geometry-type'],
+                  ['literal', ['Polygon', 'MultiPolygon']],
+                ]}
+                paint={{
+                  'fill-color': s.color,
+                  'fill-opacity': 0.18,
+                }}
+              />
+              <Layer
+                id={`${name}-line`}
+                type="line"
+                filter={[
+                  'in',
+                  ['geometry-type'],
+                  ['literal', ['Polygon', 'MultiPolygon']],
+                ]}
+                paint={{
+                  'line-color': s.color,
+                  'line-width': 1.5,
+                  'line-opacity': 0.85,
+                }}
+              />
+              {/* Points : halo + cercle */}
               <Layer
                 id={`${name}-glow`}
                 type="circle"
+                filter={['==', ['geometry-type'], 'Point']}
                 paint={{
                   'circle-radius': 12,
                   'circle-color': s.glow,
@@ -207,6 +258,7 @@ export default function MapView({ data }: MapViewProps) {
               <Layer
                 id={`${name}-circle`}
                 type="circle"
+                filter={['==', ['geometry-type'], 'Point']}
                 paint={{
                   'circle-radius': 4.5,
                   'circle-color': s.color,

@@ -129,10 +129,11 @@ func parseMember(dec *xml.Decoder) (map[string]any, error) {
 	}
 }
 
-// parseGeometry cherche un gml:Point dans le conteneur géométrique courant.
+// parseGeometry cherche une géométrie GML supportée (Point, Polygon,
+// MultiSurface→MultiPolygon) dans le conteneur géométrique courant.
 // Renvoie nil si rien d'exploitable.
 func parseGeometry(dec *xml.Decoder) (map[string]any, error) {
-	var pt map[string]any
+	var geom map[string]any
 	for {
 		tok, err := dec.Token()
 		if err != nil {
@@ -140,24 +141,189 @@ func parseGeometry(dec *xml.Decoder) (map[string]any, error) {
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
-			if t.Name.Local == "Point" {
+			switch t.Name.Local {
+			case "Point":
 				lon, lat, err := readPos(dec)
 				if err != nil {
 					return nil, err
 				}
-				pt = map[string]any{
+				geom = map[string]any{
 					"type":        "Point",
 					"coordinates": []float64{lon, lat},
 				}
+			case "Polygon":
+				rings, err := parsePolygon(dec)
+				if err != nil {
+					return nil, err
+				}
+				if len(rings) > 0 {
+					geom = map[string]any{
+						"type":        "Polygon",
+						"coordinates": rings,
+					}
+				}
+			case "MultiSurface", "MultiPolygon":
+				polys, err := parseMultiPolygon(dec)
+				if err != nil {
+					return nil, err
+				}
+				if len(polys) > 0 {
+					geom = map[string]any{
+						"type":        "MultiPolygon",
+						"coordinates": polys,
+					}
+				}
+			default:
+				if err := dec.Skip(); err != nil {
+					return nil, err
+				}
+			}
+		case xml.EndElement:
+			return geom, nil
+		}
+	}
+}
+
+// parsePolygon lit un gml:Polygon (gml:exterior + 0..N gml:interior) et
+// renvoie les anneaux comme [exterior, hole1, hole2, ...] où chaque anneau
+// est []{lon, lat}.
+func parsePolygon(dec *xml.Decoder) ([][][]float64, error) {
+	var rings [][][]float64
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "exterior", "interior":
+				ring, err := parseRing(dec)
+				if err != nil {
+					return nil, err
+				}
+				if len(ring) >= 4 { // anneau valide : 3 points + fermeture
+					rings = append(rings, ring)
+				}
+			default:
+				if err := dec.Skip(); err != nil {
+					return nil, err
+				}
+			}
+		case xml.EndElement:
+			return rings, nil
+		}
+	}
+}
+
+// parseRing lit un gml:LinearRing > gml:posList "lat lon lat lon..." et
+// retourne []{lon, lat}.
+func parseRing(dec *xml.Decoder) ([][]float64, error) {
+	var coords [][]float64
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "LinearRing", "Ring":
+				continue
+			case "posList":
+				txt, err := readText(dec)
+				if err != nil {
+					return nil, err
+				}
+				coords = parsePosList(txt)
+			default:
+				if err := dec.Skip(); err != nil {
+					return nil, err
+				}
+			}
+		case xml.EndElement:
+			return coords, nil
+		}
+	}
+}
+
+// parseMultiPolygon lit un gml:MultiSurface (ou MultiPolygon) et collecte
+// chaque sous-Polygon. Retourne [polygon1, polygon2, ...] où chaque polygon
+// est [[exterior, hole1, ...]].
+func parseMultiPolygon(dec *xml.Decoder) ([][][][]float64, error) {
+	var polys [][][][]float64
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			switch t.Name.Local {
+			case "surfaceMember", "polygonMember":
+				poly, err := readNestedPolygon(dec)
+				if err != nil {
+					return nil, err
+				}
+				if len(poly) > 0 {
+					polys = append(polys, poly)
+				}
+			default:
+				if err := dec.Skip(); err != nil {
+					return nil, err
+				}
+			}
+		case xml.EndElement:
+			return polys, nil
+		}
+	}
+}
+
+// readNestedPolygon descend dans un surfaceMember/polygonMember et lit le
+// gml:Polygon qui s'y trouve.
+func readNestedPolygon(dec *xml.Decoder) ([][][]float64, error) {
+	var rings [][][]float64
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			if t.Name.Local == "Polygon" {
+				r, err := parsePolygon(dec)
+				if err != nil {
+					return nil, err
+				}
+				rings = r
 			} else {
 				if err := dec.Skip(); err != nil {
 					return nil, err
 				}
 			}
 		case xml.EndElement:
-			return pt, nil
+			return rings, nil
 		}
 	}
+}
+
+// parsePosList convertit "lat lon lat lon ..." (axe-order EPSG:4326 MetGate)
+// en []{lon, lat} pour GeoJSON.
+func parsePosList(s string) [][]float64 {
+	parts := strings.Fields(s)
+	if len(parts) < 2 || len(parts)%2 != 0 {
+		return nil
+	}
+	out := make([][]float64, 0, len(parts)/2)
+	for i := 0; i+1 < len(parts); i += 2 {
+		la, e1 := strconv.ParseFloat(parts[i], 64)
+		lo, e2 := strconv.ParseFloat(parts[i+1], 64)
+		if e1 != nil || e2 != nil {
+			continue
+		}
+		out = append(out, []float64{lo, la})
+	}
+	return out
 }
 
 // readPos lit <gml:pos>LAT LON</gml:pos> dans un <gml:Point>.
