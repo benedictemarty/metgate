@@ -25,6 +25,11 @@ func FS() fs.FS {
 // Handler sert les fichiers statiques avec fallback sur index.html.
 // Les requêtes vers /api/* et /healthz sont laissées en 404 (elles doivent
 // être routées avant ce handler dans le ServeMux).
+//
+// Les chemins ressemblant à des assets (extension explicite type .js/.css/
+// .map/.svg/.ico/.json) renvoient 404 quand ils n'existent pas, plutôt que
+// le fallback index.html — sinon les sourcemaps demandées par les DevTools
+// reçoivent du HTML que le navigateur tente de parser en JSON.
 func Handler() http.Handler {
 	sub := FS()
 	fileServer := http.FileServer(http.FS(sub))
@@ -38,9 +43,26 @@ func Handler() http.Handler {
 			path = "index.html"
 		}
 		if _, err := fs.Stat(sub, path); err != nil {
+			if isAssetPath(path) {
+				http.NotFound(w, r)
+				return
+			}
 			r = r.Clone(r.Context())
 			r.URL.Path = "/"
 		}
 		fileServer.ServeHTTP(w, r)
 	})
+}
+
+func isAssetPath(p string) bool {
+	idx := strings.LastIndexByte(p, '.')
+	if idx < 0 {
+		return false
+	}
+	switch strings.ToLower(p[idx:]) {
+	case ".js", ".css", ".map", ".svg", ".ico", ".png", ".jpg", ".jpeg",
+		".gif", ".webp", ".woff", ".woff2", ".ttf", ".otf", ".json":
+		return true
+	}
+	return false
 }

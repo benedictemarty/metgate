@@ -16,25 +16,25 @@ interface MapViewProps {
   data: Aggregate | null
 }
 
-// MetGate WFS ne sait sortir que du GML, et on ne convertit pour l'instant
-// que les Points en GeoJSON. Les familles ci-dessous sont celles dont la
-// géométrie est ponctuelle (aérodromes ou observations).
+// MetGate WFS ne sort que du GML et on ne convertit pour l'instant que les
+// Points en GeoJSON. On filtre les familles dont la géométrie est ponctuelle
+// (aérodromes / observations / advisories).
+//
+// Les noms ici sont des *familles* (sortie de /api/products) — pas des
+// FeatureTypes WFS. Le typeName réel envoyé à MetGate vient de family.latest
+// (ex: "METAR_last").
 const POINT_FAMILIES = new Set([
-  'METAR_last',
   'METAR',
-  'SPECI_last',
   'SPECI',
-  'TAF_last',
   'TAF',
-  'AIRMET_last',
   'AIRMET',
-  'LocalReport_last',
   'LocalReport',
-  'SIGMET_last',
   'SIGMET',
-  'VolcanicAshAdvisory_last',
-  'TropicalCycloneAdvisory_last',
-  'SpaceWeatherAdvisory_last',
+  'VolcanicAshAdvisory',
+  'VolcanicAshSIGMET',
+  'TropicalCycloneAdvisory',
+  'TropicalCycloneSIGMET',
+  'SpaceWeatherAdvisory',
 ])
 
 interface LayerStyle {
@@ -86,25 +86,40 @@ export default function MapView({ data }: MapViewProps) {
 
   const candidates: Family[] = useMemo(() => {
     if (!data) return []
-    return data.wfs.families.filter((f) => POINT_FAMILIES.has(f.name))
+    // On veut que la famille soit dans la liste des points connus ET
+    // qu'elle dispose d'une version interrogeable (latest non vide).
+    return data.wfs.families.filter(
+      (f) => POINT_FAMILIES.has(f.name) && Boolean(f.latest),
+    )
   }, [data])
+
+  // Map family.name → family.latest (le typeName WFS réel à interroger).
+  const typeNameOf = useMemo(() => {
+    const m: Record<string, string> = {}
+    for (const f of candidates) {
+      if (f.latest) m[f.name] = f.latest
+    }
+    return m
+  }, [candidates])
 
   useEffect(() => {
     active.forEach(async (name) => {
-      if (loaded[name] || loading.has(name)) return
+      const typeName = typeNameOf[name]
+      if (!typeName || loaded[name] || loading.has(name) || errors[name]) return
       setLoading((prev) => new Set(prev).add(name))
       try {
-        const r = await fetch(`/api/feature?type=${encodeURIComponent(name)}&count=500`)
-        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        const r = await fetch(
+          `/api/feature?type=${encodeURIComponent(typeName)}&count=500`,
+        )
+        if (!r.ok) {
+          const detail = await r.text()
+          throw new Error(`HTTP ${r.status}: ${detail.slice(0, 80)}`)
+        }
         const geo = (await r.json()) as GeoJSON.FeatureCollection
         setLoaded((prev) => ({
           ...prev,
           [name]: { data: geo, count: geo.features?.length ?? 0 },
         }))
-        setErrors((prev) => {
-          const { [name]: _, ...rest } = prev
-          return rest
-        })
       } catch (e) {
         setErrors((prev) => ({
           ...prev,
@@ -118,13 +133,20 @@ export default function MapView({ data }: MapViewProps) {
         })
       }
     })
-  }, [active])
+  }, [active, typeNameOf])
 
   const toggle = (name: string) => {
     setActive((prev) => {
       const next = new Set(prev)
       if (next.has(name)) next.delete(name)
       else next.add(name)
+      return next
+    })
+    // Réactiver la possibilité de retenter après une erreur.
+    setErrors((prev) => {
+      if (!(name in prev)) return prev
+      const next = { ...prev }
+      delete next[name]
       return next
     })
   }
