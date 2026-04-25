@@ -217,9 +217,14 @@ func parsePolygon(dec *xml.Decoder) ([][][]float64, error) {
 }
 
 // parseRing lit un gml:LinearRing > gml:posList "lat lon lat lon..." et
-// retourne []{lon, lat}.
+// retourne []{lon, lat}. Appelé après consommation de <gml:exterior> ou
+// <gml:interior>, doit consommer jusqu'à l'EndElement matching.
+//
+// On tient un compteur car <LinearRing> introduit un EndElement
+// supplémentaire (</LinearRing>) avant le </exterior> attendu.
 func parseRing(dec *xml.Decoder) ([][]float64, error) {
 	var coords [][]float64
+	depth := 0
 	for {
 		tok, err := dec.Token()
 		if err != nil {
@@ -229,9 +234,9 @@ func parseRing(dec *xml.Decoder) ([][]float64, error) {
 		case xml.StartElement:
 			switch t.Name.Local {
 			case "LinearRing", "Ring":
-				continue
+				depth++ // niveau supplémentaire à dépiler
 			case "posList":
-				txt, err := readText(dec)
+				txt, err := readText(dec) // consomme </posList>
 				if err != nil {
 					return nil, err
 				}
@@ -242,7 +247,10 @@ func parseRing(dec *xml.Decoder) ([][]float64, error) {
 				}
 			}
 		case xml.EndElement:
-			return coords, nil
+			if depth == 0 {
+				return coords, nil
+			}
+			depth--
 		}
 	}
 }
