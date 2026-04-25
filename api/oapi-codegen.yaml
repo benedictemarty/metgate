@@ -1,0 +1,9 @@
+package: metgate
+output: internal/metgate/client.gen.go
+generate:
+  models: true
+  client: true
+output-options:
+  skip-prune: true
+compatibility:
+  always-prefix-enum-values: true

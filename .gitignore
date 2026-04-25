@@ -1,0 +1,21 @@
+# Secrets — ne JAMAIS committer
+.env
+.env.*
+!.env.example
+
+# Go
+/bin/
+/dist/
+*.test
+*.out
+coverage.out
+
+# Frontend
+/web/node_modules/
+/web/dist/
+
+# Editeurs / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
