@@ -78,6 +78,21 @@ const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.j
 interface FetchedLayer {
   data: GeoJSON.FeatureCollection
   count: number
+  total: number
+}
+
+// Garde uniquement les features dont forecasttime est absent ou nul (= analyse
+// courante). MetGate publie pour RDT_MSG les prévisions T+15/30/45/60 sur le
+// même trackingid, ce qui empile visuellement 5 contours par cellule.
+function keepAnalysisOnly(geo: GeoJSON.FeatureCollection): GeoJSON.FeatureCollection {
+  return {
+    ...geo,
+    features: geo.features.filter((f) => {
+      const ft = f.properties?.forecasttime as string | undefined
+      if (ft === undefined || ft === null) return true
+      return ft === '0' || ft === '0.0' || ft === ''
+    }),
+  }
 }
 
 interface PopupState {
@@ -119,17 +134,24 @@ export default function MapView({ data }: MapViewProps) {
       if (!typeName || loaded[name] || loading.has(name) || errors[name]) return
       setLoading((prev) => new Set(prev).add(name))
       try {
+        // On demande large car certaines familles (RDT_MSG) renvoient ~5
+        // features de prévision par cellule ; on filtre ensuite T+0 côté front.
         const r = await fetch(
-          `/api/feature?type=${encodeURIComponent(typeName)}&count=500`,
+          `/api/feature?type=${encodeURIComponent(typeName)}&count=2000`,
         )
         if (!r.ok) {
           const detail = await r.text()
           throw new Error(`HTTP ${r.status}: ${detail.slice(0, 80)}`)
         }
         const geo = (await r.json()) as GeoJSON.FeatureCollection
+        const filtered = keepAnalysisOnly(geo)
         setLoaded((prev) => ({
           ...prev,
-          [name]: { data: geo, count: geo.features?.length ?? 0 },
+          [name]: {
+            data: filtered,
+            count: filtered.features.length,
+            total: geo.features?.length ?? 0,
+          },
         }))
       } catch (e) {
         setErrors((prev) => ({
@@ -544,8 +566,18 @@ function Sidebar({
                     <span className="text-sm flex-1 truncate">{f.name}</span>
                     {isLoading && <Loader2 className="size-3 animate-spin text-slate-500" />}
                     {!isLoading && layer && isActive && (
-                      <span className="text-[11px] tabular-nums text-slate-500">
+                      <span
+                        className="text-[11px] tabular-nums text-slate-500"
+                        title={
+                          layer.total !== layer.count
+                            ? `${layer.count} affichés (analyse T+0) sur ${layer.total} reçus (incl. prévisions)`
+                            : undefined
+                        }
+                      >
                         {layer.count}
+                        {layer.total !== layer.count && (
+                          <span className="text-slate-600">/{layer.total}</span>
+                        )}
                       </span>
                     )}
                   </div>
