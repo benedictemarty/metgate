@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/bmarty/metgate/internal/catalog"
+	"github.com/bmarty/metgate/internal/web"
 )
 
 type API struct {
@@ -21,6 +22,7 @@ func (a *API) Routes() *http.ServeMux {
 	m.HandleFunc("GET /healthz", a.healthz)
 	m.HandleFunc("GET /api/catalog", a.handleCatalog)
 	m.HandleFunc("GET /api/products", a.handleProducts)
+	m.Handle("GET /", web.Handler())
 	return m
 }
 

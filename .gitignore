@@ -13,6 +13,8 @@ coverage.out
 # Frontend
 /web/node_modules/
 /web/dist/
+/internal/web/dist/*
+!/internal/web/dist/.gitkeep
 
 # Editeurs / OS
 .DS_Store
