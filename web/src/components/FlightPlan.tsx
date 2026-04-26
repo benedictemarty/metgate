@@ -76,6 +76,11 @@ export interface RoutePlan {
   waypoints: Waypoint[]
   events?: RouteEvent[]
   wind_profile?: WindProfile
+  // Index du waypoint correspondant à la position "now" (= 1er point projeté
+  // après le passé accumulé). Utilisé en mode live aircraft pour placer le
+  // curseur initial sur la position courante de l'avion. Absent (ou 0) en
+  // mode manuel.
+  current_idx?: number
 }
 
 interface FlightPlanProps {
@@ -144,22 +149,42 @@ export default function FlightPlan({
     setError(null)
   }
 
-  // GeoJSON LineString de la trajectoire.
+  // GeoJSON LineString de la trajectoire. Si le plan a un current_idx > 0
+  // (mode live aircraft avec passé accumulé), on sépare en deux features :
+  // l'une "past" (passé observé) et l'autre "future" (projection). Le frontend
+  // les style différemment (plein vs pointillé) pour distinguer.
   const lineGeo = useMemo<GeoJSON.FeatureCollection | null>(() => {
     if (!plan) return null
-    return {
-      type: 'FeatureCollection',
-      features: [
-        {
-          type: 'Feature',
-          geometry: {
-            type: 'LineString',
-            coordinates: plan.waypoints.map((w) => [w.lon, w.lat]),
-          },
-          properties: {},
+    const cur = plan.current_idx ?? 0
+    const features: GeoJSON.Feature[] = []
+    if (cur > 0) {
+      features.push({
+        type: 'Feature',
+        geometry: {
+          type: 'LineString',
+          coordinates: plan.waypoints.slice(0, cur + 1).map((w) => [w.lon, w.lat]),
         },
-      ],
+        properties: { kind: 'past' },
+      })
+      features.push({
+        type: 'Feature',
+        geometry: {
+          type: 'LineString',
+          coordinates: plan.waypoints.slice(cur).map((w) => [w.lon, w.lat]),
+        },
+        properties: { kind: 'future' },
+      })
+    } else {
+      features.push({
+        type: 'Feature',
+        geometry: {
+          type: 'LineString',
+          coordinates: plan.waypoints.map((w) => [w.lon, w.lat]),
+        },
+        properties: { kind: 'future' },
+      })
     }
+    return { type: 'FeatureCollection', features }
   }, [plan])
 
   const cur = plan && cursorIdx >= 0 && cursorIdx < plan.waypoints.length
@@ -368,17 +393,31 @@ export default function FlightPlan({
             paint={{
               'line-color': '#10b981',
               'line-width': 6,
-              'line-opacity': 0.25,
+              'line-opacity': 0.18,
               'line-blur': 2,
             }}
           />
+          {/* Trait plein pour le passé observé */}
           <Layer
-            id="metgate-route-line"
+            id="metgate-route-past"
             type="line"
+            filter={['==', ['get', 'kind'], 'past']}
+            paint={{
+              'line-color': '#10b981',
+              'line-width': 2.5,
+              'line-opacity': 0.95,
+            }}
+          />
+          {/* Pointillé pour le futur projeté */}
+          <Layer
+            id="metgate-route-future"
+            type="line"
+            filter={['==', ['get', 'kind'], 'future']}
             paint={{
               'line-color': '#10b981',
               'line-width': 2,
-              'line-opacity': 0.95,
+              'line-opacity': 0.85,
+              'line-dasharray': [3, 2],
             }}
           />
         </Source>

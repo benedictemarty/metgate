@@ -309,7 +309,9 @@ export default function MapView({ data }: MapViewProps) {
       setRouteCursor(0)
       setRoutePlaying(false)
     } else {
-      setRouteCursor(0)
+      // En mode live (avion suivi), positionner le curseur sur la position
+      // courante (= 1er waypoint après le passé accumulé). Sinon début.
+      setRouteCursor(routePlan.current_idx ?? 0)
     }
   }, [routePlan])
 

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -14,10 +15,10 @@ import (
 
 type API struct {
 	catalog  *catalog.Service
-	aircraft *aircraft.Client
+	aircraft *aircraft.Service
 }
 
-func NewAPI(c *catalog.Service, ac *aircraft.Client) *API {
+func NewAPI(c *catalog.Service, ac *aircraft.Service) *API {
 	return &API{catalog: c, aircraft: ac}
 }
 
@@ -151,7 +152,7 @@ func (a *API) handleAircraftSearch(w http.ResponseWriter, r *http.Request) {
 	if bs := r.URL.Query().Get("bbox"); bs != "" {
 		fmt.Sscanf(bs, "%f,%f,%f,%f", &bbox[0], &bbox[1], &bbox[2], &bbox[3])
 	}
-	states, err := a.aircraft.QueryStates(r.Context(), &bbox, "", cs)
+	states, err := a.aircraft.Search(r.Context(), &bbox, cs)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -172,16 +173,16 @@ func (a *API) handleAircraftState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "icao24 requis", http.StatusBadRequest)
 		return
 	}
-	states, err := a.aircraft.QueryStates(r.Context(), nil, icao, "")
+	st, err := a.aircraft.State(r.Context(), icao)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	if len(states) == 0 {
+	if st == nil {
 		http.Error(w, "aucun état pour "+icao, http.StatusNotFound)
 		return
 	}
-	writeJSON(w, http.StatusOK, states[0])
+	writeJSON(w, http.StatusOK, st)
 }
 
 // handleAircraftRoute : /api/aircraft/{icao24}/route?dur=60&dest=ICAO&events=1&wind=1
@@ -194,16 +195,15 @@ func (a *API) handleAircraftRoute(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "icao24 requis", http.StatusBadRequest)
 		return
 	}
-	states, err := a.aircraft.QueryStates(r.Context(), nil, icao, "")
+	st, err := a.aircraft.State(r.Context(), icao)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	if len(states) == 0 {
+	if st == nil {
 		http.Error(w, "aucun état pour "+icao, http.StatusNotFound)
 		return
 	}
-	st := states[0]
 
 	q := r.URL.Query()
 	dur := 60
@@ -250,6 +250,15 @@ func (a *API) handleAircraftRoute(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	// Préfixe les positions passées (ring buffer 30 min) AVANT de calculer
+	// events et wind, pour que les near_waypoint_idx soient cohérents avec
+	// le plan complet (passé + futur).
+	currentIdx := 0
+	if past := a.aircraft.History(icao); len(past) > 0 {
+		plan, currentIdx = prefixPastWaypoints(plan, past)
+	}
+
 	if q.Get("events") == "1" || q.Get("events") == "true" {
 		ev, err := a.catalog.RouteEvents(r.Context(), plan, 50)
 		if err == nil {
@@ -262,7 +271,78 @@ func (a *API) handleAircraftRoute(w http.ResponseWriter, r *http.Request) {
 			plan.WindProfile = wp
 		}
 	}
-	writeJSON(w, http.StatusOK, plan)
+
+	// Réponse enrichie avec l'index du waypoint "maintenant" (= 1er point
+	// projeté après le passé). Le frontend pose le cursor dessus par défaut.
+	writeJSON(w, http.StatusOK, struct {
+		*catalog.RoutePlan
+		CurrentIdx int `json:"current_idx"`
+	}{plan, currentIdx})
+}
+
+// prefixPastWaypoints insère devant les waypoints projetés du plan ceux qui
+// correspondent aux positions historiques accumulées pour cet avion. Retourne
+// le plan modifié et l'index du waypoint correspondant à la position
+// courante (= 1er waypoint projeté, après le passé).
+func prefixPastWaypoints(plan *catalog.RoutePlan, past []aircraft.State) (*catalog.RoutePlan, int) {
+	if len(past) == 0 {
+		return plan, 0
+	}
+	depTime, _ := time.Parse(time.RFC3339, plan.DepTime)
+	cutoff := depTime.Unix()
+
+	// Trier le passé par TimePosition croissant (au cas où).
+	sortedPast := make([]aircraft.State, 0, len(past))
+	for _, p := range past {
+		if p.TimePosition < cutoff {
+			sortedPast = append(sortedPast, p)
+		}
+	}
+	if len(sortedPast) == 0 {
+		return plan, 0
+	}
+
+	// Distances cumulées depuis le 1er point passé.
+	pastWps := make([]catalog.RouteWaypoint, len(sortedPast))
+	var cum float64
+	for i, p := range sortedPast {
+		if i > 0 {
+			cum += gcDistanceNM(
+				sortedPast[i-1].Lat, sortedPast[i-1].Lon,
+				p.Lat, p.Lon,
+			)
+		}
+		pastWps[i] = catalog.RouteWaypoint{
+			Lon:     p.Lon,
+			Lat:     p.Lat,
+			FL:      p.FL,
+			TimeISO: time.Unix(p.TimePosition, 0).UTC().Format("2006-01-02T15:04:05Z"),
+			DistNM:  cum, // valeur temporaire, ré-écrite ci-dessous
+		}
+	}
+	// Distance totale parcourue dans le passé observé.
+	totalPast := pastWps[len(pastWps)-1].DistNM
+	// Décaler : passé = négatif (-totalPast → 0), futur = positif.
+	for i := range pastWps {
+		pastWps[i].DistNM = pastWps[i].DistNM - totalPast
+	}
+	currentIdx := len(pastWps) // index du 1er waypoint futur dans plan.Waypoints
+	plan.Waypoints = append(pastWps, plan.Waypoints...)
+	return plan, currentIdx
+}
+
+// gcDistanceNM : haversine en NM.
+func gcDistanceNM(lat1, lon1, lat2, lon2 float64) float64 {
+	const r = 3440.065
+	const deg = 0.0174532925199 // π/180
+	p1 := lat1 * deg
+	p2 := lat2 * deg
+	dp := (lat2 - lat1) * deg
+	dl := (lon2 - lon1) * deg
+	s1 := math.Sin(dp / 2)
+	s2 := math.Sin(dl / 2)
+	a := s1*s1 + math.Cos(p1)*math.Cos(p2)*s2*s2
+	return 2 * r * math.Asin(math.Sqrt(a))
 }
 
 // handleQvacis : /api/qvacis?dataset=DETERMINISTIC|PROBABILISTIC&fl=325&bbox=...

@@ -43,14 +43,15 @@ func main() {
 
 	osUser := os.Getenv("OPENSKY_USER")
 	osPass := os.Getenv("OPENSKY_PASS")
-	ac := aircraft.New(osUser, osPass)
+	acClient := aircraft.New(osUser, osPass)
+	acService := aircraft.NewService(acClient, 30*time.Minute)
 	if osUser == "" {
 		log.Print("opensky: anonymous (100 req/jour). Renseigner OPENSKY_USER/PASS pour 4000 req/jour.")
 	} else {
 		log.Printf("opensky: authenticated as %s", osUser)
 	}
 
-	api := httpapi.NewAPI(cat, ac)
+	api := httpapi.NewAPI(cat, acService)
 	log.Printf("cache TTL: %s", cacheTTL)
 
 	srv := &http.Server{
