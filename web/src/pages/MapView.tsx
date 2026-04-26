@@ -101,26 +101,62 @@ function featureValiditySlot(f: GeoJSON.Feature): string | null {
   return v
 }
 
+// Calcule l'opacité dégressive selon forecasttime (en minutes, 0..60+).
+// Précalculer en JS et stocker dans les properties est plus robuste que de
+// passer par des expressions MapLibre `case`/`interpolate` qui ont posé pb.
+function trailParamsFor(ftMin: number): {
+  fill: number
+  line: number
+  width: number
+} {
+  const t = Math.min(60, Math.max(0, ftMin)) / 60 // 0..1
+  return {
+    fill: 0.30 - t * 0.25, // 0.30 → 0.05
+    line: 0.95 - t * 0.77, // 0.95 → 0.18
+    width: 2 - t * 1.3, // 2 → 0.7
+  }
+}
+
+function decorateTrailFeature(f: GeoJSON.Feature): GeoJSON.Feature {
+  const props = (f.properties ?? {}) as Record<string, unknown>
+  const raw = props.forecasttime
+  const n = typeof raw === 'string' ? parseFloat(raw) : (raw as number)
+  const ft = Number.isFinite(n) ? n : 0
+  const p = trailParamsFor(ft)
+  return {
+    ...f,
+    properties: {
+      ...props,
+      _fillOp: p.fill,
+      _lineOp: p.line,
+      _lineW: p.width,
+    },
+  }
+}
+
 function filterBySlot(
   geo: GeoJSON.FeatureCollection,
   slot: string | null,
   showTrails: boolean,
 ): GeoJSON.FeatureCollection {
-  if (slot === null && !showTrails) return geo
-  return {
-    ...geo,
-    features: geo.features.filter((f) => {
+  const base = (() => {
+    if (slot === null && !showTrails) return geo.features
+    return geo.features.filter((f) => {
       const v = featureValiditySlot(f)
       const props = f.properties as Record<string, unknown> | null
       const ftRaw = props?.forecasttime
       const hasForecast = ftRaw !== undefined && ftRaw !== null && ftRaw !== ''
-      // Mode halo : on garde toutes les positions futures (forecasttime>=0)
-      // d'une cellule trackée, pour visualiser sa trajectoire complète.
       if (showTrails && hasForecast) return true
       if (v === null) return true
       return v === slot
-    }),
-  }
+    })
+  })()
+
+  // En mode trails, on injecte les paramètres d'opacité comme properties
+  // pour chaque feature ; MapLibre n'a plus qu'à lire ['get', '_fillOp'].
+  const features = showTrails ? base.map(decorateTrailFeature) : base
+
+  return { ...geo, features }
 }
 
 // True dès qu'au moins une couche chargée a des features avec forecasttime > 0
@@ -364,42 +400,11 @@ export default function MapView({ data }: MapViewProps) {
           const layer = loaded[name]
           if (!layer) return null
           const s = styleFor(name)
-          // Mode trails : opacité dégressive selon forecasttime ("0" → "60").
-          // forecasttime arrive en STRING dans le GeoJSON (issu du GML
-          // typage texte), d'où la comparaison stricte par 'case' qui
-          // évite les pièges de to-number sur l'expression interpolate.
-          // Les features sans forecasttime tombent sur la valeur par défaut.
-          const trailFill = [
-            'case',
-            ['==', ['get', 'forecasttime'], '0'], 0.30,
-            ['==', ['get', 'forecasttime'], '15'], 0.22,
-            ['==', ['get', 'forecasttime'], '30'], 0.15,
-            ['==', ['get', 'forecasttime'], '45'], 0.09,
-            ['==', ['get', 'forecasttime'], '60'], 0.05,
-            0.30,
-          ] as unknown as number
-          const trailLine = [
-            'case',
-            ['==', ['get', 'forecasttime'], '0'], 0.95,
-            ['==', ['get', 'forecasttime'], '15'], 0.7,
-            ['==', ['get', 'forecasttime'], '30'], 0.5,
-            ['==', ['get', 'forecasttime'], '45'], 0.32,
-            ['==', ['get', 'forecasttime'], '60'], 0.18,
-            0.95,
-          ] as unknown as number
-          const trailWidth = [
-            'case',
-            ['==', ['get', 'forecasttime'], '0'], 2,
-            ['==', ['get', 'forecasttime'], '15'], 1.6,
-            ['==', ['get', 'forecasttime'], '30'], 1.3,
-            ['==', ['get', 'forecasttime'], '45'], 1,
-            ['==', ['get', 'forecasttime'], '60'], 0.7,
-            2,
-          ] as unknown as number
-
-          const fillOpacity = showTrails ? trailFill : 0.18
-          const lineOpacity = showTrails ? trailLine : 0.85
-          const lineWidth = showTrails ? trailWidth : 1.5
+          // Mode trails : on lit directement les properties précalculées
+          // (_fillOp, _lineOp, _lineW) injectées par decorateTrailFeature.
+          const fillOpacity = showTrails ? (['get', '_fillOp'] as unknown as number) : 0.18
+          const lineOpacity = showTrails ? (['get', '_lineOp'] as unknown as number) : 0.85
+          const lineWidth = showTrails ? (['get', '_lineW'] as unknown as number) : 1.5
 
           return (
             <Source key={name} id={`src-${name}`} type="geojson" data={layer.data}>
