@@ -121,15 +121,24 @@ func (s *Service) PlanRoute(
 	dist := gcDistance(depPos[1], depPos[0], arrPos[1], arrPos[0])
 	durMin := dist / gsKt * 60
 
+	// Profil vertical simple : montée linéaire pendant climbMin minutes,
+	// descente linéaire pendant descentMin minutes, palier de croisière au
+	// milieu. Si le vol est trop court pour atteindre cruise, on fait un
+	// triangle dont le sommet vaut cruise * climb/(climb+descent).
+	const climbMin = 20.0   // ~1850 ft/min vers FL370
+	const descentMin = 25.0 // ~1480 ft/min depuis FL370
+
 	wps := make([]RouteWaypoint, nWaypoints)
 	for i := 0; i < nWaypoints; i++ {
 		f := float64(i) / float64(nWaypoints-1)
 		la, lo := gcInterpolate(depPos[1], depPos[0], arrPos[1], arrPos[0], f)
-		ts := depTime.Add(time.Duration(f*durMin*float64(time.Minute))).UTC()
+		t := f * durMin
+		flAt := profileFL(t, durMin, float64(fl), climbMin, descentMin)
+		ts := depTime.Add(time.Duration(t * float64(time.Minute))).UTC()
 		wps[i] = RouteWaypoint{
 			Lon:     lo,
 			Lat:     la,
-			FL:      fl,
+			FL:      flAt,
 			TimeISO: ts.Format("2006-01-02T15:04:05Z"),
 			DistNM:  f * dist,
 		}
@@ -146,6 +155,38 @@ func (s *Service) PlanRoute(
 		DurMin:    durMin,
 		Waypoints: wps,
 	}, nil
+}
+
+// profileFL calcule le niveau de vol à l'instant t (minutes depuis le
+// décollage) selon un profil trapézoïdal : montée → palier → descente.
+// Si le vol est trop court pour atteindre cruise, profil triangulaire.
+func profileFL(t, totalMin, cruise, climbMin, descentMin float64) int {
+	if t <= 0 {
+		return 0
+	}
+	if t >= totalMin {
+		return 0
+	}
+	if totalMin >= climbMin+descentMin {
+		// Trapèze : montée 0..climb, palier climb..(total-descent), descente
+		switch {
+		case t < climbMin:
+			return int(cruise * t / climbMin)
+		case t > totalMin-descentMin:
+			return int(cruise * (totalMin - t) / descentMin)
+		default:
+			return int(cruise)
+		}
+	}
+	// Triangle : on n'atteint pas cruise. Sommet à climb/(climb+descent)
+	// du temps total, hauteur = cruise * climb/(climb+descent).
+	peakFrac := climbMin / (climbMin + descentMin)
+	peakT := totalMin * peakFrac
+	peakFL := cruise * peakFrac
+	if t < peakT {
+		return int(peakFL * t / peakT)
+	}
+	return int(peakFL * (totalMin - t) / (totalMin - peakT))
 }
 
 // gcDistance retourne la distance grand cercle (NM) entre deux points en deg.
