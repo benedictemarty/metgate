@@ -34,9 +34,21 @@ interface WindLayerProps {
   enabled: boolean
   dataset: 'WIND' | 'JET'
   level?: number // Pa, ignored if dataset='JET'
+  // Mode synchronisé : si défini, le step affiché est celui dont .time est
+  // le plus proche de linkedInstant ; le slider individuel est masqué.
+  linkedInstant?: string | null
+  // Notifie le parent des timestamps disponibles dès que la grille est
+  // chargée. Le parent les agrège pour le slider master.
+  onTimesLoaded?: (times: string[]) => void
 }
 
-export default function WindLayer({ enabled, dataset, level = 85000 }: WindLayerProps) {
+export default function WindLayer({
+  enabled,
+  dataset,
+  level = 85000,
+  linkedInstant,
+  onTimesLoaded,
+}: WindLayerProps) {
   const { current: mapWrapper } = useMap()
   const map = mapWrapper?.getMap()
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -79,10 +91,12 @@ export default function WindLayer({ enabled, dataset, level = 85000 }: WindLayer
           if (aborted) return
           setGrid(g)
           setStepIdx(g.current_idx ?? 0)
-          // Reset particles to spread across the new grid.
           particlesRef.current = Array.from({ length: PARTICLE_COUNT }, () =>
             spawnParticle(g),
           )
+          if (onTimesLoaded) {
+            onTimesLoaded(g.steps?.map((s) => s.time) ?? [])
+          }
           setInfo({ status: 'idle' })
         })
         .catch((e) => {
@@ -104,10 +118,29 @@ export default function WindLayer({ enabled, dataset, level = 85000 }: WindLayer
     }
   }, [enabled, map, level, dataset])
 
+  // Mode lié : on dérive l'index du step depuis linkedInstant.
+  const effectiveStepIdx = useMemo(() => {
+    if (!grid?.steps?.length) return 0
+    if (linkedInstant) {
+      let best = 0
+      let bestDiff = Number.POSITIVE_INFINITY
+      const target = Date.parse(linkedInstant)
+      for (let i = 0; i < grid.steps.length; i++) {
+        const d = Math.abs(Date.parse(grid.steps[i].time) - target)
+        if (d < bestDiff) {
+          best = i
+          bestDiff = d
+        }
+      }
+      return best
+    }
+    return Math.max(0, Math.min(grid.steps.length - 1, stepIdx))
+  }, [grid, stepIdx, linkedInstant])
+
   const currentStep: WindStep | null = useMemo(() => {
-    if (!grid || !grid.steps?.length) return null
-    return grid.steps[Math.max(0, Math.min(grid.steps.length - 1, stepIdx))]
-  }, [grid, stepIdx])
+    if (!grid?.steps?.length) return null
+    return grid.steps[effectiveStepIdx]
+  }, [grid, effectiveStepIdx])
 
   // Une ref synchronisée vers le step courant — l'animation loop ne se
   // restart pas à chaque changement de stepIdx, elle relit la ref à chaque
@@ -265,7 +298,7 @@ export default function WindLayer({ enabled, dataset, level = 85000 }: WindLayer
           <div className="text-[9px] text-slate-500 font-mono truncate">
             {grid.coverage_id} · {fmtStepTime(currentStep.time)}
           </div>
-          {grid.steps.length > 1 && (
+          {grid.steps.length > 1 && !linkedInstant && (
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setPlaying((p) => !p)}
@@ -292,6 +325,11 @@ export default function WindLayer({ enabled, dataset, level = 85000 }: WindLayer
               <span className="font-mono tabular-nums text-[10px] w-10 text-right">
                 {stepIdx + 1}/{grid.steps.length}
               </span>
+            </div>
+          )}
+          {linkedInstant && (
+            <div className="text-[9px] text-cyan-300/70 italic">
+              synchronisé · step {effectiveStepIdx + 1}/{grid.steps.length}
             </div>
           )}
         </div>

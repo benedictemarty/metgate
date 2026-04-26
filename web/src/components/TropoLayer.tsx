@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMap } from 'react-map-gl/maplibre'
 import { Pause, Play } from 'lucide-react'
 
@@ -27,9 +27,11 @@ const ALT_MAX_M = 13500
 
 interface TropoLayerProps {
   enabled: boolean
+  linkedInstant?: string | null
+  onTimesLoaded?: (times: string[]) => void
 }
 
-export default function TropoLayer({ enabled }: TropoLayerProps) {
+export default function TropoLayer({ enabled, linkedInstant, onTimesLoaded }: TropoLayerProps) {
   const { current: mapRef } = useMap()
   const map = mapRef?.getMap()
   const [grid, setGrid] = useState<TropoGrid | null>(null)
@@ -62,6 +64,7 @@ export default function TropoLayer({ enabled }: TropoLayerProps) {
           if (aborted) return
           setGrid(g)
           setStepIdx(g.current_idx ?? 0)
+          if (onTimesLoaded) onTimesLoaded(g.steps?.map((s) => s.time) ?? [])
           setInfo({ status: 'idle' })
         })
         .catch((e) => {
@@ -92,10 +95,29 @@ export default function TropoLayer({ enabled }: TropoLayerProps) {
     return () => window.clearInterval(id)
   }, [playing, grid?.steps?.length])
 
+  // Index effectif du step : si lié, dérivé de linkedInstant.
+  const effectiveStepIdx = useMemo(() => {
+    if (!grid?.steps?.length) return 0
+    if (linkedInstant) {
+      let best = 0
+      let bestDiff = Number.POSITIVE_INFINITY
+      const target = Date.parse(linkedInstant)
+      for (let i = 0; i < grid.steps.length; i++) {
+        const d = Math.abs(Date.parse(grid.steps[i].time) - target)
+        if (d < bestDiff) {
+          best = i
+          bestDiff = d
+        }
+      }
+      return best
+    }
+    return Math.max(0, Math.min(grid.steps.length - 1, stepIdx))
+  }, [grid, stepIdx, linkedInstant])
+
   // Re-render image when step / grid change.
   useEffect(() => {
     if (!enabled || !grid || !map) return
-    const step = grid.steps[stepIdx]
+    const step = grid.steps[effectiveStepIdx]
     if (!step) return
 
     const canvas = document.createElement('canvas')
@@ -162,7 +184,7 @@ export default function TropoLayer({ enabled }: TropoLayerProps) {
         console.warn('tropo layer add failed:', e)
       }
     }
-  }, [enabled, grid, stepIdx, map])
+  }, [enabled, grid, effectiveStepIdx, map])
 
   // Cleanup on disable / unmount.
   useEffect(() => {
@@ -176,7 +198,7 @@ export default function TropoLayer({ enabled }: TropoLayerProps) {
   }, [enabled, map])
 
   if (!enabled) return null
-  const step = grid?.steps?.[stepIdx]
+  const step = grid?.steps?.[effectiveStepIdx]
 
   return (
     <>
@@ -196,7 +218,7 @@ export default function TropoLayer({ enabled }: TropoLayerProps) {
           <div className="text-[9px] text-slate-500 font-mono truncate">
             {grid.coverage_id} · {step.time.replace('T', ' ').replace('Z', ' UTC')}
           </div>
-          {grid.steps.length > 1 && (
+          {grid.steps.length > 1 && !linkedInstant && (
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setPlaying((p) => !p)}
@@ -223,6 +245,11 @@ export default function TropoLayer({ enabled }: TropoLayerProps) {
               <span className="font-mono tabular-nums text-[10px] w-10 text-right">
                 {stepIdx + 1}/{grid.steps.length}
               </span>
+            </div>
+          )}
+          {linkedInstant && (
+            <div className="text-[9px] text-amber-300/70 italic">
+              synchronisé · step {effectiveStepIdx + 1}/{grid.steps.length}
             </div>
           )}
           {/* Mini-légende palette */}

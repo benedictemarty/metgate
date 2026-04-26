@@ -22,7 +22,7 @@ import {
 import WindLayer from '../components/WindLayer'
 import TropoLayer from '../components/TropoLayer'
 import QvacisLayer, { QVACIS_FLS, type QvacisDataset } from '../components/QvacisLayer'
-import { CloudFog, Mountain } from 'lucide-react'
+import { CloudFog, Link2, Link2Off, Mountain } from 'lucide-react'
 import type { Aggregate, Family } from '../types'
 
 interface MapViewProps {
@@ -263,6 +263,74 @@ export default function MapView({ data }: MapViewProps) {
   const [qvacisEnabled, setQvacisEnabled] = useState(false)
   const [qvacisDataset, setQvacisDataset] = useState<QvacisDataset>('DETERMINISTIC')
   const [qvacisFL, setQvacisFL] = useState(325)
+
+  // Mode synchronisé : un slider maître pilote toutes les couches WCS actives.
+  // Chaque WCS layer remonte ses timestamps via onTimesLoaded ; le master
+  // calcule l'union, et chaque layer mappe l'instant master sur son step le
+  // plus proche.
+  const [wcsLinked, setWcsLinked] = useState(false)
+  const [windTimes, setWindTimes] = useState<string[]>([])
+  const [tropoTimes, setTropoTimes] = useState<string[]>([])
+  const [qvacisTimes, setQvacisTimes] = useState<string[]>([])
+  const [masterInstant, setMasterInstant] = useState<string | null>(null)
+  const [masterPlaying, setMasterPlaying] = useState(false)
+
+  // Quand une couche est désactivée, on retire ses timestamps pour ne pas
+  // les laisser dans la timeline maître.
+  useEffect(() => {
+    if (!windEnabled) setWindTimes([])
+  }, [windEnabled])
+  useEffect(() => {
+    if (!tropoEnabled) setTropoTimes([])
+  }, [tropoEnabled])
+  useEffect(() => {
+    if (!qvacisEnabled) setQvacisTimes([])
+  }, [qvacisEnabled])
+
+  // Timeline maître = union triée des timestamps des couches WCS actives.
+  const masterTimeline = useMemo(() => {
+    const set = new Set<string>()
+    for (const t of windTimes) set.add(t)
+    for (const t of tropoTimes) set.add(t)
+    for (const t of qvacisTimes) set.add(t)
+    return Array.from(set).sort()
+  }, [windTimes, tropoTimes, qvacisTimes])
+
+  // Auto-sélection initiale (instant le plus récent <= now).
+  useEffect(() => {
+    if (!wcsLinked) return
+    if (masterTimeline.length === 0) {
+      if (masterInstant !== null) setMasterInstant(null)
+      return
+    }
+    if (!masterInstant || !masterTimeline.includes(masterInstant)) {
+      const now = new Date().toISOString()
+      let best = masterTimeline[0]
+      for (const t of masterTimeline) {
+        if (t <= now) best = t
+        else break
+      }
+      setMasterInstant(best)
+    }
+  }, [wcsLinked, masterTimeline, masterInstant])
+
+  // Auto-play global pour le master.
+  useEffect(() => {
+    if (!wcsLinked || !masterPlaying || masterTimeline.length < 2) return
+    const id = window.setInterval(() => {
+      setMasterInstant((prev) => {
+        if (prev === null) return masterTimeline[0]
+        const i = masterTimeline.indexOf(prev)
+        return masterTimeline[(i + 1) % masterTimeline.length]
+      })
+    }, 1100)
+    return () => window.clearInterval(id)
+  }, [wcsLinked, masterPlaying, masterTimeline])
+
+  const linkedInstantForLayers = wcsLinked ? masterInstant : null
+  const showWcsMasterSlider = wcsLinked && masterTimeline.length > 1
+  const wcsActiveCount =
+    (windEnabled ? 1 : 0) + (tropoEnabled ? 1 : 0) + (qvacisEnabled ? 1 : 0)
 
   const candidates: Family[] = useMemo(() => {
     if (!data) return []
@@ -520,9 +588,25 @@ export default function MapView({ data }: MapViewProps) {
           )
         })}
 
-        <WindLayer enabled={windEnabled} dataset={windDataset} level={windLevelPa} />
-        <TropoLayer enabled={tropoEnabled} />
-        <QvacisLayer enabled={qvacisEnabled} dataset={qvacisDataset} fl={qvacisFL} />
+        <WindLayer
+          enabled={windEnabled}
+          dataset={windDataset}
+          level={windLevelPa}
+          linkedInstant={linkedInstantForLayers}
+          onTimesLoaded={setWindTimes}
+        />
+        <TropoLayer
+          enabled={tropoEnabled}
+          linkedInstant={linkedInstantForLayers}
+          onTimesLoaded={setTropoTimes}
+        />
+        <QvacisLayer
+          enabled={qvacisEnabled}
+          dataset={qvacisDataset}
+          fl={qvacisFL}
+          linkedInstant={linkedInstantForLayers}
+          onTimesLoaded={setQvacisTimes}
+        />
 
         {popup && (
           <Popup
@@ -559,6 +643,20 @@ export default function MapView({ data }: MapViewProps) {
       {/* Toggles WCS (Vent / Tropopause) en haut à droite */}
       <div className="absolute top-4 right-4 z-10 flex flex-col items-end gap-2">
         <div className="flex gap-2">
+          {wcsActiveCount >= 2 && (
+            <button
+              onClick={() => setWcsLinked((v) => !v)}
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
+                wcsLinked
+                  ? 'border-violet-400/50 bg-violet-500/20 text-violet-100 shadow-[0_0_15px_rgba(167,139,250,0.25)]'
+                  : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
+              }`}
+              title="Lier les sliders temporels des couches WCS actives"
+            >
+              {wcsLinked ? <Link2 className="size-4" /> : <Link2Off className="size-4" />}
+              {wcsLinked ? 'Liés' : 'Lier'}
+            </button>
+          )}
           <button
             onClick={() => setQvacisEnabled((v) => !v)}
             className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
@@ -617,6 +715,19 @@ export default function MapView({ data }: MapViewProps) {
           />
         )}
       </div>
+
+      {showWcsMasterSlider && masterInstant && (
+        <WcsMasterSlider
+          timeline={masterTimeline}
+          instant={masterInstant}
+          onChange={(v) => {
+            setMasterInstant(v)
+            setMasterPlaying(false)
+          }}
+          playing={masterPlaying}
+          onTogglePlay={() => setMasterPlaying((p) => !p)}
+        />
+      )}
 
       {showTimeSlider && selectedSlot && (
         <TimeSlider
@@ -1238,6 +1349,61 @@ function QvacisSelector({
             {v}
           </button>
         ))}
+      </div>
+    </div>
+  )
+}
+
+// Slider maître pour les couches WCS quand le mode 'lié' est actif. Pose en
+// bas-centre, au-dessus du TimeSlider WFS (qui peut aussi être présent).
+function WcsMasterSlider({
+  timeline,
+  instant,
+  onChange,
+  playing,
+  onTogglePlay,
+}: {
+  timeline: string[]
+  instant: string
+  onChange: (v: string) => void
+  playing: boolean
+  onTogglePlay: () => void
+}) {
+  const idx = Math.max(0, timeline.indexOf(instant))
+  const total = timeline.length
+  const m = instant.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/)
+  const label = m ? `${m[1]} ${m[2]}:${m[3]} UTC` : instant
+  return (
+    <div className="absolute bottom-28 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 rounded-xl border border-violet-400/40 bg-slate-950/85 backdrop-blur-md px-3 py-2 shadow-[0_0_30px_rgba(167,139,250,0.18)] max-w-[90vw]">
+      <button
+        onClick={onTogglePlay}
+        disabled={total < 2}
+        className="size-8 rounded-lg bg-violet-500/15 hover:bg-violet-500/25 border border-violet-400/40 flex items-center justify-center transition disabled:opacity-40"
+        aria-label={playing ? 'Pause' : 'Play'}
+      >
+        {playing ? (
+          <Pause className="size-4 text-violet-200" />
+        ) : (
+          <Play className="size-4 text-violet-200 translate-x-[1px]" />
+        )}
+      </button>
+      <div className="flex flex-col gap-1.5 min-w-[280px]">
+        <div className="flex items-center gap-1.5 text-[11px] text-slate-300">
+          <Link2 className="size-3 text-violet-300" />
+          <span className="font-mono tabular-nums">{label}</span>
+          <span className="text-slate-600">·</span>
+          <span className="text-slate-500 tabular-nums">
+            {idx + 1}/{total}
+          </span>
+        </div>
+        <input
+          type="range"
+          min={0}
+          max={total - 1}
+          value={idx}
+          onChange={(e) => onChange(timeline[Number(e.target.value)])}
+          className="accent-violet-400 h-1"
+        />
       </div>
     </div>
   )

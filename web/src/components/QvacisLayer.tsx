@@ -35,9 +35,17 @@ interface QvacisLayerProps {
   enabled: boolean
   dataset: QvacisDataset
   fl: number
+  linkedInstant?: string | null
+  onTimesLoaded?: (times: string[]) => void
 }
 
-export default function QvacisLayer({ enabled, dataset, fl }: QvacisLayerProps) {
+export default function QvacisLayer({
+  enabled,
+  dataset,
+  fl,
+  linkedInstant,
+  onTimesLoaded,
+}: QvacisLayerProps) {
   const { current: mapRef } = useMap()
   const map = mapRef?.getMap()
   const [grid, setGrid] = useState<QvacisGrid | null>(null)
@@ -61,6 +69,7 @@ export default function QvacisLayer({ enabled, dataset, fl }: QvacisLayerProps) 
         if (aborted) return
         setGrid(g)
         setStepIdx(g.current_idx ?? 0)
+        if (onTimesLoaded) onTimesLoaded(g.steps?.map((s) => s.time) ?? [])
         setInfo({ status: 'idle' })
       })
       .catch((e) => {
@@ -79,10 +88,28 @@ export default function QvacisLayer({ enabled, dataset, fl }: QvacisLayerProps) 
     return () => window.clearInterval(id)
   }, [playing, grid?.steps?.length])
 
+  const effectiveStepIdx = (() => {
+    if (!grid?.steps?.length) return 0
+    if (linkedInstant) {
+      let best = 0
+      let bestDiff = Number.POSITIVE_INFINITY
+      const target = Date.parse(linkedInstant)
+      for (let i = 0; i < grid.steps.length; i++) {
+        const d = Math.abs(Date.parse(grid.steps[i].time) - target)
+        if (d < bestDiff) {
+          best = i
+          bestDiff = d
+        }
+      }
+      return best
+    }
+    return Math.max(0, Math.min(grid.steps.length - 1, stepIdx))
+  })()
+
   // Render image when step changes.
   useEffect(() => {
     if (!enabled || !grid || !map) return
-    const step = grid.steps[stepIdx]
+    const step = grid.steps[effectiveStepIdx]
     if (!step) return
 
     const canvas = document.createElement('canvas')
@@ -143,7 +170,7 @@ export default function QvacisLayer({ enabled, dataset, fl }: QvacisLayerProps) 
         console.warn('qvacis layer add failed:', e)
       }
     }
-  }, [enabled, grid, stepIdx, map])
+  }, [enabled, grid, effectiveStepIdx, map])
 
   // Cleanup on disable.
   useEffect(() => {
@@ -157,7 +184,7 @@ export default function QvacisLayer({ enabled, dataset, fl }: QvacisLayerProps) 
   }, [enabled, map])
 
   if (!enabled) return null
-  const step = grid?.steps?.[stepIdx]
+  const step = grid?.steps?.[effectiveStepIdx]
   return (
     <>
       {info.status === 'loading' && !grid && (
@@ -183,7 +210,7 @@ export default function QvacisLayer({ enabled, dataset, fl }: QvacisLayerProps) 
           <div className="text-[9px] text-slate-500 font-mono truncate">
             {grid.coverage_id} · {step.time.replace('T', ' ').replace('Z', ' UTC')}
           </div>
-          {grid.steps.length > 1 && (
+          {grid.steps.length > 1 && !linkedInstant && (
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setPlaying((p) => !p)}
@@ -210,6 +237,11 @@ export default function QvacisLayer({ enabled, dataset, fl }: QvacisLayerProps) 
               <span className="font-mono tabular-nums text-[10px] w-10 text-right">
                 {stepIdx + 1}/{grid.steps.length}
               </span>
+            </div>
+          )}
+          {linkedInstant && (
+            <div className="text-[9px] text-orange-300/70 italic">
+              synchronisé · step {effectiveStepIdx + 1}/{grid.steps.length}
             </div>
           )}
           <div className="flex items-center gap-1 mt-1">
