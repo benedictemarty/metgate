@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react'
 import { useMap, Source, Layer, Marker } from 'react-map-gl/maplibre'
 import {
+  Activity,
+  AlertOctagon,
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
@@ -12,9 +14,13 @@ import {
   Pause,
   SkipBack,
   SkipForward,
+  Snowflake,
+  Sparkles,
+  Tornado,
   Wind as WindIcon,
   X,
   Zap,
+  type LucideIcon,
 } from 'lucide-react'
 
 export interface Waypoint {
@@ -450,49 +456,106 @@ function CockpitWarnings({
     return Math.abs(ev.near_waypoint_idx - cursorIdx) <= COCKPIT_WINDOW
   })
   if (warnings.length === 0) return null
+  // Tri : sévères d'abord, ensuite par kind
+  warnings.sort((a, b) => severityScore(b) - severityScore(a))
   return (
     <div className="absolute left-7 top-0 flex flex-col gap-1.5 items-start">
       {warnings.map((ev, i) => (
-        <div
-          key={`${ev.family}-${i}`}
-          className={`${triangleColorClass(ev.kind)} flex items-center gap-1`}
-          style={{
-            filter: `drop-shadow(0 0 6px ${shadowColor(ev.kind)})`,
-          }}
-          title={(ev.properties?.tac as string) || ev.label}
-        >
-          <BigWarningTriangle />
-          <span className="text-[9px] font-mono font-semibold text-slate-100 bg-slate-950/70 px-1 py-0.5 rounded whitespace-nowrap border border-slate-800/60">
-            {triangleLabel(ev)}
-          </span>
-        </div>
+        <WarningSign key={`${ev.family}-${i}`} ev={ev} />
       ))}
     </div>
   )
 }
 
-function BigWarningTriangle() {
+// WarningSign : triangle d'alerte + icône métier dedans + badge sévérité
+// LGT/MOD/SEV. Le rendu est calibré pour parler immédiatement à un pilote :
+//   - triangle = alerte (norme universelle)
+//   - icône = phénomène (cristal=givrage, éclair=orage, vagues=turbulence...)
+//   - couleur = kind (cohérence avec le reste de la carto)
+//   - badge sévérité quand l'intensité est connue (intensity=1/2/3 dans
+//     les properties CAT/GIVRAGE/RDT, sinon absent)
+//   - drop-shadow plus intense pour SEV
+function WarningSign({ ev }: { ev: RouteEvent }) {
+  const Icon = phenomenonIcon(ev.kind)
+  const sev = severityLabel(ev)
+  const sevTone = severityTone(sev)
+  const colorCls = triangleColorClass(ev.kind)
+  const glowIntensity = sev === 'SEV' ? 10 : sev === 'MOD' ? 7 : 5
   return (
-    <svg viewBox="0 0 24 24" className="size-5">
-      <polygon
-        points="12,2 22,21 2,21"
-        fill="currentColor"
-        stroke="rgba(0,0,0,0.7)"
-        strokeWidth="1.5"
-        strokeLinejoin="round"
-      />
-      <text
-        x="12"
-        y="18"
-        fontSize="11"
-        fontWeight="bold"
-        textAnchor="middle"
-        fill="rgba(0,0,0,0.85)"
-      >
-        !
-      </text>
-    </svg>
+    <div
+      className={`${colorCls} flex items-center gap-1`}
+      style={{
+        filter: `drop-shadow(0 0 ${glowIntensity}px ${shadowColor(ev.kind)})`,
+      }}
+      title={(ev.properties?.tac as string) || ev.label}
+    >
+      <div className="relative size-6">
+        <svg viewBox="0 0 24 24" className="absolute inset-0">
+          <polygon
+            points="12,2 22,21 2,21"
+            fill="currentColor"
+            stroke="rgba(0,0,0,0.75)"
+            strokeWidth={sev === 'SEV' ? 2 : 1.5}
+            strokeLinejoin="round"
+          />
+        </svg>
+        <Icon className="absolute left-1/2 top-[58%] -translate-x-1/2 -translate-y-1/2 size-3 text-slate-950" />
+      </div>
+      <span className="text-[9px] font-mono font-semibold text-slate-100 bg-slate-950/80 px-1 py-0.5 rounded whitespace-nowrap border border-slate-800/60 flex items-center gap-1">
+        {triangleLabel(ev)}
+        {sev && (
+          <span
+            className={`px-1 rounded text-[8px] tracking-wide ${sevTone}`}
+          >
+            {sev}
+          </span>
+        )}
+      </span>
+    </div>
   )
+}
+
+// phenomenonIcon : pictogramme métier à mettre dans le triangle d'alerte
+function phenomenonIcon(kind: string): LucideIcon {
+  if (kind === 'CAT_EURAT01') return Activity // ondes turbulence
+  if (kind === 'GIVRAGE_EURAT01') return Snowflake
+  if (kind === 'RDT_MSG') return Zap
+  if (kind.includes('SIGMET')) return AlertOctagon
+  if (kind.includes('AIRMET')) return AlertTriangle
+  if (kind.includes('Volcanic')) return Mountain
+  if (kind.includes('Cyclone')) return Tornado
+  if (kind.includes('Space')) return Sparkles
+  return AlertTriangle
+}
+
+// severityLabel : LGT / MOD / SEV / null selon l'intensity
+// (convention WMO/ICAO : 1=light, 2=moderate, 3=severe)
+function severityLabel(ev: RouteEvent): 'LGT' | 'MOD' | 'SEV' | null {
+  const raw =
+    (ev.properties?.intensity as string | undefined) ??
+    (ev.properties?.severity as string | undefined)
+  if (!raw) return null
+  const n = parseFloat(raw)
+  if (!Number.isFinite(n)) return null
+  if (n >= 3) return 'SEV'
+  if (n >= 2) return 'MOD'
+  if (n >= 1) return 'LGT'
+  return null
+}
+
+function severityScore(ev: RouteEvent): number {
+  const sev = severityLabel(ev)
+  if (sev === 'SEV') return 3
+  if (sev === 'MOD') return 2
+  if (sev === 'LGT') return 1
+  return 0
+}
+
+function severityTone(sev: 'LGT' | 'MOD' | 'SEV' | null): string {
+  if (sev === 'SEV') return 'bg-red-500/30 text-red-200 border border-red-400/50'
+  if (sev === 'MOD') return 'bg-amber-500/30 text-amber-200 border border-amber-400/50'
+  if (sev === 'LGT') return 'bg-yellow-500/20 text-yellow-200 border border-yellow-400/40'
+  return 'text-slate-400'
 }
 
 // Triangle pour les ZONES de phénomène (SIGMET/AIRMET/CAT/GIVRAGE/RDT/advisory).
