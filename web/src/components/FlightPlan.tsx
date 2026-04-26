@@ -361,11 +361,14 @@ export default function FlightPlan({
           </Marker>
           {cur && (
             <Marker longitude={cur.lon} latitude={cur.lat} anchor="center">
-              <div
-                className="text-emerald-200 drop-shadow-[0_0_6px_rgba(16,185,129,0.7)]"
-                style={{ transform: `rotate(${bearing}deg)` }}
-              >
-                <Plane className="size-6" fill="currentColor" />
+              <div className="relative">
+                <div
+                  className="text-emerald-200 drop-shadow-[0_0_6px_rgba(16,185,129,0.7)]"
+                  style={{ transform: `rotate(${bearing}deg)` }}
+                >
+                  <Plane className="size-6" fill="currentColor" />
+                </div>
+                <CockpitWarnings events={plan.events ?? []} cursorIdx={cursorIdx} />
               </div>
             </Marker>
           )}
@@ -399,10 +402,10 @@ function EventMarkers({
       {events.map((ev, i) => {
         const dist = Math.abs(ev.near_waypoint_idx - cursorIdx)
         if (dist > EVENT_WINDOW) return null
-        // opacité maxi (1) au passage, dégrade vers 0 sur ±EVENT_WINDOW
-        const o = Math.max(0.15, 1 - dist / EVENT_WINDOW)
-        // scale léger (0.7 → 1.0) pour effet "pop"
-        const scale = 0.7 + (1 - dist / EVENT_WINDOW) * 0.3
+        // opacité dégressive ; les pictos posés à leur position restent
+        // discrets (au mieux 0.55) pour ne pas concurrencer le cluster
+        // d'alertes du cockpit attaché à l'avion.
+        const o = Math.max(0.1, 0.55 - dist / EVENT_WINDOW * 0.5)
         return (
           <Marker
             key={`${ev.family}-${i}`}
@@ -413,9 +416,7 @@ function EventMarkers({
             <div
               style={{
                 opacity: o,
-                transform: `scale(${scale})`,
-                transition: 'opacity 200ms ease, transform 200ms ease',
-                filter: `drop-shadow(0 0 4px ${shadowColor(ev.kind)})`,
+                transition: 'opacity 200ms ease',
               }}
               className={triangleColorClass(ev.kind)}
               title={(ev.properties?.tac as string) || ev.label}
@@ -429,6 +430,68 @@ function EventMarkers({
         )
       })}
     </>
+  )
+}
+
+// CockpitWarnings : HUD attaché à l'avion. Cluster de gros triangles
+// d'alerte pour chaque produit *redouté* (zone de phénomène) actif au
+// waypoint courant — METAR/TAF/SPECI sont exclus (ce ne sont pas des
+// dangers à signaler en HUD, juste des bulletins disponibles).
+function CockpitWarnings({
+  events,
+  cursorIdx,
+}: {
+  events: RouteEvent[]
+  cursorIdx: number
+}) {
+  const COCKPIT_WINDOW = 2 // ±2 waypoints : très proche de la position
+  const warnings = events.filter((ev) => {
+    if (isPointKind(ev.kind)) return false
+    return Math.abs(ev.near_waypoint_idx - cursorIdx) <= COCKPIT_WINDOW
+  })
+  if (warnings.length === 0) return null
+  return (
+    <div className="absolute left-7 top-0 flex flex-col gap-1.5 items-start">
+      {warnings.map((ev, i) => (
+        <div
+          key={`${ev.family}-${i}`}
+          className={`${triangleColorClass(ev.kind)} flex items-center gap-1`}
+          style={{
+            filter: `drop-shadow(0 0 6px ${shadowColor(ev.kind)})`,
+          }}
+          title={(ev.properties?.tac as string) || ev.label}
+        >
+          <BigWarningTriangle />
+          <span className="text-[9px] font-mono font-semibold text-slate-100 bg-slate-950/70 px-1 py-0.5 rounded whitespace-nowrap border border-slate-800/60">
+            {triangleLabel(ev)}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function BigWarningTriangle() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-5">
+      <polygon
+        points="12,2 22,21 2,21"
+        fill="currentColor"
+        stroke="rgba(0,0,0,0.7)"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+      <text
+        x="12"
+        y="18"
+        fontSize="11"
+        fontWeight="bold"
+        textAnchor="middle"
+        fill="rgba(0,0,0,0.85)"
+      >
+        !
+      </text>
+    </svg>
   )
 }
 
