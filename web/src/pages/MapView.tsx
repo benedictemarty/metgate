@@ -254,6 +254,7 @@ export default function MapView({ data }: MapViewProps) {
   const [playing, setPlaying] = useState(false)
   const [showTrails, setShowTrails] = useState(false)
   const [windEnabled, setWindEnabled] = useState(false)
+  const [windLevelPa, setWindLevelPa] = useState(85000) // 850 hPa par défaut
 
   const candidates: Family[] = useMemo(() => {
     if (!data) return []
@@ -511,7 +512,7 @@ export default function MapView({ data }: MapViewProps) {
           )
         })}
 
-        <WindLayer enabled={windEnabled} />
+        <WindLayer enabled={windEnabled} level={windLevelPa} />
 
         {popup && (
           <Popup
@@ -545,19 +546,25 @@ export default function MapView({ data }: MapViewProps) {
         onToggleLayer={toggle}
       />
 
-      {/* Toggle vent flottant en haut à droite */}
-      <button
-        onClick={() => setWindEnabled((v) => !v)}
-        className={`absolute top-4 right-4 z-10 flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
-          windEnabled
-            ? 'border-cyan-400/50 bg-cyan-500/20 text-cyan-100 shadow-[0_0_15px_rgba(34,211,238,0.25)]'
-            : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
-        }`}
-        title="Particules de vent (WCS WIND 850 hPa)"
-      >
-        <WindIcon className="size-4" />
-        Vent
-      </button>
+      {/* Toggle vent + sélecteur de niveau, en haut à droite */}
+      <div className="absolute top-4 right-4 z-10 flex flex-col items-end gap-2">
+        <button
+          onClick={() => setWindEnabled((v) => !v)}
+          className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
+            windEnabled
+              ? 'border-cyan-400/50 bg-cyan-500/20 text-cyan-100 shadow-[0_0_15px_rgba(34,211,238,0.25)]'
+              : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
+          }`}
+          title="Particules de vent (WCS WIND)"
+        >
+          <WindIcon className="size-4" />
+          Vent
+        </button>
+
+        {windEnabled && (
+          <WindLevelSelector value={windLevelPa} onChange={setWindLevelPa} />
+        )}
+      </div>
 
       {showTimeSlider && selectedSlot && (
         <TimeSlider
@@ -983,6 +990,53 @@ function Sidebar({
         >
           OpenStreetMap
         </a>
+      </div>
+    </div>
+  )
+}
+
+// Niveaux de pression couramment utilisés en aéro, avec correspondance FL
+// approximative (atmosphère standard ICAO).
+const WIND_LEVELS: Array<{ pa: number; fl: string; hpa: string }> = [
+  { pa: 92500, fl: 'FL025', hpa: '925 hPa' },
+  { pa: 85000, fl: 'FL050', hpa: '850 hPa' },
+  { pa: 70000, fl: 'FL100', hpa: '700 hPa' },
+  { pa: 50000, fl: 'FL180', hpa: '500 hPa' },
+  { pa: 30000, fl: 'FL300', hpa: '300 hPa' },
+  { pa: 25000, fl: 'FL340', hpa: '250 hPa' },
+  { pa: 20000, fl: 'FL390', hpa: '200 hPa' },
+]
+
+function WindLevelSelector({
+  value,
+  onChange,
+}: {
+  value: number
+  onChange: (v: number) => void
+}) {
+  return (
+    <div className="flex flex-col gap-1 px-2 py-2 rounded-lg border border-slate-800/70 bg-slate-950/85 backdrop-blur-md shadow-xl">
+      <div className="text-[9px] uppercase tracking-wider text-slate-500 px-1">
+        Niveau
+      </div>
+      <div className="flex flex-col gap-0.5">
+        {WIND_LEVELS.map((l) => {
+          const active = l.pa === value
+          return (
+            <button
+              key={l.pa}
+              onClick={() => onChange(l.pa)}
+              className={`flex items-center justify-between gap-3 px-2 py-1 rounded text-[11px] font-mono tabular-nums transition border ${
+                active
+                  ? 'border-cyan-400/50 bg-cyan-500/15 text-cyan-100 shadow-[0_0_8px_rgba(34,211,238,0.2)]'
+                  : 'border-transparent text-slate-400 hover:bg-slate-800/40 hover:text-slate-200'
+              }`}
+            >
+              <span>{l.fl}</span>
+              <span className="text-[9px] text-slate-500">{l.hpa}</span>
+            </button>
+          )
+        })}
       </div>
     </div>
   )
