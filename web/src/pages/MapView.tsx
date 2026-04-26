@@ -9,7 +9,15 @@ import {
   Layer,
 } from 'react-map-gl/maplibre'
 import 'maplibre-gl/dist/maplibre-gl.css'
-import { Clock, Layers as LayersIcon, Loader2, Pause, Play, X } from 'lucide-react'
+import {
+  Clock,
+  Layers as LayersIcon,
+  Loader2,
+  Pause,
+  Play,
+  Sparkles,
+  X,
+} from 'lucide-react'
 import type { Aggregate, Family } from '../types'
 
 interface MapViewProps {
@@ -96,16 +104,37 @@ function featureValiditySlot(f: GeoJSON.Feature): string | null {
 function filterBySlot(
   geo: GeoJSON.FeatureCollection,
   slot: string | null,
+  showTrails: boolean,
 ): GeoJSON.FeatureCollection {
-  if (slot === null) return geo
+  if (slot === null && !showTrails) return geo
   return {
     ...geo,
     features: geo.features.filter((f) => {
       const v = featureValiditySlot(f)
+      const props = f.properties as Record<string, unknown> | null
+      const ftRaw = props?.forecasttime
+      const hasForecast = ftRaw !== undefined && ftRaw !== null && ftRaw !== ''
+      // Mode halo : on garde toutes les positions futures (forecasttime>=0)
+      // d'une cellule trackée, pour visualiser sa trajectoire complète.
+      if (showTrails && hasForecast) return true
       if (v === null) return true
       return v === slot
     }),
   }
+}
+
+// True dès qu'au moins une couche chargée a des features avec forecasttime > 0
+// (typiquement RDT_MSG). Sert à activer/désactiver le bouton Trails.
+function hasTrailableLayer(layers: Record<string, FetchedLayer>): boolean {
+  for (const l of Object.values(layers)) {
+    for (const f of l.rawData.features) {
+      const ft = (f.properties as Record<string, unknown> | null)?.forecasttime
+      if (ft === undefined || ft === null || ft === '') continue
+      const n = typeof ft === 'string' ? parseFloat(ft) : (ft as number)
+      if (Number.isFinite(n) && n > 0) return true
+    }
+  }
+  return false
 }
 
 function collectSlots(layers: Record<string, FetchedLayer>): string[] {
@@ -158,6 +187,7 @@ export default function MapView({ data }: MapViewProps) {
   const [popup, setPopup] = useState<PopupState | null>(null)
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null)
   const [playing, setPlaying] = useState(false)
+  const [showTrails, setShowTrails] = useState(false)
 
   const candidates: Family[] = useMemo(() => {
     if (!data) return []
@@ -193,7 +223,7 @@ export default function MapView({ data }: MapViewProps) {
           throw new Error(`HTTP ${r.status}: ${detail.slice(0, 80)}`)
         }
         const geo = (await r.json()) as GeoJSON.FeatureCollection
-        const filtered = filterBySlot(geo, selectedSlot)
+        const filtered = filterBySlot(geo, selectedSlot, showTrails)
         setLoaded((prev) => ({
           ...prev,
           [name]: {
@@ -249,13 +279,13 @@ export default function MapView({ data }: MapViewProps) {
     }
   }, [slots, selectedSlot])
 
-  // Re-filter chaque couche quand le slot change.
+  // Re-filter chaque couche quand le slot ou le mode trails change.
   useEffect(() => {
     setLoaded((prev) => {
       const next: Record<string, FetchedLayer> = {}
       let changed = false
       for (const [name, l] of Object.entries(prev)) {
-        const filtered = filterBySlot(l.rawData, selectedSlot)
+        const filtered = filterBySlot(l.rawData, selectedSlot, showTrails)
         if (filtered.features.length === l.data.features.length) {
           next[name] = { ...l, data: filtered, count: filtered.features.length }
           continue
@@ -265,7 +295,7 @@ export default function MapView({ data }: MapViewProps) {
       }
       return changed ? next : prev
     })
-  }, [selectedSlot])
+  }, [selectedSlot, showTrails])
 
   // Animation play : avance d'un slot toutes les ~1.4 s.
   useEffect(() => {
@@ -281,6 +311,7 @@ export default function MapView({ data }: MapViewProps) {
   }, [playing, slots])
 
   const showTimeSlider = slots.length > 1
+  const trailsAvailable = useMemo(() => hasTrailableLayer(loaded), [loaded])
 
   const interactiveLayerIds = useMemo(() => {
     const ids: string[] = []
@@ -333,6 +364,42 @@ export default function MapView({ data }: MapViewProps) {
           const layer = loaded[name]
           if (!layer) return null
           const s = styleFor(name)
+          // Mode trails : opacité dégressive selon forecasttime (0 → 60 min).
+          // Les features sans forecasttime gardent opacity max (cas non-RDT).
+          const fillOpacity = showTrails
+            ? ([
+                'interpolate',
+                ['linear'],
+                ['to-number', ['coalesce', ['get', 'forecasttime'], 0]],
+                0,
+                0.22,
+                60,
+                0.04,
+              ] as unknown as number)
+            : 0.18
+          const lineOpacity = showTrails
+            ? ([
+                'interpolate',
+                ['linear'],
+                ['to-number', ['coalesce', ['get', 'forecasttime'], 0]],
+                0,
+                0.95,
+                60,
+                0.18,
+              ] as unknown as number)
+            : 0.85
+          const lineWidth = showTrails
+            ? ([
+                'interpolate',
+                ['linear'],
+                ['to-number', ['coalesce', ['get', 'forecasttime'], 0]],
+                0,
+                2,
+                60,
+                0.7,
+              ] as unknown as number)
+            : 1.5
+
           return (
             <Source key={name} id={`src-${name}`} type="geojson" data={layer.data}>
               {/* Polygones / multipolygones : remplissage + bordure */}
@@ -346,7 +413,7 @@ export default function MapView({ data }: MapViewProps) {
                 ]}
                 paint={{
                   'fill-color': s.color,
-                  'fill-opacity': 0.18,
+                  'fill-opacity': fillOpacity,
                 }}
               />
               <Layer
@@ -359,8 +426,8 @@ export default function MapView({ data }: MapViewProps) {
                 ]}
                 paint={{
                   'line-color': s.color,
-                  'line-width': 1.5,
-                  'line-opacity': 0.85,
+                  'line-width': lineWidth,
+                  'line-opacity': lineOpacity,
                 }}
               />
               {/* Points : halo + cercle */}
@@ -433,6 +500,9 @@ export default function MapView({ data }: MapViewProps) {
           }}
           playing={playing}
           onTogglePlay={() => setPlaying((p) => !p)}
+          trailsAvailable={trailsAvailable}
+          showTrails={showTrails}
+          onToggleTrails={() => setShowTrails((v) => !v)}
         />
       )}
     </div>
@@ -445,9 +515,21 @@ interface TimeSliderProps {
   onChange: (v: string) => void
   playing: boolean
   onTogglePlay: () => void
+  trailsAvailable: boolean
+  showTrails: boolean
+  onToggleTrails: () => void
 }
 
-function TimeSlider({ slots, selected, onChange, playing, onTogglePlay }: TimeSliderProps) {
+function TimeSlider({
+  slots,
+  selected,
+  onChange,
+  playing,
+  onTogglePlay,
+  trailsAvailable,
+  showTrails,
+  onToggleTrails,
+}: TimeSliderProps) {
   const idx = slots.indexOf(selected)
   const total = slots.length
   // Indique quels slots changent de jour par rapport au précédent (pour
@@ -493,6 +575,23 @@ function TimeSlider({ slots, selected, onChange, playing, onTogglePlay }: TimeSl
           <Play className="size-4 text-sky-300 translate-x-[1px]" />
         )}
       </button>
+
+      {trailsAvailable && (
+        <button
+          onClick={onToggleTrails}
+          className={`size-8 rounded-lg border flex items-center justify-center transition ${
+            showTrails
+              ? 'bg-pink-500/25 border-pink-400/50 shadow-[0_0_10px_rgba(244,114,182,0.3)]'
+              : 'bg-slate-900/60 border-slate-800/60 hover:bg-slate-800/60'
+          }`}
+          title="Afficher la trajectoire prévisionnelle (T+0 → T+60)"
+          aria-label="Toggle trails"
+        >
+          <Sparkles
+            className={`size-4 ${showTrails ? 'text-pink-200' : 'text-slate-400'}`}
+          />
+        </button>
+      )}
 
       <div className="flex flex-col gap-1.5 min-w-0">
         <div className="flex items-center gap-1.5 text-[11px] text-slate-300">
