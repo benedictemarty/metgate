@@ -44,13 +44,15 @@ type RoutePlan struct {
 
 // RouteEvent est un événement météo rencontré le long de la route.
 type RouteEvent struct {
-	Kind            string         `json:"kind"`               // SIGMET / AIRMET / METAR / TAF / SPECI / CAT / GIVRAGE / RDT
-	Family          string         `json:"family"`             // FeatureType WFS d'origine
-	Label           string         `json:"label"`              // ex: "EHAM" ou "FIR LFFF — OBSC TS"
-	NearIdx         int            `json:"near_waypoint_idx"`  // index du waypoint le plus pertinent
-	DistanceNM      float64        `json:"distance_nm"`        // pour Points : distance min à la route
-	FIR             string         `json:"fir,omitempty"`      // issuingAirTrafficServicesRegion si dispo
-	WaypointTime    string         `json:"waypoint_time"`      // time du waypoint le plus proche
+	Kind            string         `json:"kind"`              // SIGMET / AIRMET / METAR / TAF / SPECI / CAT / GIVRAGE / RDT
+	Family          string         `json:"family"`            // FeatureType WFS d'origine
+	Label           string         `json:"label"`             // ex: "EHAM" ou "FIR LFFF — OBSC TS"
+	NearIdx         int            `json:"near_waypoint_idx"` // index du waypoint le plus pertinent
+	DistanceNM      float64        `json:"distance_nm"`       // pour Points : distance min à la route
+	Lon             float64        `json:"lon"`               // position du Point ou centroïde du Polygon
+	Lat             float64        `json:"lat"`
+	FIR             string         `json:"fir,omitempty"` // issuingAirTrafficServicesRegion si dispo
+	WaypointTime    string         `json:"waypoint_time"` // time du waypoint le plus proche
 	ValidityStart   string         `json:"validity_start,omitempty"`
 	ValidityEnd     string         `json:"validity_end,omitempty"`
 	WaypointInRange bool           `json:"waypoint_in_range"` // true si waypoint.time ∈ [start, end]
@@ -347,6 +349,8 @@ func matchFeature(
 		}
 		ev.NearIdx = idx
 		ev.DistanceNM = dist
+		ev.Lon = c[0]
+		ev.Lat = c[1]
 		ev.WaypointTime = plan.Waypoints[idx].TimeISO
 		ev.WaypointInRange = isInValidity(ev.WaypointTime, ev.ValidityStart, ev.ValidityEnd)
 		ev.Label = pointLabel(f.Properties, family)
@@ -361,6 +365,7 @@ func matchFeature(
 			return ev, false
 		}
 		ev.NearIdx = idx
+		ev.Lon, ev.Lat = ringCentroid(rings[0])
 		ev.WaypointTime = plan.Waypoints[idx].TimeISO
 		ev.WaypointInRange = isInValidity(ev.WaypointTime, ev.ValidityStart, ev.ValidityEnd)
 		ev.Label = polyLabel(ev, family)
@@ -371,6 +376,7 @@ func matchFeature(
 			return ev, false
 		}
 		bestIdx := -1
+		var bestRing [][]float64
 		for _, rings := range polys {
 			idx, ok := firstWaypointIn(plan, rings)
 			if !ok {
@@ -378,18 +384,43 @@ func matchFeature(
 			}
 			if bestIdx < 0 || idx < bestIdx {
 				bestIdx = idx
+				if len(rings) > 0 {
+					bestRing = rings[0]
+				}
 			}
 		}
 		if bestIdx < 0 {
 			return ev, false
 		}
 		ev.NearIdx = bestIdx
+		if len(bestRing) > 0 {
+			ev.Lon, ev.Lat = ringCentroid(bestRing)
+		}
 		ev.WaypointTime = plan.Waypoints[bestIdx].TimeISO
 		ev.WaypointInRange = isInValidity(ev.WaypointTime, ev.ValidityStart, ev.ValidityEnd)
 		ev.Label = polyLabel(ev, family)
 		return ev, true
 	}
 	return ev, false
+}
+
+// ringCentroid : centroïde simple d'un ring polygonal (moyenne des sommets,
+// rapide et suffisamment fidèle pour positionner un pictogramme).
+func ringCentroid(ring [][]float64) (lon, lat float64) {
+	if len(ring) == 0 {
+		return 0, 0
+	}
+	// On ignore le dernier point s'il duplique le premier (anneau fermé).
+	n := len(ring)
+	if n > 1 && ring[0][0] == ring[n-1][0] && ring[0][1] == ring[n-1][1] {
+		n--
+	}
+	var sx, sy float64
+	for i := 0; i < n; i++ {
+		sx += ring[i][0]
+		sy += ring[i][1]
+	}
+	return sx / float64(n), sy / float64(n)
 }
 
 func familyKind(family string) string {

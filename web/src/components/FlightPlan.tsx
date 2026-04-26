@@ -27,6 +27,8 @@ export interface RouteEvent {
   label: string
   near_waypoint_idx: number
   distance_nm: number
+  lon: number
+  lat: number
   fir?: string
   waypoint_time: string
   validity_start?: string
@@ -330,10 +332,124 @@ export default function FlightPlan({
               </div>
             </Marker>
           )}
+          {plan.events && (
+            <EventMarkers
+              events={plan.events}
+              cursorIdx={cursorIdx >= 0 ? cursorIdx : 0}
+            />
+          )}
         </>
       )}
     </>
   )
+}
+
+// ============================================================================
+// Pictogrammes "wave" : apparaissent quand l'avion approche, fade après passage
+// ============================================================================
+
+const EVENT_WINDOW = 8 // nb de waypoints autour du cursor où l'event est visible
+
+function EventMarkers({
+  events,
+  cursorIdx,
+}: {
+  events: RouteEvent[]
+  cursorIdx: number
+}) {
+  return (
+    <>
+      {events.map((ev, i) => {
+        const dist = Math.abs(ev.near_waypoint_idx - cursorIdx)
+        if (dist > EVENT_WINDOW) return null
+        // opacité maxi (1) au passage, dégrade vers 0 sur ±EVENT_WINDOW
+        const o = Math.max(0.15, 1 - dist / EVENT_WINDOW)
+        // scale léger (0.7 → 1.0) pour effet "pop"
+        const scale = 0.7 + (1 - dist / EVENT_WINDOW) * 0.3
+        return (
+          <Marker
+            key={`${ev.family}-${i}`}
+            longitude={ev.lon}
+            latitude={ev.lat}
+            anchor="bottom"
+          >
+            <div
+              style={{
+                opacity: o,
+                transform: `scale(${scale})`,
+                transition: 'opacity 200ms ease, transform 200ms ease',
+                filter: `drop-shadow(0 0 4px ${shadowColor(ev.kind)})`,
+              }}
+              className={triangleColorClass(ev.kind)}
+              title={(ev.properties?.tac as string) || ev.label}
+            >
+              <EventTriangle />
+              <div className="text-[8px] font-mono text-center -mt-0.5 text-slate-200 leading-none whitespace-nowrap">
+                {triangleLabel(ev)}
+              </div>
+            </div>
+          </Marker>
+        )
+      })}
+    </>
+  )
+}
+
+function EventTriangle() {
+  return (
+    <svg viewBox="0 0 14 14" className="size-3.5">
+      <polygon
+        points="7,1 13,12 1,12"
+        fill="currentColor"
+        stroke="rgba(0,0,0,0.6)"
+        strokeWidth="1"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function triangleLabel(ev: RouteEvent): string {
+  const icao = ev.properties?.locationIndicatorICAO as string | undefined
+  if (icao) return icao
+  if (ev.fir) return ev.fir
+  if (ev.kind === 'CAT_EURAT01') {
+    const top = ev.properties?.top as string | undefined
+    if (top) {
+      // top en mètres → FL (1 FL = 100 ft = 30.48 m)
+      const fl = Math.round(parseFloat(top) / 30.48)
+      return `CAT FL${fl}`
+    }
+    return 'CAT'
+  }
+  if (ev.kind === 'GIVRAGE_EURAT01') return 'ICE'
+  if (ev.kind === 'RDT_MSG') return 'TS'
+  if (ev.kind.includes('SIGMET')) return 'SIG'
+  if (ev.kind.includes('AIRMET')) return 'AIR'
+  return ''
+}
+
+function triangleColorClass(k: string): string {
+  if (k === 'METAR' || k === 'SPECI') return 'text-sky-400'
+  if (k === 'TAF') return 'text-violet-400'
+  if (k.includes('SIGMET')) return 'text-rose-400'
+  if (k.includes('AIRMET')) return 'text-amber-400'
+  if (k === 'CAT_EURAT01') return 'text-fuchsia-400'
+  if (k === 'GIVRAGE_EURAT01') return 'text-cyan-300'
+  if (k === 'RDT_MSG') return 'text-pink-400'
+  if (k.includes('Volcanic')) return 'text-orange-400'
+  return 'text-slate-300'
+}
+
+function shadowColor(k: string): string {
+  if (k === 'METAR' || k === 'SPECI') return 'rgba(56,189,248,0.6)'
+  if (k === 'TAF') return 'rgba(167,139,250,0.6)'
+  if (k.includes('SIGMET')) return 'rgba(244,63,94,0.7)'
+  if (k.includes('AIRMET')) return 'rgba(251,191,36,0.6)'
+  if (k === 'CAT_EURAT01') return 'rgba(232,121,249,0.6)'
+  if (k === 'GIVRAGE_EURAT01') return 'rgba(125,211,252,0.6)'
+  if (k === 'RDT_MSG') return 'rgba(244,114,182,0.7)'
+  return 'rgba(148,163,184,0.5)'
 }
 
 // bearingDeg : cap initial entre deux points en degrés (0=N, 90=E).
