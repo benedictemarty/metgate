@@ -420,7 +420,7 @@ function EventMarkers({
               className={triangleColorClass(ev.kind)}
               title={(ev.properties?.tac as string) || ev.label}
             >
-              <EventTriangle />
+              {isPointKind(ev.kind) ? <ProductDot /> : <EventTriangle />}
               <div className="text-[8px] font-mono text-center -mt-0.5 text-slate-200 leading-none whitespace-nowrap">
                 {triangleLabel(ev)}
               </div>
@@ -432,6 +432,7 @@ function EventMarkers({
   )
 }
 
+// Triangle pour les ZONES de phénomène (SIGMET/AIRMET/CAT/GIVRAGE/RDT/advisory).
 function EventTriangle() {
   return (
     <svg viewBox="0 0 14 14" className="size-3.5">
@@ -443,6 +444,38 @@ function EventTriangle() {
         strokeLinejoin="round"
       />
     </svg>
+  )
+}
+
+// Cercle pour les BULLETINS ponctuels d'aérodrome (METAR/TAF/SPECI).
+function ProductDot() {
+  return (
+    <svg viewBox="0 0 14 14" className="size-3.5">
+      <circle
+        cx="7"
+        cy="7"
+        r="4.5"
+        fill="currentColor"
+        stroke="rgba(0,0,0,0.6)"
+        strokeWidth="1"
+      />
+    </svg>
+  )
+}
+
+// True si le kind correspond à un produit ponctuel (bulletin) plutôt qu'à
+// une zone de phénomène. METAR/TAF/SPECI sont publiés par aérodrome → point.
+// Les advisories (volcanique, cyclone, météo spatiale) sont aussi publiés
+// comme points (centroide d'aérodrome ou émetteur), donc dot.
+function isPointKind(k: string): boolean {
+  return (
+    k === 'METAR' ||
+    k === 'TAF' ||
+    k === 'SPECI' ||
+    k === 'LocalReport' ||
+    k === 'VolcanicAshAdvisory' ||
+    k === 'TropicalCycloneAdvisory' ||
+    k === 'SpaceWeatherAdvisory'
   )
 }
 
@@ -516,7 +549,7 @@ function EventsList({
   return (
     <div className="mt-2 pt-2 border-t border-slate-800/60">
       <div className="flex items-center justify-between text-[9px] uppercase tracking-wider text-slate-500 mb-1.5">
-        <span>Événements rencontrés</span>
+        <span>Produits rencontrés</span>
         <span className="font-mono">{events.length}</span>
       </div>
       <ul className="max-h-44 overflow-y-auto space-y-0.5 pr-1">
