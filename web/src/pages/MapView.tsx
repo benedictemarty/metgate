@@ -23,6 +23,7 @@ import WindLayer from '../components/WindLayer'
 import TropoLayer from '../components/TropoLayer'
 import QvacisLayer, { QVACIS_FLS, type QvacisDataset } from '../components/QvacisLayer'
 import FlightPlan, { type RoutePlan } from '../components/FlightPlan'
+import AircraftTracker, { type AircraftState } from '../components/AircraftTracker'
 import { CloudFog, Link2, Link2Off, Mountain } from 'lucide-react'
 import type { Aggregate, Family } from '../types'
 
@@ -281,6 +282,7 @@ export default function MapView({ data }: MapViewProps) {
   const [routePlan, setRoutePlan] = useState<RoutePlan | null>(null)
   const [routeCursor, setRouteCursor] = useState(0)
   const [routePlaying, setRoutePlaying] = useState(false)
+  const [trackedAircraft, setTrackedAircraft] = useState<AircraftState | null>(null)
 
   useEffect(() => {
     if (!routePlan) {
@@ -648,6 +650,11 @@ export default function MapView({ data }: MapViewProps) {
             setRouteCursor(i)
             setRoutePlaying(false)
           }}
+        />
+
+        <AircraftTracker
+          selected={trackedAircraft}
+          onSelect={setTrackedAircraft}
         />
 
         {popup && (

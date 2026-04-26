@@ -7,16 +7,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bmarty/metgate/internal/aircraft"
 	"github.com/bmarty/metgate/internal/catalog"
 	"github.com/bmarty/metgate/internal/web"
 )
 
 type API struct {
-	catalog *catalog.Service
+	catalog  *catalog.Service
+	aircraft *aircraft.Client
 }
 
-func NewAPI(c *catalog.Service) *API {
-	return &API{catalog: c}
+func NewAPI(c *catalog.Service, ac *aircraft.Client) *API {
+	return &API{catalog: c, aircraft: ac}
 }
 
 func (a *API) Routes() *http.ServeMux {
@@ -32,6 +34,8 @@ func (a *API) Routes() *http.ServeMux {
 	m.HandleFunc("GET /api/tropo", a.handleTropo)
 	m.HandleFunc("GET /api/qvacis", a.handleQvacis)
 	m.HandleFunc("GET /api/route", a.handleRoute)
+	m.HandleFunc("GET /api/aircraft/search", a.handleAircraftSearch)
+	m.HandleFunc("GET /api/aircraft/{icao24}", a.handleAircraftState)
 	m.Handle("GET /", web.Handler())
 	return m
 }
@@ -130,6 +134,53 @@ func (a *API) handleTropo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, grid)
+}
+
+// handleAircraftSearch : /api/aircraft/search?cs=AFR1234&bbox=lonMin,latMin,lonMax,latMax
+// Recherche un avion par sous-chaîne de callsign. bbox réduit la zone interrogée
+// (par défaut Europe pour limiter le volume).
+func (a *API) handleAircraftSearch(w http.ResponseWriter, r *http.Request) {
+	cs := strings.TrimSpace(r.URL.Query().Get("cs"))
+	if cs == "" {
+		http.Error(w, "param 'cs' (callsign) requis", http.StatusBadRequest)
+		return
+	}
+	// Bbox par défaut Europe + Méditerranée + Maghreb pour ne pas saturer.
+	bbox := [4]float64{-15, 30, 35, 70}
+	if bs := r.URL.Query().Get("bbox"); bs != "" {
+		fmt.Sscanf(bs, "%f,%f,%f,%f", &bbox[0], &bbox[1], &bbox[2], &bbox[3])
+	}
+	states, err := a.aircraft.QueryStates(r.Context(), &bbox, "", cs)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"query":         cs,
+		"authenticated": a.aircraft.Authenticated(),
+		"count":         len(states),
+		"states":        states,
+	})
+}
+
+// handleAircraftState : /api/aircraft/{icao24}
+// État courant d'un avion par identifiant ADS-B (24 bits hex).
+func (a *API) handleAircraftState(w http.ResponseWriter, r *http.Request) {
+	icao := strings.TrimSpace(r.PathValue("icao24"))
+	if icao == "" {
+		http.Error(w, "icao24 requis", http.StatusBadRequest)
+		return
+	}
+	states, err := a.aircraft.QueryStates(r.Context(), nil, icao, "")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if len(states) == 0 {
+		http.Error(w, "aucun état pour "+icao, http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, states[0])
 }
 
 // handleQvacis : /api/qvacis?dataset=DETERMINISTIC|PROBABILISTIC&fl=325&bbox=...

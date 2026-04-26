@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bmarty/metgate/internal/aircraft"
 	"github.com/bmarty/metgate/internal/catalog"
 	httpapi "github.com/bmarty/metgate/internal/http"
 	"github.com/bmarty/metgate/internal/metgate"
@@ -39,7 +40,17 @@ func main() {
 
 	mg := metgate.New(baseURL, token)
 	cat := catalog.New(mg, cacheTTL)
-	api := httpapi.NewAPI(cat)
+
+	osUser := os.Getenv("OPENSKY_USER")
+	osPass := os.Getenv("OPENSKY_PASS")
+	ac := aircraft.New(osUser, osPass)
+	if osUser == "" {
+		log.Print("opensky: anonymous (100 req/jour). Renseigner OPENSKY_USER/PASS pour 4000 req/jour.")
+	} else {
+		log.Printf("opensky: authenticated as %s", osUser)
+	}
+
+	api := httpapi.NewAPI(cat, ac)
 	log.Printf("cache TTL: %s", cacheTTL)
 
 	srv := &http.Server{
