@@ -1,8 +1,11 @@
-import { useEffect, useState } from 'react'
-import { Cloud, FileText, Map as MapIcon } from 'lucide-react'
+import { lazy, Suspense, useEffect, useState } from 'react'
+import { Cloud, FileText, Loader2, Map as MapIcon } from 'lucide-react'
 import Catalog from './pages/Catalog'
-import MapView from './pages/MapView'
 import type { Aggregate } from './types'
+
+// La page Carte embarque MapLibre (~1 MB de JS) ; on la lazy-load pour ne
+// payer le coût qu'au premier passage sur l'onglet Carte.
+const MapView = lazy(() => import('./pages/MapView'))
 
 type View = 'catalog' | 'map'
 
@@ -64,7 +67,15 @@ export default function App() {
       {view === 'catalog' ? (
         <Catalog data={data} loading={loading} error={error} onRefresh={load} />
       ) : (
-        <MapView data={data} />
+        <Suspense
+          fallback={
+            <div className="flex items-center justify-center py-32 text-slate-500">
+              <Loader2 className="size-7 animate-spin" />
+            </div>
+          }
+        >
+          <MapView data={data} />
+        </Suspense>
       )}
     </div>
   )
