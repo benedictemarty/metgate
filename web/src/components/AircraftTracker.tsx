@@ -98,8 +98,11 @@ export default function AircraftTracker({ selected, onSelect }: AircraftTrackerP
 
   return (
     <>
-      {/* Panneau Suivi en bas-gauche, sous le panneau Plan de vol */}
-      <div className="absolute bottom-4 left-4 z-10 w-72 px-3 py-3 rounded-xl border border-slate-800/70 bg-slate-950/85 backdrop-blur-md shadow-2xl">
+      {/* Panneau Suivi : colonne juste à droite de la sidebar WFS (la même
+          que le Plan de vol), mais en bas pour ne pas se chevaucher.
+          La sidebar WFS occupe la colonne 0 (left-4 → bottom-4), le Plan de
+          vol prend left-[19rem] top-4, on prend left-[19rem] bottom-4. */}
+      <div className="absolute bottom-4 left-[19rem] z-10 w-72 px-3 py-3 rounded-xl border border-rose-400/30 bg-slate-950/85 backdrop-blur-md shadow-2xl">
         <div className="flex items-center gap-2 mb-2">
           <Radio className="size-4 text-rose-300" />
           <div className="text-sm font-medium">Suivi avion (ADS-B)</div>
