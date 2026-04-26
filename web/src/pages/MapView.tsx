@@ -21,7 +21,8 @@ import {
 } from 'lucide-react'
 import WindLayer from '../components/WindLayer'
 import TropoLayer from '../components/TropoLayer'
-import { Mountain } from 'lucide-react'
+import QvacisLayer, { QVACIS_FLS, type QvacisDataset } from '../components/QvacisLayer'
+import { CloudFog, Mountain } from 'lucide-react'
 import type { Aggregate, Family } from '../types'
 
 interface MapViewProps {
@@ -259,6 +260,9 @@ export default function MapView({ data }: MapViewProps) {
   const [windDataset, setWindDataset] = useState<'WIND' | 'JET'>('WIND')
   const [windLevelPa, setWindLevelPa] = useState(85000) // 850 hPa par défaut
   const [tropoEnabled, setTropoEnabled] = useState(false)
+  const [qvacisEnabled, setQvacisEnabled] = useState(false)
+  const [qvacisDataset, setQvacisDataset] = useState<QvacisDataset>('DETERMINISTIC')
+  const [qvacisFL, setQvacisFL] = useState(325)
 
   const candidates: Family[] = useMemo(() => {
     if (!data) return []
@@ -518,6 +522,7 @@ export default function MapView({ data }: MapViewProps) {
 
         <WindLayer enabled={windEnabled} dataset={windDataset} level={windLevelPa} />
         <TropoLayer enabled={tropoEnabled} />
+        <QvacisLayer enabled={qvacisEnabled} dataset={qvacisDataset} fl={qvacisFL} />
 
         {popup && (
           <Popup
@@ -555,6 +560,18 @@ export default function MapView({ data }: MapViewProps) {
       <div className="absolute top-4 right-4 z-10 flex flex-col items-end gap-2">
         <div className="flex gap-2">
           <button
+            onClick={() => setQvacisEnabled((v) => !v)}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
+              qvacisEnabled
+                ? 'border-orange-400/50 bg-orange-500/20 text-orange-100 shadow-[0_0_15px_rgba(249,115,22,0.25)]'
+                : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
+            }`}
+            title="Concentration de cendres volcaniques (WCS QVACIS)"
+          >
+            <CloudFog className="size-4" />
+            Cendres
+          </button>
+          <button
             onClick={() => setTropoEnabled((v) => !v)}
             className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
               tropoEnabled
@@ -588,6 +605,15 @@ export default function MapView({ data }: MapViewProps) {
               setWindDataset(d)
               if (d === 'WIND') setWindLevelPa(lvl)
             }}
+          />
+        )}
+
+        {qvacisEnabled && (
+          <QvacisSelector
+            dataset={qvacisDataset}
+            fl={qvacisFL}
+            onDataset={setQvacisDataset}
+            onFL={setQvacisFL}
           />
         )}
       </div>
@@ -1078,6 +1104,67 @@ function WindLevelSelector({
             </button>
           )
         })}
+      </div>
+    </div>
+  )
+}
+
+function QvacisSelector({
+  dataset,
+  fl,
+  onDataset,
+  onFL,
+}: {
+  dataset: QvacisDataset
+  fl: number
+  onDataset: (d: QvacisDataset) => void
+  onFL: (fl: number) => void
+}) {
+  return (
+    <div className="flex flex-col gap-2 px-2 py-2 rounded-lg border border-orange-900/40 bg-slate-950/85 backdrop-blur-md shadow-xl">
+      <div className="text-[9px] uppercase tracking-wider text-slate-500 px-1">
+        Cendres
+      </div>
+      <div className="flex gap-1">
+        <button
+          onClick={() => onDataset('DETERMINISTIC')}
+          className={`flex-1 px-2 py-1 rounded text-[10px] transition border ${
+            dataset === 'DETERMINISTIC'
+              ? 'border-orange-400/50 bg-orange-500/15 text-orange-100'
+              : 'border-transparent text-slate-400 hover:bg-slate-800/40'
+          }`}
+        >
+          Déterm.
+        </button>
+        <button
+          onClick={() => onDataset('PROBABILISTIC')}
+          className={`flex-1 px-2 py-1 rounded text-[10px] transition border ${
+            dataset === 'PROBABILISTIC'
+              ? 'border-orange-400/50 bg-orange-500/15 text-orange-100'
+              : 'border-transparent text-slate-400 hover:bg-slate-800/40'
+          }`}
+        >
+          Probab.
+        </button>
+      </div>
+      <div className="text-[9px] uppercase tracking-wider text-slate-500 px-1">
+        FL
+      </div>
+      <div className="grid grid-cols-3 gap-1">
+        {QVACIS_FLS.map((v) => (
+          <button
+            key={v}
+            onClick={() => onFL(v)}
+            className={`px-1.5 py-1 rounded text-[10px] font-mono tabular-nums transition border ${
+              fl === v
+                ? 'border-orange-400/50 bg-orange-500/15 text-orange-100'
+                : 'border-transparent text-slate-400 hover:bg-slate-800/40 hover:text-slate-200'
+            }`}
+            title={`Layer center, ~${(v / 10).toFixed(0)}k ft`}
+          >
+            {v}
+          </button>
+        ))}
       </div>
     </div>
   )

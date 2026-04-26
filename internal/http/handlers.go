@@ -29,6 +29,7 @@ func (a *API) Routes() *http.ServeMux {
 	m.HandleFunc("GET /api/feature", a.handleFeature)
 	m.HandleFunc("GET /api/wind", a.handleWind)
 	m.HandleFunc("GET /api/tropo", a.handleTropo)
+	m.HandleFunc("GET /api/qvacis", a.handleQvacis)
 	m.Handle("GET /", web.Handler())
 	return m
 }
@@ -122,6 +123,33 @@ func (a *API) handleTropo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	grid, err := a.catalog.TropoGrid(r.Context(), bbox)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, http.StatusOK, grid)
+}
+
+// handleQvacis : /api/qvacis?dataset=DETERMINISTIC|PROBABILISTIC&fl=325&bbox=...
+func (a *API) handleQvacis(w http.ResponseWriter, r *http.Request) {
+	bboxStr := r.URL.Query().Get("bbox")
+	if bboxStr == "" {
+		bboxStr = "-30,22,30,33" // bbox utile par défaut (Atlantique/Sahara)
+	}
+	var bbox [4]float64
+	if _, err := fmt.Sscanf(bboxStr, "%f,%f,%f,%f", &bbox[0], &bbox[1], &bbox[2], &bbox[3]); err != nil {
+		http.Error(w, "bbox invalide", http.StatusBadRequest)
+		return
+	}
+	dataset := strings.ToUpper(r.URL.Query().Get("dataset"))
+	if dataset == "" {
+		dataset = "DETERMINISTIC"
+	}
+	fl := 325 // FL325 par défaut (~10 km, croisière moyens-courriers)
+	if v := r.URL.Query().Get("fl"); v != "" {
+		fmt.Sscanf(v, "%d", &fl)
+	}
+	grid, err := a.catalog.QvacisGrid(r.Context(), dataset, fl, bbox)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
