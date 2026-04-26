@@ -1047,16 +1047,50 @@ function Sidebar({
   )
 }
 
-// Niveaux de pression couramment utilisés en aéro, avec correspondance FL
-// approximative (atmosphère standard ICAO).
-const WIND_LEVELS: Array<{ pa: number; fl: string; hpa: string }> = [
-  { pa: 92500, fl: 'FL025', hpa: '925 hPa' },
-  { pa: 85000, fl: 'FL050', hpa: '850 hPa' },
-  { pa: 70000, fl: 'FL100', hpa: '700 hPa' },
-  { pa: 50000, fl: 'FL180', hpa: '500 hPa' },
-  { pa: 30000, fl: 'FL300', hpa: '300 hPa' },
-  { pa: 25000, fl: 'FL340', hpa: '250 hPa' },
-  { pa: 20000, fl: 'FL390', hpa: '200 hPa' },
+// 29 niveaux de pression disponibles dans le coverage MetGate WIND, du plus
+// haut (basse pression, haute altitude) vers le plus bas (haute pression, sol).
+// fl = niveau de vol approximatif en centaines de pieds (ISA standard).
+const WIND_PRESSURE_LEVELS: Array<{ pa: number; fl: number }> = [
+  { pa: 1000, fl: 1020 },
+  { pa: 2000, fl: 885 },
+  { pa: 3000, fl: 800 },
+  { pa: 5000, fl: 690 },
+  { pa: 7000, fl: 620 },
+  { pa: 10000, fl: 531 },
+  { pa: 12500, fl: 487 },
+  { pa: 15000, fl: 447 },
+  { pa: 17500, fl: 416 },
+  { pa: 20000, fl: 390 },
+  { pa: 22500, fl: 361 },
+  { pa: 25000, fl: 340 },
+  { pa: 27500, fl: 321 },
+  { pa: 30000, fl: 300 },
+  { pa: 35000, fl: 265 },
+  { pa: 40000, fl: 235 },
+  { pa: 45000, fl: 208 },
+  { pa: 50000, fl: 180 },
+  { pa: 55000, fl: 160 },
+  { pa: 60000, fl: 138 },
+  { pa: 65000, fl: 118 },
+  { pa: 70000, fl: 100 },
+  { pa: 75000, fl: 80 },
+  { pa: 80000, fl: 63 },
+  { pa: 85000, fl: 50 },
+  { pa: 90000, fl: 33 },
+  { pa: 92500, fl: 25 },
+  { pa: 95000, fl: 16 },
+  { pa: 100000, fl: 0 },
+]
+
+// Raccourcis FL communs (pilote moyen / ATM). pa choisi parmi les 29 niveaux.
+const WIND_QUICK_PRESETS: Array<{ pa: number; label: string }> = [
+  { pa: 92500, label: 'FL025' },
+  { pa: 85000, label: 'FL050' },
+  { pa: 70000, label: 'FL100' },
+  { pa: 50000, label: 'FL180' },
+  { pa: 30000, label: 'FL300' },
+  { pa: 25000, label: 'FL340' },
+  { pa: 20000, label: 'FL390' },
 ]
 
 function WindLevelSelector({
@@ -1068,39 +1102,78 @@ function WindLevelSelector({
   value: number
   onSelect: (dataset: 'WIND' | 'JET', level: number) => void
 }) {
+  // Index dans WIND_PRESSURE_LEVELS du niveau courant. Le slider va de 0
+  // (haute altitude, 1 hPa) à N-1 (sol, 1000 hPa) — on inverse l'index pour
+  // avoir "altitude croissante = slider vers la droite".
+  const N = WIND_PRESSURE_LEVELS.length
+  const findIdx = (pa: number) => {
+    const i = WIND_PRESSURE_LEVELS.findIndex((l) => l.pa === pa)
+    return i < 0 ? N - 1 : i
+  }
+  const sliderIdx = N - 1 - findIdx(value) // 0 = sol, N-1 = haute alti
+  const cur = WIND_PRESSURE_LEVELS[findIdx(value)]
   return (
-    <div className="flex flex-col gap-1 px-2 py-2 rounded-lg border border-slate-800/70 bg-slate-950/85 backdrop-blur-md shadow-xl">
-      <div className="text-[9px] uppercase tracking-wider text-slate-500 px-1">
-        Source
+    <div className="flex flex-col gap-2 px-3 py-2 rounded-lg border border-slate-800/70 bg-slate-950/85 backdrop-blur-md shadow-xl min-w-[220px]">
+      <div className="text-[9px] uppercase tracking-wider text-slate-500">Source</div>
+      <button
+        onClick={() => onSelect('JET', 0)}
+        className={`flex items-center justify-between gap-3 px-2 py-1 rounded text-[11px] font-mono tabular-nums transition border ${
+          dataset === 'JET'
+            ? 'border-cyan-400/50 bg-cyan-500/15 text-cyan-100 shadow-[0_0_8px_rgba(34,211,238,0.2)]'
+            : 'border-transparent text-slate-400 hover:bg-slate-800/40 hover:text-slate-200'
+        }`}
+        title="Jet stream pré-isolé (single-level)"
+      >
+        <span>JET</span>
+        <span className="text-[9px] text-slate-500">jet stream</span>
+      </button>
+
+      <div className="h-px bg-slate-800/60" />
+
+      <div className="flex items-baseline justify-between text-[10px]">
+        <span className="text-slate-500 uppercase tracking-wider">Niveau</span>
+        {dataset === 'WIND' && (
+          <span className="font-mono tabular-nums text-cyan-200">
+            FL{cur.fl.toString().padStart(3, '0')} ·{' '}
+            <span className="text-slate-400">{(cur.pa / 100).toFixed(0)} hPa</span>
+          </span>
+        )}
       </div>
-      <div className="flex flex-col gap-0.5">
-        <button
-          onClick={() => onSelect('JET', 0)}
-          className={`flex items-center justify-between gap-3 px-2 py-1 rounded text-[11px] font-mono tabular-nums transition border ${
-            dataset === 'JET'
-              ? 'border-cyan-400/50 bg-cyan-500/15 text-cyan-100 shadow-[0_0_8px_rgba(34,211,238,0.2)]'
-              : 'border-transparent text-slate-400 hover:bg-slate-800/40 hover:text-slate-200'
-          }`}
-          title="Jet stream pré-isolé (single-level)"
-        >
-          <span>JET</span>
-          <span className="text-[9px] text-slate-500">jet stream</span>
-        </button>
-        <div className="h-px bg-slate-800/60 my-0.5" />
-        {WIND_LEVELS.map((l) => {
-          const active = dataset === 'WIND' && l.pa === value
+
+      <input
+        type="range"
+        min={0}
+        max={N - 1}
+        value={dataset === 'WIND' ? sliderIdx : 0}
+        onChange={(e) => {
+          const idx = N - 1 - Number(e.target.value)
+          onSelect('WIND', WIND_PRESSURE_LEVELS[idx].pa)
+        }}
+        className="accent-cyan-400 h-1"
+      />
+      <div className="flex justify-between text-[9px] text-slate-600 font-mono tabular-nums px-0.5">
+        <span>sol</span>
+        <span>{Math.round(N / 2)}/29</span>
+        <span>FL1020</span>
+      </div>
+
+      <div className="text-[9px] uppercase tracking-wider text-slate-500 mt-1">
+        Raccourcis
+      </div>
+      <div className="grid grid-cols-4 gap-1">
+        {WIND_QUICK_PRESETS.map((p) => {
+          const active = dataset === 'WIND' && p.pa === value
           return (
             <button
-              key={l.pa}
-              onClick={() => onSelect('WIND', l.pa)}
-              className={`flex items-center justify-between gap-3 px-2 py-1 rounded text-[11px] font-mono tabular-nums transition border ${
+              key={p.pa}
+              onClick={() => onSelect('WIND', p.pa)}
+              className={`px-1 py-0.5 rounded text-[10px] font-mono tabular-nums transition border ${
                 active
-                  ? 'border-cyan-400/50 bg-cyan-500/15 text-cyan-100 shadow-[0_0_8px_rgba(34,211,238,0.2)]'
+                  ? 'border-cyan-400/50 bg-cyan-500/15 text-cyan-100'
                   : 'border-transparent text-slate-400 hover:bg-slate-800/40 hover:text-slate-200'
               }`}
             >
-              <span>{l.fl}</span>
-              <span className="text-[9px] text-slate-500">{l.hpa}</span>
+              {p.label}
             </button>
           )
         })}
