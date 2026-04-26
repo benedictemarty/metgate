@@ -595,6 +595,98 @@ func isInValidity(waypointTime, start, end string) bool {
 	return true
 }
 
+// AircraftProjectedPlan construit un plan de vol synthétique pour un avion
+// suivi : départ = position courante, arrivée = projection grand cercle au
+// cap actuel sur durMin minutes (par défaut 60), ou destination ICAO si
+// fournie. Le FL et le GS sont ceux de l'avion réel (pas de profil
+// trapézoïdal — l'avion est en vol, on garde son altitude actuelle).
+func (s *Service) AircraftProjectedPlan(
+	ctx context.Context,
+	depICAO string, // pseudo-label, ex "AFR1234"
+	depLat, depLon float64,
+	currentFL int,
+	gsKt float64,
+	trackDeg float64,
+	depTime time.Time,
+	durMin int,
+	destICAO string,
+) (*RoutePlan, error) {
+	if depTime.IsZero() {
+		depTime = time.Now().UTC()
+	}
+	if gsKt <= 0 {
+		gsKt = 450
+	}
+	if currentFL <= 0 {
+		currentFL = 100
+	}
+	if durMin <= 0 {
+		durMin = 60
+	}
+
+	var arrLat, arrLon, dist float64
+	arrLabel := "PROJ"
+	if destICAO != "" {
+		idx, err := s.ICAOIndex(ctx)
+		if err != nil {
+			return nil, err
+		}
+		ap, ok := idx[strings.ToUpper(strings.TrimSpace(destICAO))]
+		if !ok {
+			return nil, fmt.Errorf("dest %s introuvable", destICAO)
+		}
+		arrLon, arrLat = ap[0], ap[1]
+		arrLabel = strings.ToUpper(destICAO)
+		dist = gcDistance(depLat, depLon, arrLat, arrLon)
+	} else {
+		dist = gsKt * float64(durMin) / 60
+		arrLat, arrLon = projectAtBearing(depLat, depLon, trackDeg, dist)
+	}
+	durEffMin := dist / gsKt * 60
+	const nWaypoints = 60
+
+	wps := make([]RouteWaypoint, nWaypoints)
+	for i := 0; i < nWaypoints; i++ {
+		f := float64(i) / float64(nWaypoints-1)
+		la, lo := gcInterpolate(depLat, depLon, arrLat, arrLon, f)
+		ts := depTime.Add(time.Duration(f * durEffMin * float64(time.Minute))).UTC()
+		wps[i] = RouteWaypoint{
+			Lon:     lo,
+			Lat:     la,
+			FL:      currentFL,
+			TimeISO: ts.Format("2006-01-02T15:04:05Z"),
+			DistNM:  f * dist,
+		}
+	}
+
+	return &RoutePlan{
+		Dep:       Aerodrome{ICAO: depICAO, Lon: depLon, Lat: depLat},
+		Arr:       Aerodrome{ICAO: arrLabel, Lon: arrLon, Lat: arrLat},
+		FL:        currentFL,
+		GSkt:      gsKt,
+		DepTime:   wps[0].TimeISO,
+		ArrTime:   wps[nWaypoints-1].TimeISO,
+		DistNM:    dist,
+		DurMin:    durEffMin,
+		Waypoints: wps,
+	}, nil
+}
+
+// projectAtBearing projette un point à dist NM dans la direction bearing
+// (degrés vrais) depuis (lat, lon). Formule sphérique standard.
+func projectAtBearing(lat, lon, bearingDeg, distNM float64) (float64, float64) {
+	br := bearingDeg * math.Pi / 180
+	d := distNM / earthRadiusNM // angular distance
+	la1 := lat * math.Pi / 180
+	lo1 := lon * math.Pi / 180
+	la2 := math.Asin(math.Sin(la1)*math.Cos(d) + math.Cos(la1)*math.Sin(d)*math.Cos(br))
+	lo2 := lo1 + math.Atan2(
+		math.Sin(br)*math.Sin(d)*math.Cos(la1),
+		math.Cos(d)-math.Sin(la1)*math.Sin(la2),
+	)
+	return la2 * 180 / math.Pi, lo2 * 180 / math.Pi
+}
+
 // gcDistance retourne la distance grand cercle (NM) entre deux points en deg.
 func gcDistance(lat1, lon1, lat2, lon2 float64) float64 {
 	p1 := lat1 * math.Pi / 180

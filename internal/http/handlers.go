@@ -36,6 +36,7 @@ func (a *API) Routes() *http.ServeMux {
 	m.HandleFunc("GET /api/route", a.handleRoute)
 	m.HandleFunc("GET /api/aircraft/search", a.handleAircraftSearch)
 	m.HandleFunc("GET /api/aircraft/{icao24}", a.handleAircraftState)
+	m.HandleFunc("GET /api/aircraft/{icao24}/route", a.handleAircraftRoute)
 	m.Handle("GET /", web.Handler())
 	return m
 }
@@ -181,6 +182,87 @@ func (a *API) handleAircraftState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, states[0])
+}
+
+// handleAircraftRoute : /api/aircraft/{icao24}/route?dur=60&dest=ICAO&events=1&wind=1
+// Construit un plan de vol synthétique à partir de la position et du cap
+// courants de l'avion, et déclenche le pipeline events / wind comme pour
+// un plan de vol manuel.
+func (a *API) handleAircraftRoute(w http.ResponseWriter, r *http.Request) {
+	icao := strings.TrimSpace(r.PathValue("icao24"))
+	if icao == "" {
+		http.Error(w, "icao24 requis", http.StatusBadRequest)
+		return
+	}
+	states, err := a.aircraft.QueryStates(r.Context(), nil, icao, "")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if len(states) == 0 {
+		http.Error(w, "aucun état pour "+icao, http.StatusNotFound)
+		return
+	}
+	st := states[0]
+
+	q := r.URL.Query()
+	dur := 60
+	if v := q.Get("dur"); v != "" {
+		fmt.Sscanf(v, "%d", &dur)
+	}
+	dest := strings.ToUpper(strings.TrimSpace(q.Get("dest")))
+	autoDest := ""
+	if dest == "" && q.Get("auto_dest") != "0" {
+		// Tentative d'auto-détection via OpenSky /api/flights/aircraft sur
+		// les 24 dernières heures. Nécessite l'auth ; en anonymous le call
+		// est généralement refusé — on tombe alors silencieusement sur la
+		// projection au cap.
+		end := time.Now().UTC()
+		begin := end.Add(-24 * time.Hour)
+		segs, err := a.aircraft.FlightsByAircraft(r.Context(), icao, begin, end)
+		if err == nil && len(segs) > 0 {
+			// On prend le segment le plus récent qui a un estArrivalAirport
+			for i := len(segs) - 1; i >= 0; i-- {
+				if segs[i].EstArrivalAirport != "" {
+					autoDest = segs[i].EstArrivalAirport
+					dest = autoDest
+					break
+				}
+			}
+		}
+	}
+
+	depTime := time.Unix(st.TimePosition, 0).UTC()
+	if st.TimePosition == 0 {
+		depTime = time.Now().UTC()
+	}
+	depLabel := st.Callsign
+	if depLabel == "" {
+		depLabel = strings.ToUpper(icao)
+	}
+
+	plan, err := a.catalog.AircraftProjectedPlan(
+		r.Context(),
+		depLabel, st.Lat, st.Lon, st.FL, st.GsKt, st.TrueTrack,
+		depTime, dur, dest,
+	)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if q.Get("events") == "1" || q.Get("events") == "true" {
+		ev, err := a.catalog.RouteEvents(r.Context(), plan, 50)
+		if err == nil {
+			plan.Events = ev
+		}
+	}
+	if q.Get("wind") == "1" || q.Get("wind") == "true" {
+		wp, err := a.catalog.RouteWindProfile(r.Context(), plan)
+		if err == nil {
+			plan.WindProfile = wp
+		}
+	}
+	writeJSON(w, http.StatusOK, plan)
 }
 
 // handleQvacis : /api/qvacis?dataset=DETERMINISTIC|PROBABILISTIC&fl=325&bbox=...

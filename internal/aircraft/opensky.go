@@ -63,6 +63,92 @@ func (c *Client) Authenticated() bool {
 	return c.user != ""
 }
 
+// FlightSegment est un segment de vol vu par OpenSky : les estimations
+// d'aéroports de départ et d'arrivée pour un icao24 sur une fenêtre temporelle.
+type FlightSegment struct {
+	ICAO24                          string `json:"icao24"`
+	FirstSeen                       int64  `json:"first_seen"`
+	LastSeen                        int64  `json:"last_seen"`
+	Callsign                        string `json:"callsign"`
+	EstDepartureAirport             string `json:"est_departure_airport"`
+	EstArrivalAirport               string `json:"est_arrival_airport"`
+	DepartureAirportCandidatesCount int    `json:"departure_candidates"`
+	ArrivalAirportCandidatesCount   int    `json:"arrival_candidates"`
+}
+
+// FlightsByAircraft interroge /api/flights/aircraft pour récupérer les
+// segments de vol d'un icao24 dans la fenêtre [begin, end] (Unix s).
+// Endpoint authenticated only en pratique (anonymous = limité ou refusé).
+// Retourne un tableau (peut être vide).
+func (c *Client) FlightsByAircraft(
+	ctx context.Context,
+	icao24 string, begin, end time.Time,
+) ([]FlightSegment, error) {
+	if icao24 == "" {
+		return nil, fmt.Errorf("icao24 vide")
+	}
+	u := fmt.Sprintf(
+		"%s/api/flights/aircraft?icao24=%s&begin=%d&end=%d",
+		c.baseURL, strings.ToLower(strings.TrimSpace(icao24)),
+		begin.Unix(), end.Unix(),
+	)
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return nil, err
+	}
+	if c.user != "" {
+		req.SetBasicAuth(c.user, c.pass)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		max := 200
+		if len(body) < max {
+			max = len(body)
+		}
+		return nil, fmt.Errorf("opensky flights %d: %s", resp.StatusCode, body[:max])
+	}
+	// Format brut OpenSky : {icao24, firstSeen, estDepartureAirport, ...}
+	var raw []struct {
+		ICAO24                          string `json:"icao24"`
+		FirstSeen                       int64  `json:"firstSeen"`
+		LastSeen                        int64  `json:"lastSeen"`
+		Callsign                        string `json:"callsign"`
+		EstDepartureAirport             any    `json:"estDepartureAirport"`
+		EstArrivalAirport               any    `json:"estArrivalAirport"`
+		DepartureAirportCandidatesCount int    `json:"departureAirportCandidatesCount"`
+		ArrivalAirportCandidatesCount   int    `json:"arrivalAirportCandidatesCount"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("opensky flights decode: %w", err)
+	}
+	out := make([]FlightSegment, 0, len(raw))
+	for _, f := range raw {
+		out = append(out, FlightSegment{
+			ICAO24:                          f.ICAO24,
+			FirstSeen:                       f.FirstSeen,
+			LastSeen:                        f.LastSeen,
+			Callsign:                        strings.TrimSpace(f.Callsign),
+			EstDepartureAirport:             optStr(f.EstDepartureAirport),
+			EstArrivalAirport:               optStr(f.EstArrivalAirport),
+			DepartureAirportCandidatesCount: f.DepartureAirportCandidatesCount,
+			ArrivalAirportCandidatesCount:   f.ArrivalAirportCandidatesCount,
+		})
+	}
+	return out, nil
+}
+
+func optStr(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
 // QueryStates effectue un GET /api/states/all. bbox et icao24 sont optionnels.
 // Le filtre callsign est appliqué côté Go (l'API OpenSky ne le gère pas en
 // paramètre). On cherche par sous-chaîne case-insensitive.

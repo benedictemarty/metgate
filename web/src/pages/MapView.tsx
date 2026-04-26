@@ -279,7 +279,10 @@ export default function MapView({ data }: MapViewProps) {
 
   // Plan de vol : si défini, prend la priorité sur le master slider WCS et
   // pilote l'instant via l'index du curseur (waypoint courant).
-  const [routePlan, setRoutePlan] = useState<RoutePlan | null>(null)
+  const [manualPlan, setManualPlan] = useState<RoutePlan | null>(null)
+  const [livePlan, setLivePlan] = useState<RoutePlan | null>(null)
+  const routePlan = livePlan ?? manualPlan
+  const isLivePlan = livePlan !== null
   const [routeCursor, setRouteCursor] = useState(0)
   const [routePlaying, setRoutePlaying] = useState(false)
   const [trackedAircraft, setTrackedAircraft] = useState<AircraftState | null>(null)
@@ -642,7 +645,9 @@ export default function MapView({ data }: MapViewProps) {
 
         <FlightPlan
           plan={routePlan}
-          onPlan={setRoutePlan}
+          // En mode live (avion suivi), on n'autorise pas le user à effacer
+          // ni changer le plan — il est piloté par AircraftTracker.
+          onPlan={isLivePlan ? () => {} : setManualPlan}
           cursorIdx={routePlan ? routeCursor : -1}
           playing={routePlaying}
           onTogglePlay={() => setRoutePlaying((p) => !p)}
@@ -655,6 +660,7 @@ export default function MapView({ data }: MapViewProps) {
         <AircraftTracker
           selected={trackedAircraft}
           onSelect={setTrackedAircraft}
+          onLivePlan={setLivePlan}
         />
 
         {popup && (

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useMap, Marker } from 'react-map-gl/maplibre'
 import { Plane, Radio, X, Search } from 'lucide-react'
+import type { RoutePlan } from './FlightPlan'
 
 export interface AircraftState {
   icao24: string
@@ -35,9 +36,14 @@ const POLL_INTERVAL_MS = 15000
 interface AircraftTrackerProps {
   selected: AircraftState | null
   onSelect: (s: AircraftState | null) => void
+  onLivePlan: (plan: RoutePlan | null) => void
 }
 
-export default function AircraftTracker({ selected, onSelect }: AircraftTrackerProps) {
+export default function AircraftTracker({
+  selected,
+  onSelect,
+  onLivePlan,
+}: AircraftTrackerProps) {
   const { current: mapRef } = useMap()
   const map = mapRef?.getMap()
 
@@ -46,6 +52,8 @@ export default function AircraftTracker({ selected, onSelect }: AircraftTrackerP
   const [searching, setSearching] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [authenticated, setAuthenticated] = useState(false)
+  const [destOverride, setDestOverride] = useState('')
+  const [planLoading, setPlanLoading] = useState(false)
 
   // Recherche
   const search = async (q: string) => {
@@ -95,6 +103,35 @@ export default function AircraftTracker({ selected, onSelect }: AircraftTrackerP
       zoom: Math.max(map.getZoom(), 5),
     })
   }, [selected?.icao24, map])
+
+  // Génère le plan synthétique pour l'avion suivi (projection +60 min ou
+  // jusqu'à la dest auto/manuelle), avec events et profil vent. Branche
+  // tout le pipeline produits/triangles/wind/WCS sur l'avion réel.
+  const buildLivePlan = async () => {
+    if (!selected) return
+    setPlanLoading(true)
+    try {
+      const params = new URLSearchParams({ dur: '60', events: '1', wind: '1' })
+      if (destOverride.trim()) params.set('dest', destOverride.trim().toUpperCase())
+      const r = await fetch(`/api/aircraft/${selected.icao24}/route?${params}`)
+      if (!r.ok) return
+      const p: RoutePlan = await r.json()
+      onLivePlan(p)
+    } finally {
+      setPlanLoading(false)
+    }
+  }
+
+  // Auto-build du plan synthétique au moment de la sélection / changement de
+  // destination override / repolling de l'avion.
+  useEffect(() => {
+    if (!selected) {
+      onLivePlan(null)
+      return
+    }
+    buildLivePlan()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.icao24, destOverride])
 
   return (
     <>
@@ -232,6 +269,28 @@ export default function AircraftTracker({ selected, onSelect }: AircraftTrackerP
             </dl>
             <div className="mt-1 text-[9px] text-slate-500">
               màj {selected.time_iso?.replace('T', ' ').replace('Z', ' UTC')}
+            </div>
+            <div className="mt-2 pt-2 border-t border-slate-800/60 flex items-center gap-1">
+              <input
+                value={destOverride}
+                onChange={(e) => setDestOverride(e.target.value.toUpperCase())}
+                onKeyDown={(e) => e.key === 'Enter' && buildLivePlan()}
+                placeholder="Dest ICAO (auto si vide)"
+                maxLength={4}
+                className="flex-1 px-2 py-1 rounded bg-slate-900/60 border border-slate-800 text-slate-200 font-mono text-[10px] focus:outline-none focus:border-rose-500/50"
+              />
+              <button
+                onClick={buildLivePlan}
+                disabled={planLoading}
+                className="px-2 py-1 rounded bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/40 text-rose-100 text-[10px] disabled:opacity-40"
+                title="Régénérer le plan synthétique"
+              >
+                {planLoading ? '…' : '↻'}
+              </button>
+            </div>
+            <div className="mt-1 text-[9px] text-slate-500 leading-snug">
+              Plan synthétique : projection +60 min au cap, ou grand cercle vers
+              dest si renseignée. Les produits / WCS s'allument autour de l'avion.
             </div>
           </div>
         )}
