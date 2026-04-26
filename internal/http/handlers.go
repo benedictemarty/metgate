@@ -94,7 +94,8 @@ func (a *API) handleWind(w http.ResponseWriter, r *http.Request) {
 	if v := r.URL.Query().Get("level"); v != "" {
 		fmt.Sscanf(v, "%f", &level)
 	}
-	grid, err := a.catalog.WindGrid(r.Context(), level, bbox)
+	allSteps := r.URL.Query().Get("allSteps") == "1" || r.URL.Query().Get("allSteps") == "true"
+	grid, err := a.catalog.WindGrid(r.Context(), level, bbox, allSteps)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return

@@ -1,16 +1,22 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMap } from 'react-map-gl/maplibre'
+import { Pause, Play } from 'lucide-react'
+
+interface WindStep {
+  time: string
+  speed_max_ms: number
+  u: number[]
+  v: number[]
+}
 
 interface WindGrid {
   coverage_id: string
-  time: string
   level_pa: number
   bbox: [number, number, number, number] // lonMin,latMin,lonMax,latMax
   width: number
   height: number
-  speed_max_ms: number
-  u: number[]
-  v: number[]
+  steps: WindStep[]
+  current_idx: number
 }
 
 interface Particle {
@@ -35,6 +41,8 @@ export default function WindLayer({ enabled, level = 85000 }: WindLayerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const particlesRef = useRef<Particle[]>([])
   const [grid, setGrid] = useState<WindGrid | null>(null)
+  const [stepIdx, setStepIdx] = useState(0)
+  const [playing, setPlaying] = useState(false)
   const [info, setInfo] = useState<{ status: 'idle' | 'loading' | 'error'; msg?: string }>({
     status: 'idle',
   })
@@ -53,7 +61,7 @@ export default function WindLayer({ enabled, level = 85000 }: WindLayerProps) {
       const lonMax = Math.min(180, b.getEast())
       const latMin = Math.max(-90, b.getSouth())
       const latMax = Math.min(90, b.getNorth())
-      const url = `/api/wind?bbox=${lonMin.toFixed(2)},${latMin.toFixed(2)},${lonMax.toFixed(2)},${latMax.toFixed(2)}&level=${level}`
+      const url = `/api/wind?bbox=${lonMin.toFixed(2)},${latMin.toFixed(2)},${lonMax.toFixed(2)},${latMax.toFixed(2)}&level=${level}&allSteps=1`
       setInfo({ status: 'loading' })
       fetch(url)
         .then((r) => {
@@ -63,6 +71,7 @@ export default function WindLayer({ enabled, level = 85000 }: WindLayerProps) {
         .then((g: WindGrid) => {
           if (aborted) return
           setGrid(g)
+          setStepIdx(g.current_idx ?? 0)
           // Reset particles to spread across the new grid.
           particlesRef.current = Array.from({ length: PARTICLE_COUNT }, () =>
             spawnParticle(g),
@@ -88,6 +97,28 @@ export default function WindLayer({ enabled, level = 85000 }: WindLayerProps) {
     }
   }, [enabled, map, level])
 
+  const currentStep: WindStep | null = useMemo(() => {
+    if (!grid || !grid.steps?.length) return null
+    return grid.steps[Math.max(0, Math.min(grid.steps.length - 1, stepIdx))]
+  }, [grid, stepIdx])
+
+  // Une ref synchronisée vers le step courant — l'animation loop ne se
+  // restart pas à chaque changement de stepIdx, elle relit la ref à chaque
+  // frame, ce qui rend les transitions instantanées sans reset des particules.
+  const stepRef = useRef<WindStep | null>(null)
+  stepRef.current = currentStep
+  const gridRef = useRef<WindGrid | null>(null)
+  gridRef.current = grid
+
+  // Auto-play : avance d'un step toutes les 1.4 s.
+  useEffect(() => {
+    if (!playing || !grid?.steps?.length) return
+    const id = window.setInterval(() => {
+      setStepIdx((i) => (i + 1) % grid.steps.length)
+    }, 1400)
+    return () => window.clearInterval(id)
+  }, [playing, grid?.steps?.length])
+
   // Animation loop.
   useEffect(() => {
     if (!enabled || !grid || !map || !canvasRef.current) return
@@ -111,31 +142,35 @@ export default function WindLayer({ enabled, level = 85000 }: WindLayerProps) {
     let lastT = performance.now()
     let stopped = false
 
-    const step = () => {
+    const frame = () => {
       if (stopped) return
       const now = performance.now()
       const dt = Math.min(0.1, (now - lastT) / 1000)
       lastT = now
 
-      // Fade : on dessine un voile semi-transparent avec destination-out
-      // pour effacer les anciens traits sans assombrir le fond MapLibre.
       ctx.save()
       ctx.globalCompositeOperation = 'destination-out'
       ctx.fillStyle = `rgba(0,0,0,${FADE_ALPHA})`
       ctx.fillRect(0, 0, canvas.width, canvas.height)
       ctx.restore()
 
-      // Step + draw particles.
+      const g = gridRef.current
+      const step = stepRef.current
+      if (!g || !step) {
+        raf = requestAnimationFrame(frame)
+        return
+      }
+
       ctx.save()
       ctx.globalCompositeOperation = 'source-over'
       ctx.lineCap = 'round'
       ctx.lineWidth = 1.1
-      const speedMax = Math.max(5, grid.speed_max_ms)
+      const speedMax = Math.max(5, step.speed_max_ms)
 
       for (const p of particlesRef.current) {
-        const uv = sampleUV(grid, p.lon, p.lat)
+        const uv = sampleUV(g, step, p.lon, p.lat)
         if (!uv) {
-          Object.assign(p, spawnParticle(grid))
+          Object.assign(p, spawnParticle(g))
           continue
         }
         const cosLat = Math.cos((p.lat * Math.PI) / 180)
@@ -145,14 +180,13 @@ export default function WindLayer({ enabled, level = 85000 }: WindLayerProps) {
         const newLon = p.lon + dLon
         const newLat = p.lat + dLat
 
-        // Project both points to pixels.
         let prev: { x: number; y: number }
         let next: { x: number; y: number }
         try {
           prev = map.project([p.lon, p.lat])
           next = map.project([newLon, newLat])
         } catch {
-          Object.assign(p, spawnParticle(grid))
+          Object.assign(p, spawnParticle(g))
           continue
         }
 
@@ -167,19 +201,19 @@ export default function WindLayer({ enabled, level = 85000 }: WindLayerProps) {
         p.age += dt
         if (
           p.age > p.maxAge ||
-          newLon < grid.bbox[0] ||
-          newLon > grid.bbox[2] ||
-          newLat < grid.bbox[1] ||
-          newLat > grid.bbox[3]
+          newLon < g.bbox[0] ||
+          newLon > g.bbox[2] ||
+          newLat < g.bbox[1] ||
+          newLat > g.bbox[3]
         ) {
-          Object.assign(p, spawnParticle(grid))
+          Object.assign(p, spawnParticle(g))
         }
       }
       ctx.restore()
 
-      raf = requestAnimationFrame(step)
+      raf = requestAnimationFrame(frame)
     }
-    raf = requestAnimationFrame(step)
+    raf = requestAnimationFrame(frame)
 
     return () => {
       stopped = true
@@ -209,23 +243,58 @@ export default function WindLayer({ enabled, level = 85000 }: WindLayerProps) {
           vent: {info.msg}
         </div>
       )}
-      {grid && (
-        <div className="absolute bottom-24 right-4 z-10 px-3 py-2 rounded-lg bg-slate-950/85 backdrop-blur-md border border-slate-800/70 text-[10px] text-slate-300 shadow-2xl">
+      {grid && currentStep && (
+        <div className="absolute bottom-24 right-4 z-10 px-3 py-2 rounded-lg bg-slate-950/85 backdrop-blur-md border border-slate-800/70 text-[10px] text-slate-300 shadow-2xl flex flex-col gap-2 min-w-[260px]">
           <div className="flex items-center gap-2">
             <span className="text-slate-500">Vent</span>
             <span className="font-mono">{(level / 100).toFixed(0)} hPa</span>
             <span className="text-slate-600">·</span>
             <span className="font-mono">
-              max {(grid.speed_max_ms * 1.94384).toFixed(0)} kt
+              max {(currentStep.speed_max_ms * 1.94384).toFixed(0)} kt
             </span>
           </div>
-          <div className="text-[9px] text-slate-500 mt-0.5 font-mono">
-            {grid.coverage_id} · {grid.time}
+          <div className="text-[9px] text-slate-500 font-mono truncate">
+            {grid.coverage_id} · {fmtStepTime(currentStep.time)}
           </div>
+          {grid.steps.length > 1 && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setPlaying((p) => !p)}
+                className="size-6 rounded bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 flex items-center justify-center"
+                aria-label={playing ? 'Pause' : 'Play'}
+              >
+                {playing ? (
+                  <Pause className="size-3 text-cyan-200" />
+                ) : (
+                  <Play className="size-3 text-cyan-200 translate-x-[1px]" />
+                )}
+              </button>
+              <input
+                type="range"
+                min={0}
+                max={grid.steps.length - 1}
+                value={stepIdx}
+                onChange={(e) => {
+                  setPlaying(false)
+                  setStepIdx(Number(e.target.value))
+                }}
+                className="flex-1 accent-cyan-400 h-1"
+              />
+              <span className="font-mono tabular-nums text-[10px] w-10 text-right">
+                {stepIdx + 1}/{grid.steps.length}
+              </span>
+            </div>
+          )}
         </div>
       )}
     </>
   )
+}
+
+function fmtStepTime(iso: string): string {
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/)
+  if (!m) return iso
+  return `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]} UTC`
 }
 
 function spawnParticle(g: WindGrid): Particle {
@@ -239,6 +308,7 @@ function spawnParticle(g: WindGrid): Particle {
 
 function sampleUV(
   g: WindGrid,
+  step: WindStep,
   lon: number,
   lat: number,
 ): { u: number; v: number; speed: number } | null {
@@ -252,18 +322,17 @@ function sampleUV(
   if (x < 0 || x >= g.width - 1 || y < 0 || y >= g.height - 1) return null
   const tx = fx - x
   const ty = fy - y
-  // Bilinéaire sur u et v.
   const idx = (j: number, i: number) => j * g.width + i
   const u =
-    g.u[idx(y, x)] * (1 - tx) * (1 - ty) +
-    g.u[idx(y, x + 1)] * tx * (1 - ty) +
-    g.u[idx(y + 1, x)] * (1 - tx) * ty +
-    g.u[idx(y + 1, x + 1)] * tx * ty
+    step.u[idx(y, x)] * (1 - tx) * (1 - ty) +
+    step.u[idx(y, x + 1)] * tx * (1 - ty) +
+    step.u[idx(y + 1, x)] * (1 - tx) * ty +
+    step.u[idx(y + 1, x + 1)] * tx * ty
   const v =
-    g.v[idx(y, x)] * (1 - tx) * (1 - ty) +
-    g.v[idx(y, x + 1)] * tx * (1 - ty) +
-    g.v[idx(y + 1, x)] * (1 - tx) * ty +
-    g.v[idx(y + 1, x + 1)] * tx * ty
+    step.v[idx(y, x)] * (1 - tx) * (1 - ty) +
+    step.v[idx(y, x + 1)] * tx * (1 - ty) +
+    step.v[idx(y + 1, x)] * (1 - tx) * ty +
+    step.v[idx(y + 1, x + 1)] * tx * ty
   return { u, v, speed: Math.hypot(u, v) }
 }
 

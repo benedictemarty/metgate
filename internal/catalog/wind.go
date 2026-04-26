@@ -17,28 +17,51 @@ import (
 	"github.com/batchatco/go-native-netcdf/netcdf/api"
 )
 
-// WindGrid est la donnée vent extraite d'un GetCoverage WCS pour un timestep,
-// un niveau de pression, et une bbox donnés. U et V sont en m/s, row-major
-// avec latitude en lignes (varie lentement) et longitude en colonnes.
-type WindGrid struct {
-	CoverageID string     `json:"coverage_id"`
-	TimeISO    string     `json:"time"`     // YYYY-MM-DDTHH:MM:SSZ du timestep retenu
-	LevelPa    float64    `json:"level_pa"` // pression en Pa
-	Bbox       [4]float64 `json:"bbox"`     // [lonMin, latMin, lonMax, latMax]
-	Width      int        `json:"width"`    // nb longitudes
-	Height     int        `json:"height"`   // nb latitudes
-	SpeedMax   float64    `json:"speed_max_ms"`
-	U          []float32  `json:"u"` // size = width*height
-	V          []float32  `json:"v"`
+// WindStep est un timestep individuel d'un coverage WIND. U et V sont en m/s,
+// row-major (lat top→bottom, lon west→east), de taille width*height.
+type WindStep struct {
+	TimeISO  string    `json:"time"`         // YYYY-MM-DDTHH:MM:SSZ
+	SpeedMax float64   `json:"speed_max_ms"` // max horizontal m/s
+	U        []float32 `json:"u"`
+	V        []float32 `json:"v"`
 }
 
-// WindGrid récupère la dernière covering WIND, fait un GetCoverage subsetté
-// (niveau + bbox), décode le NetCDF, et renvoie la grille u,v au dernier
-// timestep disponible.
+// WindGrid est la donnée vent extraite d'un GetCoverage WCS pour un niveau
+// de pression et une bbox. La grille (width, height, bbox) est commune à
+// tous les timesteps. Selon le param allSteps :
+//   - false (default) : seul le step proche de now est renvoyé en haut
+//     niveau (TimeISO/SpeedMax/U/V), Steps reste nil.
+//   - true            : Steps contient tous les timesteps, et CurrentIdx
+//     pointe sur celui le plus proche de now.
+type WindGrid struct {
+	CoverageID string     `json:"coverage_id"`
+	LevelPa    float64    `json:"level_pa"`
+	Bbox       [4]float64 `json:"bbox"`
+	Width      int        `json:"width"`
+	Height     int        `json:"height"`
+
+	// Single-step (rétro-compat).
+	TimeISO  string    `json:"time,omitempty"`
+	SpeedMax float64   `json:"speed_max_ms,omitempty"`
+	U        []float32 `json:"u,omitempty"`
+	V        []float32 `json:"v,omitempty"`
+
+	// Multi-step.
+	Steps      []WindStep `json:"steps,omitempty"`
+	CurrentIdx int        `json:"current_idx,omitempty"`
+}
+
+// WindGrid récupère le dernier coverage WIND, fait un GetCoverage subsetté
+// (niveau + bbox), décode le NetCDF, et renvoie la grille u,v.
+//
+// Si allSteps==false : seul le pas le plus proche de now est renvoyé.
+// Si allSteps==true  : tous les pas du coverage sont renvoyés, plus
+// l'index du pas le plus proche de now (CurrentIdx).
 func (s *Service) WindGrid(
 	ctx context.Context,
 	levelPa float64,
 	bbox [4]float64,
+	allSteps bool,
 ) (*WindGrid, error) {
 	if levelPa <= 0 {
 		levelPa = 85000
@@ -67,7 +90,7 @@ func (s *Service) WindGrid(
 			coverageID, resp.Status, truncate(resp.Body, 200))
 	}
 
-	return decodeWindNetCDF(coverageID, levelPa, bbox, resp.Body)
+	return decodeWindNetCDF(coverageID, levelPa, bbox, resp.Body, allSteps)
 }
 
 // latestCoverageID lit les Capabilities WCS et retourne le CoverageId le
@@ -126,10 +149,16 @@ func trimSpaces(s string) string {
 	return string(out)
 }
 
-// decodeWindNetCDF parse un NetCDF-4 (HDF5) MetGate et extrait u/v au dernier
-// timestep. Les variables var33 et var34 contiennent respectivement le vent
-// zonal (u, m/s) et méridien (v, m/s) sur une grille [time][level][lat][lon].
-func decodeWindNetCDF(coverageID string, level float64, bbox [4]float64, body []byte) (*WindGrid, error) {
+// decodeWindNetCDF parse un NetCDF-4 (HDF5) MetGate et extrait u/v.
+// Les variables var33 et var34 contiennent respectivement le vent zonal
+// (u, m/s) et méridien (v, m/s) sur une grille [time][level][lat][lon].
+func decodeWindNetCDF(
+	coverageID string,
+	level float64,
+	bbox [4]float64,
+	body []byte,
+	allSteps bool,
+) (*WindGrid, error) {
 	// La lib batchatco/go-native-netcdf veut un fichier sur disque (pas un
 	// reader). On écrit le body dans un fichier temporaire.
 	tmp, err := os.CreateTemp("", "metgate-wind-*.nc")
@@ -180,73 +209,85 @@ func decodeWindNetCDF(coverageID string, level float64, bbox [4]float64, body []
 		return nil, fmt.Errorf("var34 unexpected type %T", vVar.Values)
 	}
 
-	// On choisit le timestep dont la prévision est la plus proche de
-	// l'heure courante : prendre len-1 (T+33h pour un coverage à 12 steps
-	// de 3h) ne représente pas le vent "maintenant" — c'est une prévision
-	// 33h en avance, à comparer à un METAR observé maintenant ça donne 60°
-	// d'écart en direction. Le timestep le plus utile pour visualiser le
-	// vent courant est celui le plus proche de now.
-	nowH := nowHoursSince1900()
-	tIdx := nearestTimeIndex(timeAxis, nowH)
-	if tIdx < 0 || tIdx >= len(uAll) || len(uAll[tIdx]) == 0 {
-		return nil, fmt.Errorf("var33 empty at t=%d", tIdx)
+	if len(uAll) == 0 || len(uAll[0]) == 0 {
+		return nil, fmt.Errorf("var33 empty grid")
 	}
-	uLat := uAll[tIdx][0]
-	vLat := vAll[tIdx][0]
-	height := len(uLat)
+	height := len(uAll[0][0])
 	if height == 0 {
 		return nil, fmt.Errorf("var33 zero rows")
 	}
-	width := len(uLat[0])
+	width := len(uAll[0][0][0])
 
-	// Aplatir en row-major. On veut : du nord au sud (lat décroissante en
-	// lignes, ce qui convient à un canvas top→bottom) et d'ouest à est
-	// (lon croissante en colonnes). On vérifie l'ordre des axes en lisant
-	// lats/lons et on inverse au besoin pour l'orientation canvas.
 	flipLat := len(lats) >= 2 && lats[0] < lats[len(lats)-1]
 	flipLon := len(lons) >= 2 && lons[0] > lons[len(lons)-1]
 
-	u := make([]float32, width*height)
-	v := make([]float32, width*height)
-	var maxSpeed float64
-	for j := 0; j < height; j++ {
-		jr := j
-		if flipLat {
-			jr = height - 1 - j
-		}
-		for i := 0; i < width; i++ {
-			ir := i
-			if flipLon {
-				ir = width - 1 - i
+	flatten := func(t int) (u, v []float32, maxSpeed float64) {
+		uLat := uAll[t][0]
+		vLat := vAll[t][0]
+		u = make([]float32, width*height)
+		v = make([]float32, width*height)
+		for j := 0; j < height; j++ {
+			jr := j
+			if flipLat {
+				jr = height - 1 - j
 			}
-			uv := uLat[jr][ir]
-			vv := vLat[jr][ir]
-			u[j*width+i] = uv
-			v[j*width+i] = vv
-			s := math.Hypot(float64(uv), float64(vv))
-			if s > maxSpeed {
-				maxSpeed = s
+			for i := 0; i < width; i++ {
+				ir := i
+				if flipLon {
+					ir = width - 1 - i
+				}
+				uv := uLat[jr][ir]
+				vv := vLat[jr][ir]
+				u[j*width+i] = uv
+				v[j*width+i] = vv
+				s := math.Hypot(float64(uv), float64(vv))
+				if s > maxSpeed {
+					maxSpeed = s
+				}
 			}
 		}
+		return u, v, maxSpeed
 	}
 
-	// Conversion timestep en ISO.
-	timeISO := ""
-	if tIdx < len(timeAxis) {
-		timeISO = hoursSince1900ToISO(timeAxis[tIdx])
+	currentIdx := nearestTimeIndex(timeAxis, nowHoursSince1900())
+	if currentIdx < 0 {
+		currentIdx = 0
 	}
 
-	return &WindGrid{
+	out := &WindGrid{
 		CoverageID: coverageID,
-		TimeISO:    timeISO,
 		LevelPa:    level,
 		Bbox:       bbox,
 		Width:      width,
 		Height:     height,
-		SpeedMax:   maxSpeed,
-		U:          u,
-		V:          v,
-	}, nil
+	}
+
+	if !allSteps {
+		u, v, maxSpeed := flatten(currentIdx)
+		out.TimeISO = hoursSince1900ToISO(timeAxis[currentIdx])
+		out.SpeedMax = maxSpeed
+		out.U = u
+		out.V = v
+		return out, nil
+	}
+
+	steps := make([]WindStep, 0, len(uAll))
+	for t := 0; t < len(uAll); t++ {
+		u, v, maxSpeed := flatten(t)
+		ts := ""
+		if t < len(timeAxis) {
+			ts = hoursSince1900ToISO(timeAxis[t])
+		}
+		steps = append(steps, WindStep{
+			TimeISO:  ts,
+			SpeedMax: maxSpeed,
+			U:        u,
+			V:        v,
+		})
+	}
+	out.Steps = steps
+	out.CurrentIdx = currentIdx
+	return out, nil
 }
 
 func readFloat64Var(nc api.Group, name string) ([]float64, error) {
