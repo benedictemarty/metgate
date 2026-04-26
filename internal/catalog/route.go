@@ -275,10 +275,12 @@ func (s *Service) RouteEvents(
 			if !ok {
 				continue
 			}
-			// Pour les polygones avec une fenêtre de validité, on ne garde que
-			// si le waypoint qui les croise tombe DANS cette fenêtre — sinon
-			// on remonte des CAT/GIVRAGE valides à d'autres heures.
-			if geomKind == "Polygon" && ev.ValidityStart != "" && !ev.WaypointInRange {
+			// Filtrage temporel : si la feature a une fenêtre de validité
+			// connue (METAR : obs+90 min, TAF : begin/end, polygones :
+			// validitystart/end), on n'affiche que si le moment de passage
+			// du waypoint est dans cette fenêtre. Un METAR de 8h est inutile
+			// pour un avion qui passe à 14h.
+			if ev.ValidityStart != "" && !ev.WaypointInRange {
 				continue
 			}
 			mu.Lock()
@@ -334,8 +336,7 @@ func matchFeature(
 	if fir, ok := f.Properties["issuingAirTrafficServicesRegion"].(string); ok {
 		ev.FIR = strings.TrimSpace(fir)
 	}
-	ev.ValidityStart, _ = f.Properties["validitystarttime"].(string)
-	ev.ValidityEnd, _ = f.Properties["validityendtime"].(string)
+	ev.ValidityStart, ev.ValidityEnd = effectiveValidityWindow(f.Properties, family)
 
 	switch f.Geometry.Type {
 	case "Point":
@@ -404,6 +405,77 @@ func matchFeature(
 	return ev, false
 }
 
+// effectiveValidityWindow retourne la fenêtre temporelle pendant laquelle un
+// produit a une valeur opérationnelle. On mappe chaque famille à une convention
+// OACI/WMO :
+//   - METAR / SPECI / LocalReport : observation à H, valable ~90 min
+//     (au-delà, l'obs est obsolète).
+//   - TAF : begin_position → end_position si publiés, sinon
+//     issueTime → +24h (convention TAF FC court terme).
+//   - SIGMET / AIRMET / VolcanicAshSIGMET / TropicalCycloneSIGMET :
+//     validitystarttime → validityendtime ; sinon issueTime → +6h.
+//   - CAT / GIVRAGE / RDT_MSG : validitystarttime → validityendtime.
+//   - VolcanicAshAdvisory / TropicalCycloneAdvisory / SpaceWeatherAdvisory :
+//     validity OACI ~6h après issueTime si pas de bornes explicites.
+//
+// Si aucune fenêtre n'est identifiable, retourne ("", "") et le filtrage
+// laisse passer (on n'a pas d'info pour juger).
+func effectiveValidityWindow(
+	props map[string]interface{},
+	family string,
+) (start, end string) {
+	// 1. Priorité aux bornes explicites validitystarttime/end (le plus fiable)
+	if s, ok := props["validitystarttime"].(string); ok && s != "" {
+		if e, ok2 := props["validityendtime"].(string); ok2 && e != "" {
+			return s, e
+		}
+	}
+	// 2. Sinon begin_position / end_position (TAF parfois)
+	if b, ok := props["begin_position"].(string); ok && b != "" {
+		if e, ok2 := props["end_position"].(string); ok2 && e != "" {
+			return b, e
+		}
+	}
+	// 3. Conventions OACI selon la famille
+	switch family {
+	case "METAR_last", "SPECI_last", "LocalReport_last":
+		if obs, ok := props["observationTime"].(string); ok && obs != "" {
+			return obs, addMinutesToISO(obs, 90)
+		}
+	case "TAF_last":
+		if iss, ok := props["issueTime"].(string); ok && iss != "" {
+			return iss, addMinutesToISO(iss, 24*60)
+		}
+	case "SIGMET_last", "VolcanicAshSIGMET_last", "TropicalCycloneSIGMET_last", "AIRMET_last":
+		if iss, ok := props["issueTime"].(string); ok && iss != "" {
+			return iss, addMinutesToISO(iss, 6*60)
+		}
+	case "VolcanicAshAdvisory_last", "TropicalCycloneAdvisory_last", "SpaceWeatherAdvisory_last":
+		if iss, ok := props["issueTime"].(string); ok && iss != "" {
+			return iss, addMinutesToISO(iss, 6*60)
+		}
+		// observationTime parfois utilisé pour ces advisories
+		if obs, ok := props["observationTime"].(string); ok && obs != "" {
+			return obs, addMinutesToISO(obs, 6*60)
+		}
+	}
+	return "", ""
+}
+
+// addMinutesToISO ajoute n minutes à un ISO string, retourne ISO. En cas de
+// parse error, retourne la chaîne d'origine.
+func addMinutesToISO(iso string, n int) string {
+	t, err := time.Parse(time.RFC3339, iso)
+	if err != nil {
+		// Tentative tolérante (sans nanosecondes / Z)
+		t, err = time.Parse("2006-01-02T15:04:05Z", iso)
+		if err != nil {
+			return iso
+		}
+	}
+	return t.Add(time.Duration(n) * time.Minute).UTC().Format("2006-01-02T15:04:05Z")
+}
+
 // ringCentroid : centroïde simple d'un ring polygonal (moyenne des sommets,
 // rapide et suffisamment fidèle pour positionner un pictogramme).
 func ringCentroid(ring [][]float64) (lon, lat float64) {
@@ -457,6 +529,7 @@ func compactProps(p map[string]interface{}) map[string]interface{} {
 		"intensity", "cattype", "altitude", "top", "bottom",
 		"producttype", "severity", "trackingid",
 		"begin_position", "end_position",
+		"observationTime", "issueTime",
 	} {
 		if v, ok := p[k]; ok && v != nil && v != "" {
 			out[k] = v
