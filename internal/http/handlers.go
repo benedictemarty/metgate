@@ -27,6 +27,7 @@ func (a *API) Routes() *http.ServeMux {
 	m.HandleFunc("GET /api/wcs", a.proxyTo("/broker_service/WCS"))
 	m.HandleFunc("GET /api/raw", a.proxyTo("/broker_service/RAW"))
 	m.HandleFunc("GET /api/feature", a.handleFeature)
+	m.HandleFunc("GET /api/wind", a.handleWind)
 	m.Handle("GET /", web.Handler())
 	return m
 }
@@ -74,6 +75,31 @@ func (a *API) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "service must be RAW, WFS or WCS", http.StatusBadRequest)
 	}
+}
+
+// handleWind récupère le coverage WIND le plus récent (subset niveau + bbox)
+// et renvoie la grille u/v décodée en JSON.
+// Usage: /api/wind?bbox=-15,35,30,65&level=85000
+func (a *API) handleWind(w http.ResponseWriter, r *http.Request) {
+	bboxStr := r.URL.Query().Get("bbox")
+	if bboxStr == "" {
+		bboxStr = "-15,35,30,65"
+	}
+	var bbox [4]float64
+	if _, err := fmt.Sscanf(bboxStr, "%f,%f,%f,%f", &bbox[0], &bbox[1], &bbox[2], &bbox[3]); err != nil {
+		http.Error(w, "bbox doit être lonMin,latMin,lonMax,latMax", http.StatusBadRequest)
+		return
+	}
+	level := 85000.0
+	if v := r.URL.Query().Get("level"); v != "" {
+		fmt.Sscanf(v, "%f", &level)
+	}
+	grid, err := a.catalog.WindGrid(r.Context(), level, bbox)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, http.StatusOK, grid)
 }
 
 // handleFeature relaie un WFS GetFeature de MetGate (GML) en GeoJSON.
