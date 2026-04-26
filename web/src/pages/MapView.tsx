@@ -312,13 +312,29 @@ export default function MapView({ data }: MapViewProps) {
   }, [active, typeNameOf])
 
   const toggle = (name: string) => {
+    let nowActive = false
     setActive((prev) => {
       const next = new Set(prev)
-      if (next.has(name)) next.delete(name)
-      else next.add(name)
+      if (next.has(name)) {
+        next.delete(name)
+        nowActive = false
+      } else {
+        next.add(name)
+        nowActive = true
+      }
       return next
     })
-    // Réactiver la possibilité de retenter après une erreur.
+    // Quand on désactive : on libère la donnée chargée pour que collectSlots
+    // / hasTrailableLayer ne voient plus cette couche. Un re-toggle frappera
+    // le cache backend (60 s, ~30 ms) sans frais réel.
+    if (!nowActive) {
+      setLoaded((prev) => {
+        if (!(name in prev)) return prev
+        const next = { ...prev }
+        delete next[name]
+        return next
+      })
+    }
     setErrors((prev) => {
       if (!(name in prev)) return prev
       const next = { ...prev }
