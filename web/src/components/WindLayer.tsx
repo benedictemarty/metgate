@@ -294,6 +294,14 @@ export default function WindLayer({
             <span className="font-mono">
               max {(currentStep.speed_max_ms * 1.94384).toFixed(0)} kt
             </span>
+            {linkedInstant && (
+              <span
+                className="ml-1 px-1 rounded bg-rose-500/20 text-rose-200 text-[8px] uppercase tracking-wider border border-rose-400/30"
+                title="Niveau et instant calés sur l'avion suivi / le plan de vol"
+              >
+                live
+              </span>
+            )}
           </div>
           <div className="text-[9px] text-slate-500 font-mono truncate">
             {grid.coverage_id} · {fmtStepTime(currentStep.time)}

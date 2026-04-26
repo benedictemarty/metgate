@@ -287,6 +287,23 @@ export default function MapView({ data }: MapViewProps) {
   const [routePlaying, setRoutePlaying] = useState(false)
   const [trackedAircraft, setTrackedAircraft] = useState<AircraftState | null>(null)
 
+  // Quand un avion est suivi et que la couche Vent est sur le dataset WIND
+  // multi-niveau, on aligne automatiquement le niveau de pression sur le FL
+  // courant de l'avion (snap au niveau MetGate le plus proche). Le user peut
+  // toujours override via le sélecteur ; le snap se redéclenchera au prochain
+  // changement de FL de l'avion (montée/descente).
+  useEffect(() => {
+    if (!trackedAircraft || trackedAircraft.fl <= 0) return
+    let best = WIND_PRESSURE_LEVELS[0]
+    for (const l of WIND_PRESSURE_LEVELS) {
+      if (Math.abs(l.fl - trackedAircraft.fl) < Math.abs(best.fl - trackedAircraft.fl)) {
+        best = l
+      }
+    }
+    setWindLevelPa(best.pa)
+    setWindDataset('WIND')
+  }, [trackedAircraft?.fl])
+
   useEffect(() => {
     if (!routePlan) {
       setRouteCursor(0)
