@@ -16,8 +16,10 @@ import {
   Pause,
   Play,
   Sparkles,
+  Wind as WindIcon,
   X,
 } from 'lucide-react'
+import WindLayer from '../components/WindLayer'
 import type { Aggregate, Family } from '../types'
 
 interface MapViewProps {
@@ -251,6 +253,7 @@ export default function MapView({ data }: MapViewProps) {
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null)
   const [playing, setPlaying] = useState(false)
   const [showTrails, setShowTrails] = useState(false)
+  const [windEnabled, setWindEnabled] = useState(false)
 
   const candidates: Family[] = useMemo(() => {
     if (!data) return []
@@ -508,6 +511,8 @@ export default function MapView({ data }: MapViewProps) {
           )
         })}
 
+        <WindLayer enabled={windEnabled} />
+
         {popup && (
           <Popup
             longitude={popup.lng}
@@ -539,6 +544,20 @@ export default function MapView({ data }: MapViewProps) {
         errors={errors}
         onToggleLayer={toggle}
       />
+
+      {/* Toggle vent flottant en haut à droite */}
+      <button
+        onClick={() => setWindEnabled((v) => !v)}
+        className={`absolute top-4 right-4 z-10 flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
+          windEnabled
+            ? 'border-cyan-400/50 bg-cyan-500/20 text-cyan-100 shadow-[0_0_15px_rgba(34,211,238,0.25)]'
+            : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
+        }`}
+        title="Particules de vent (WCS WIND 850 hPa)"
+      >
+        <WindIcon className="size-4" />
+        Vent
+      </button>
 
       {showTimeSlider && selectedSlot && (
         <TimeSlider
