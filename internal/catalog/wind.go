@@ -180,10 +180,16 @@ func decodeWindNetCDF(coverageID string, level float64, bbox [4]float64, body []
 		return nil, fmt.Errorf("var34 unexpected type %T", vVar.Values)
 	}
 
-	// Dernier timestep, premier (et seul après subset) niveau.
-	tIdx := len(uAll) - 1
-	if tIdx < 0 || len(uAll[tIdx]) == 0 {
-		return nil, fmt.Errorf("var33 empty")
+	// On choisit le timestep dont la prévision est la plus proche de
+	// l'heure courante : prendre len-1 (T+33h pour un coverage à 12 steps
+	// de 3h) ne représente pas le vent "maintenant" — c'est une prévision
+	// 33h en avance, à comparer à un METAR observé maintenant ça donne 60°
+	// d'écart en direction. Le timestep le plus utile pour visualiser le
+	// vent courant est celui le plus proche de now.
+	nowH := nowHoursSince1900()
+	tIdx := nearestTimeIndex(timeAxis, nowH)
+	if tIdx < 0 || tIdx >= len(uAll) || len(uAll[tIdx]) == 0 {
+		return nil, fmt.Errorf("var33 empty at t=%d", tIdx)
 	}
 	uLat := uAll[tIdx][0]
 	vLat := vAll[tIdx][0]
@@ -267,4 +273,29 @@ func hoursSince1900ToISO(h float64) string {
 	epoch := time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC)
 	t := epoch.Add(time.Duration(h * float64(time.Hour)))
 	return t.UTC().Format("2006-01-02T15:04:05Z")
+}
+
+// nowHoursSince1900 retourne l'heure UTC courante exprimée comme "heures depuis
+// 1900-01-01 00:00:00" (la convention employée par MetGate dans l'axe time).
+func nowHoursSince1900() float64 {
+	epoch := time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC)
+	return time.Since(epoch).Hours()
+}
+
+// nearestTimeIndex retourne l'index dans times le plus proche de target.
+// times est supposé non vide. En cas d'égalité, retourne le plus petit index.
+func nearestTimeIndex(times []float64, target float64) int {
+	if len(times) == 0 {
+		return -1
+	}
+	best := 0
+	bestDiff := math.Abs(times[0] - target)
+	for i := 1; i < len(times); i++ {
+		d := math.Abs(times[i] - target)
+		if d < bestDiff {
+			best = i
+			bestDiff = d
+		}
+	}
+	return best
 }
