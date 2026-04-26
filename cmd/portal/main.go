@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -29,9 +30,17 @@ func main() {
 		log.Fatal("METGATE_BASE_URL et METGATE_TOKEN doivent être définis (cf .env)")
 	}
 
+	cacheTTL := 60 * time.Second
+	if v := os.Getenv("METGATE_CACHE_TTL_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cacheTTL = time.Duration(n) * time.Second
+		}
+	}
+
 	mg := metgate.New(baseURL, token)
-	cat := catalog.New(mg)
+	cat := catalog.New(mg, cacheTTL)
 	api := httpapi.NewAPI(cat)
+	log.Printf("cache TTL: %s", cacheTTL)
 
 	srv := &http.Server{
 		Addr:              ":" + port,

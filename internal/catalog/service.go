@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/bmarty/metgate/internal/metgate"
 )
@@ -22,24 +23,43 @@ type RawProduct struct {
 }
 
 type Service struct {
-	mg *metgate.Client
+	mg    *metgate.Client
+	cache *responseCache
 }
 
-func New(mg *metgate.Client) *Service {
-	return &Service{mg: mg}
+// New construit le service avec un cache TTL pour les réponses MetGate.
+// ttl <= 0 désactive le cache.
+func New(mg *metgate.Client, ttl time.Duration) *Service {
+	return &Service{mg: mg, cache: newResponseCache(ttl)}
+}
+
+// fetchCached récupère une réponse via le cache, en repassant à mg.Get sur miss.
+func (s *Service) fetchCached(ctx context.Context, path string, query url.Values) (*metgate.Response, error) {
+	return s.cache.get(ctx, path, query, func(ctx context.Context) (*metgate.Response, error) {
+		return s.mg.Get(ctx, path, query)
+	})
+}
+
+// fetchCapabilities est l'équivalent caché de mg.GetCapabilities.
+func (s *Service) fetchCapabilities(ctx context.Context, service, version string) (*metgate.Response, error) {
+	q := url.Values{}
+	q.Set("service", service)
+	q.Set("version", version)
+	q.Set("request", "GetCapabilities")
+	return s.fetchCached(ctx, "/broker_service/catalog", q)
 }
 
 // RawProducts interroge MetGate (service=RAW) et parse le CSV en objets typés.
 func (s *Service) RawProducts(ctx context.Context) ([]RawProduct, error) {
-	body, status, err := s.mg.GetCapabilities(ctx, "RAW", "1.0.0")
+	resp, err := s.fetchCapabilities(ctx, "RAW", "1.0.0")
 	if err != nil {
 		return nil, err
 	}
-	if status != 200 {
-		return nil, fmt.Errorf("metgate RAW: status %d", status)
+	if resp.Status != 200 {
+		return nil, fmt.Errorf("metgate RAW: status %d", resp.Status)
 	}
 
-	r := csv.NewReader(strings.NewReader(string(body)))
+	r := csv.NewReader(strings.NewReader(string(resp.Body)))
 	rows, err := r.ReadAll()
 	if err != nil {
 		return nil, fmt.Errorf("csv parse: %w", err)
@@ -68,19 +88,23 @@ func (s *Service) RawProducts(ctx context.Context) ([]RawProduct, error) {
 
 // Capabilities renvoie la réponse brute de MetGate (utile pour WFS/WCS en XML).
 func (s *Service) Capabilities(ctx context.Context, service, version string) ([]byte, int, error) {
-	return s.mg.GetCapabilities(ctx, service, version)
+	resp, err := s.fetchCapabilities(ctx, service, version)
+	if err != nil {
+		return nil, 0, err
+	}
+	return resp.Body, resp.Status, nil
 }
 
-// Proxy effectue un GET brut sur MetGate (transmet content-type, status, body).
+// Proxy effectue un GET sur MetGate via le cache (content-type, status, body).
 // Utilisé par les routes /api/wfs et /api/wcs pour relayer GetFeature/GetCoverage.
 func (s *Service) Proxy(ctx context.Context, path string, query url.Values) (*metgate.Response, error) {
-	return s.mg.Get(ctx, path, query)
+	return s.fetchCached(ctx, path, query)
 }
 
-// FeatureGeoJSON tape WFS GetFeature en GML 3.2 puis convertit en GeoJSON.
-// typeName ex: "METAR_last", count limite le nombre de features (default côté
-// MetGate).
-func (s *Service) FeatureGeoJSON(ctx context.Context, typeName string, count int) ([]byte, error) {
+// FeatureGeoJSON tape WFS GetFeature en GML 3.2 (via cache) puis convertit
+// en GeoJSON. typeName ex: "METAR_last", count limite le nombre de features.
+// Renvoie le GeoJSON et indique si la réponse MetGate venait du cache.
+func (s *Service) FeatureGeoJSON(ctx context.Context, typeName string, count int) ([]byte, bool, error) {
 	q := url.Values{}
 	q.Set("service", "WFS")
 	q.Set("version", "2.0.0")
@@ -89,15 +113,19 @@ func (s *Service) FeatureGeoJSON(ctx context.Context, typeName string, count int
 	if count > 0 {
 		q.Set("count", strconv.Itoa(count))
 	}
-	resp, err := s.mg.Get(ctx, "/broker_service/WFS", q)
+	resp, err := s.fetchCached(ctx, "/broker_service/WFS", q)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if resp.Status != 200 {
-		return nil, fmt.Errorf("metgate WFS GetFeature %s: status %d (body=%q)",
+		return nil, false, fmt.Errorf("metgate WFS GetFeature %s: status %d (body=%q)",
 			typeName, resp.Status, truncate(resp.Body, 200))
 	}
-	return GMLToGeoJSON(resp.Body)
+	geo, err := GMLToGeoJSON(resp.Body)
+	if err != nil {
+		return nil, false, err
+	}
+	return geo, resp.FromCache, nil
 }
 
 func truncate(b []byte, n int) string {

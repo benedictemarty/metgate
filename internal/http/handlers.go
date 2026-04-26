@@ -88,14 +88,22 @@ func (a *API) handleFeature(w http.ResponseWriter, r *http.Request) {
 	if c := r.URL.Query().Get("count"); c != "" {
 		fmt.Sscanf(c, "%d", &count)
 	}
-	geo, err := a.catalog.FeatureGeoJSON(r.Context(), typeName, count)
+	geo, fromCache, err := a.catalog.FeatureGeoJSON(r.Context(), typeName, count)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 	w.Header().Set("Content-Type", "application/geo+json; charset=utf-8")
+	w.Header().Set("X-Cache", cacheHeader(fromCache))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(geo)
+}
+
+func cacheHeader(hit bool) string {
+	if hit {
+		return "HIT"
+	}
+	return "MISS"
 }
 
 func (a *API) handleProducts(w http.ResponseWriter, r *http.Request) {
@@ -109,7 +117,7 @@ func (a *API) handleProducts(w http.ResponseWriter, r *http.Request) {
 
 // proxyTo relaie GET ?... vers le path MetGate donné, en réinjectant les query
 // params reçus, et en restituant content-type/status/body. Le token Bearer
-// reste côté serveur.
+// reste côté serveur. Le cache est appliqué en amont par catalog.Proxy.
 func (a *API) proxyTo(metgatePath string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		resp, err := a.catalog.Proxy(r.Context(), metgatePath, r.URL.Query())
@@ -122,6 +130,7 @@ func (a *API) proxyTo(metgatePath string) http.HandlerFunc {
 			ct = "application/octet-stream"
 		}
 		w.Header().Set("Content-Type", ct)
+		w.Header().Set("X-Cache", cacheHeader(resp.FromCache))
 		w.WriteHeader(resp.Status)
 		_, _ = w.Write(resp.Body)
 	}

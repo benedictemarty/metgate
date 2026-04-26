@@ -70,7 +70,7 @@ func (s *Service) AggregateProducts(ctx context.Context) (*Aggregate, error) {
 
 	go func() {
 		defer wg.Done()
-		body, status, err := s.mg.GetCapabilities(ctx, "WFS", "2.0.0")
+		body, status, err := s.Capabilities(ctx, "WFS", "2.0.0")
 		if err != nil {
 			wfsErr = fmt.Errorf("wfs: %w", err)
 			return
@@ -84,7 +84,7 @@ func (s *Service) AggregateProducts(ctx context.Context) (*Aggregate, error) {
 
 	go func() {
 		defer wg.Done()
-		body, status, err := s.mg.GetCapabilities(ctx, "WCS", "2.0.1")
+		body, status, err := s.Capabilities(ctx, "WCS", "2.0.1")
 		if err != nil {
 			wcsE = fmt.Errorf("wcs: %w", err)
 			return

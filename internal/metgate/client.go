@@ -28,6 +28,7 @@ type Response struct {
 	Body        []byte
 	ContentType string
 	Status      int
+	FromCache   bool // renseigné par la couche cache, pas par le client HTTP
 }
 
 func (c *Client) get(ctx context.Context, path string, query url.Values) (*Response, error) {
