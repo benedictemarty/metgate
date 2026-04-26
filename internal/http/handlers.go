@@ -194,6 +194,12 @@ func (a *API) handleRoute(w http.ResponseWriter, r *http.Request) {
 			plan.Events = events
 		}
 	}
+	if q.Get("wind") == "1" || q.Get("wind") == "true" {
+		wp, err := a.catalog.RouteWindProfile(r.Context(), plan)
+		if err == nil {
+			plan.WindProfile = wp
+		}
+	}
 	writeJSON(w, http.StatusOK, plan)
 }
 

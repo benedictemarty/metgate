@@ -47,6 +47,23 @@ export interface RouteEvent {
   properties?: Record<string, unknown>
 }
 
+export interface WindAtWaypoint {
+  speed_kt: number
+  dir_from_deg: number
+  along_track_kt: number // > 0 = vent arrière (gain)
+  cross_track_kt: number // > 0 = venant de la droite
+}
+
+export interface WindProfile {
+  coverage_id: string
+  level_pa: number
+  waypoints: WindAtWaypoint[]
+  along_mean_kt: number
+  cross_mean_kt: number
+  delta_min: number // signé : positif = gain
+  gs_kt: number
+}
+
 export interface RoutePlan {
   dep: { icao: string; lon: number; lat: number }
   arr: { icao: string; lon: number; lat: number }
@@ -58,6 +75,7 @@ export interface RoutePlan {
   duration_min: number
   waypoints: Waypoint[]
   events?: RouteEvent[]
+  wind_profile?: WindProfile
 }
 
 interface FlightPlanProps {
@@ -93,7 +111,7 @@ export default function FlightPlan({
     setLoading(true)
     setError(null)
     try {
-      const url = `/api/route?dep=${encodeURIComponent(dep.toUpperCase())}&arr=${encodeURIComponent(arr.toUpperCase())}&fl=${fl}&gs=${gs}&events=1`
+      const url = `/api/route?dep=${encodeURIComponent(dep.toUpperCase())}&arr=${encodeURIComponent(arr.toUpperCase())}&fl=${fl}&gs=${gs}&events=1&wind=1`
       const r = await fetch(url)
       if (!r.ok) {
         const txt = await r.text()
@@ -321,6 +339,13 @@ export default function FlightPlan({
                 {cursorIdx + 1}/{plan.waypoints.length}
               </span>
             </div>
+
+            {plan.wind_profile && (
+              <WindProfilePanel
+                profile={plan.wind_profile}
+                cursorIdx={cursorIdx >= 0 ? cursorIdx : 0}
+              />
+            )}
 
             {plan.events && plan.events.length > 0 && (
               <EventsList
@@ -787,5 +812,139 @@ function CtrlBtn({
     >
       {children}
     </button>
+  )
+}
+
+// ============================================================================
+// Profil vent rencontré (Phase C)
+// ============================================================================
+
+function WindProfilePanel({
+  profile,
+  cursorIdx,
+}: {
+  profile: WindProfile
+  cursorIdx: number
+}) {
+  const cur = profile.waypoints[cursorIdx]
+  const meanLabel = profile.along_mean_kt >= 0
+    ? `+${profile.along_mean_kt.toFixed(0)} kt arrière`
+    : `${profile.along_mean_kt.toFixed(0)} kt contraire`
+  const meanColor = profile.along_mean_kt >= 0 ? 'text-emerald-300' : 'text-rose-300'
+  const dt = profile.delta_min
+  const dtLabel =
+    Math.abs(dt) < 0.5
+      ? '~ neutre'
+      : dt > 0
+        ? `gain ${dt.toFixed(1)} min`
+        : `perte ${Math.abs(dt).toFixed(1)} min`
+  const dtColor = dt > 0.5 ? 'text-emerald-300' : dt < -0.5 ? 'text-rose-300' : 'text-slate-400'
+
+  return (
+    <div className="mt-2 pt-2 border-t border-slate-800/60">
+      <div className="flex items-center justify-between text-[9px] uppercase tracking-wider text-slate-500 mb-1.5">
+        <span className="flex items-center gap-1">
+          <WindIcon className="size-3" />
+          Vent FL{(Math.round(profile.level_pa / 100)).toString()}hPa
+        </span>
+      </div>
+
+      {/* Moyenne sur le parcours */}
+      <div className="flex items-center justify-between text-[10px] font-mono">
+        <span className={meanColor}>{meanLabel}</span>
+        <span className={dtColor}>{dtLabel}</span>
+      </div>
+
+      {/* Sparkline along-track */}
+      <Sparkline values={profile.waypoints.map((w) => w.along_track_kt)} cursorIdx={cursorIdx} />
+
+      {/* Vent au waypoint courant */}
+      {cur && (
+        <div className="mt-1.5 grid grid-cols-2 gap-x-2 gap-y-0.5 text-[10px] font-mono">
+          <div className="flex justify-between col-span-2">
+            <span className="text-slate-500">@ avion</span>
+            <span className="text-slate-200">
+              {cur.speed_kt.toFixed(0)} kt @ {cur.dir_from_deg.toFixed(0)}°
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-500">Along</span>
+            <span
+              className={
+                cur.along_track_kt >= 0 ? 'text-emerald-300' : 'text-rose-300'
+              }
+            >
+              {cur.along_track_kt >= 0 ? '+' : ''}
+              {cur.along_track_kt.toFixed(0)} kt
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-500">Cross</span>
+            <span className="text-cyan-300">
+              {cur.cross_track_kt >= 0 ? '+' : ''}
+              {cur.cross_track_kt.toFixed(0)} kt
+              <span className="text-slate-500 ml-1">
+                {cur.cross_track_kt >= 0 ? '←R' : 'L→'}
+              </span>
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Sparkline minimaliste — montre l'évolution du long-track wind sur la route.
+// La position du curseur est marquée d'un trait vertical.
+function Sparkline({ values, cursorIdx }: { values: number[]; cursorIdx: number }) {
+  if (values.length === 0) return null
+  const w = 240
+  const h = 28
+  const min = Math.min(...values, -10)
+  const max = Math.max(...values, 10)
+  const range = Math.max(20, max - min)
+  const xStep = w / (values.length - 1)
+  const yOf = (v: number) => h - ((v - min) / range) * h
+  // Ligne zéro
+  const y0 = yOf(0)
+  // Path along-track
+  const d = values
+    .map((v, i) => `${i === 0 ? 'M' : 'L'}${(i * xStep).toFixed(1)},${yOf(v).toFixed(1)}`)
+    .join(' ')
+  // Aire positive (gain) et négative (perte)
+  const dArea = `M0,${y0} ${values
+    .map((v, i) => `L${(i * xStep).toFixed(1)},${yOf(v).toFixed(1)}`)
+    .join(' ')} L${((values.length - 1) * xStep).toFixed(1)},${y0} Z`
+  const cursorX = (cursorIdx * xStep).toFixed(1)
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-7 mt-1">
+      <defs>
+        <linearGradient id="sparkGrad" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0%" stopColor="rgb(110,231,183)" stopOpacity="0.35" />
+          <stop offset={`${(y0 / h) * 100}%`} stopColor="rgb(110,231,183)" stopOpacity="0" />
+          <stop offset={`${(y0 / h) * 100}%`} stopColor="rgb(244,114,128)" stopOpacity="0" />
+          <stop offset="100%" stopColor="rgb(244,114,128)" stopOpacity="0.35" />
+        </linearGradient>
+      </defs>
+      <path d={dArea} fill="url(#sparkGrad)" />
+      <line
+        x1="0"
+        x2={w}
+        y1={y0}
+        y2={y0}
+        stroke="rgba(148,163,184,0.4)"
+        strokeWidth="0.5"
+        strokeDasharray="2 2"
+      />
+      <path d={d} fill="none" stroke="rgba(165,243,252,0.85)" strokeWidth="1.2" />
+      <line
+        x1={cursorX}
+        x2={cursorX}
+        y1="0"
+        y2={h}
+        stroke="rgba(110,231,183,0.9)"
+        strokeWidth="1"
+      />
+    </svg>
   )
 }

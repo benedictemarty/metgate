@@ -38,8 +38,9 @@ type RoutePlan struct {
 	ArrTime   string          `json:"arr_time"`
 	DistNM    float64         `json:"distance_nm"`
 	DurMin    float64         `json:"duration_min"`
-	Waypoints []RouteWaypoint `json:"waypoints"`
-	Events    []RouteEvent    `json:"events,omitempty"`
+	Waypoints   []RouteWaypoint `json:"waypoints"`
+	Events      []RouteEvent    `json:"events,omitempty"`
+	WindProfile *WindProfile    `json:"wind_profile,omitempty"`
 }
 
 // RouteEvent est un événement météo rencontré le long de la route.
