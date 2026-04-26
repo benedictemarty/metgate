@@ -76,49 +76,70 @@ const styleFor = (familyName: string): LayerStyle => {
 const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'
 
 interface FetchedLayer {
-  rawData: GeoJSON.FeatureCollection // brut, contient toutes les forecasttime
-  data: GeoJSON.FeatureCollection // filtré selon le step temporel courant
+  rawData: GeoJSON.FeatureCollection // brut, contient tous les slots temporels
+  data: GeoJSON.FeatureCollection // filtré selon le slot courant
   count: number
   total: number
 }
 
-const FORECAST_STEPS = [0, 15, 30, 45, 60] as const
-type ForecastStep = (typeof FORECAST_STEPS)[number]
-
-function featureForecastTime(f: GeoJSON.Feature): number | null {
-  const ft = (f.properties as Record<string, unknown> | null)?.forecasttime
-  if (ft === undefined || ft === null || ft === '') return null
-  const n = typeof ft === 'string' ? parseFloat(ft) : (ft as number)
-  return Number.isFinite(n) ? n : null
+// MetGate publie pour beaucoup de produits prévisionnels (RDT_MSG, CAT,
+// GIVRAGE...) plusieurs features par cellule/zone, une par fenêtre de
+// validité (validitystarttime). On les sépare avec un slider temporel ;
+// les features sans validitystarttime (cas METAR/TAF/SIGMET/...) sont
+// toujours affichées quel que soit le slot choisi.
+function featureValiditySlot(f: GeoJSON.Feature): string | null {
+  const v = (f.properties as Record<string, unknown> | null)?.validitystarttime
+  if (typeof v !== 'string' || v === '') return null
+  return v
 }
 
-// Filtre les features pour ne garder que celles correspondant au step
-// temporel demandé. Les features sans forecasttime (cas METAR/TAF/SIGMET/...)
-// passent toujours, parce qu'elles ne sont pas concernées par cette logique.
-function filterByForecast(
+function filterBySlot(
   geo: GeoJSON.FeatureCollection,
-  minutes: number,
+  slot: string | null,
 ): GeoJSON.FeatureCollection {
+  if (slot === null) return geo
   return {
     ...geo,
     features: geo.features.filter((f) => {
-      const ft = featureForecastTime(f)
-      if (ft === null) return true
-      return ft === minutes
+      const v = featureValiditySlot(f)
+      if (v === null) return true
+      return v === slot
     }),
   }
 }
 
-// True dès qu'au moins une feature chargée a une forecasttime > 0 :
-// dans ce cas on affiche le slider temporel.
-function hasAnyForecast(layers: Record<string, FetchedLayer>): boolean {
+function collectSlots(layers: Record<string, FetchedLayer>): string[] {
+  const set = new Set<string>()
   for (const l of Object.values(layers)) {
     for (const f of l.rawData.features) {
-      const ft = featureForecastTime(f)
-      if (ft !== null && ft > 0) return true
+      const v = featureValiditySlot(f)
+      if (v !== null) set.add(v)
     }
   }
-  return false
+  return Array.from(set).sort()
+}
+
+// Choisit comme slot par défaut celui dont validitystarttime <= now le plus
+// récent (= fenêtre courante). À défaut, le 1er slot.
+function pickDefaultSlot(slots: string[]): string | null {
+  if (slots.length === 0) return null
+  const nowIso = new Date().toISOString()
+  let best: string | null = null
+  for (const s of slots) {
+    if (s <= nowIso) best = s
+    else break
+  }
+  return best ?? slots[0]
+}
+
+function fmtSlotLabel(slot: string, isFirst: boolean): { primary: string; secondary?: string } {
+  // ISO → HH:mm UTC, suffixé +1d si c'est demain par rapport au 1er slot
+  const m = slot.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/)
+  if (!m) return { primary: slot }
+  const [, y, mo, d, hh, mm] = m
+  const primary = `${hh}:${mm}`
+  if (isFirst) return { primary }
+  return { primary, secondary: `${y}-${mo}-${d}` }
 }
 
 interface PopupState {
@@ -135,7 +156,7 @@ export default function MapView({ data }: MapViewProps) {
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [popup, setPopup] = useState<PopupState | null>(null)
-  const [forecastMinutes, setForecastMinutes] = useState<ForecastStep>(0)
+  const [selectedSlot, setSelectedSlot] = useState<string | null>(null)
   const [playing, setPlaying] = useState(false)
 
   const candidates: Family[] = useMemo(() => {
@@ -172,7 +193,7 @@ export default function MapView({ data }: MapViewProps) {
           throw new Error(`HTTP ${r.status}: ${detail.slice(0, 80)}`)
         }
         const geo = (await r.json()) as GeoJSON.FeatureCollection
-        const filtered = filterByForecast(geo, forecastMinutes)
+        const filtered = filterBySlot(geo, selectedSlot)
         setLoaded((prev) => ({
           ...prev,
           [name]: {
@@ -213,15 +234,30 @@ export default function MapView({ data }: MapViewProps) {
     })
   }
 
-  // Re-filter chaque couche dès que le step temporel change.
+  const slots = useMemo(() => collectSlots(loaded), [loaded])
+
+  // Sélection automatique d'un slot par défaut quand les couches arrivent ou
+  // changent. Si le slot courant n'est plus dans la liste, on retombe sur
+  // le slot le plus récent passé.
+  useEffect(() => {
+    if (slots.length === 0) {
+      if (selectedSlot !== null) setSelectedSlot(null)
+      return
+    }
+    if (selectedSlot === null || !slots.includes(selectedSlot)) {
+      setSelectedSlot(pickDefaultSlot(slots))
+    }
+  }, [slots, selectedSlot])
+
+  // Re-filter chaque couche quand le slot change.
   useEffect(() => {
     setLoaded((prev) => {
       const next: Record<string, FetchedLayer> = {}
       let changed = false
       for (const [name, l] of Object.entries(prev)) {
-        const filtered = filterByForecast(l.rawData, forecastMinutes)
-        if (filtered.features.length === l.data.features.length && filtered === l.data) {
-          next[name] = l
+        const filtered = filterBySlot(l.rawData, selectedSlot)
+        if (filtered.features.length === l.data.features.length) {
+          next[name] = { ...l, data: filtered, count: filtered.features.length }
           continue
         }
         next[name] = { ...l, data: filtered, count: filtered.features.length }
@@ -229,21 +265,22 @@ export default function MapView({ data }: MapViewProps) {
       }
       return changed ? next : prev
     })
-  }, [forecastMinutes])
+  }, [selectedSlot])
 
-  // Animation play : avance d'un step toutes les ~1.4 s.
+  // Animation play : avance d'un slot toutes les ~1.4 s.
   useEffect(() => {
-    if (!playing) return
+    if (!playing || slots.length < 2) return
     const id = window.setInterval(() => {
-      setForecastMinutes((prev) => {
-        const idx = FORECAST_STEPS.indexOf(prev)
-        return FORECAST_STEPS[(idx + 1) % FORECAST_STEPS.length]
+      setSelectedSlot((prev) => {
+        if (prev === null) return slots[0]
+        const idx = slots.indexOf(prev)
+        return slots[(idx + 1) % slots.length]
       })
     }, 1400)
     return () => window.clearInterval(id)
-  }, [playing])
+  }, [playing, slots])
 
-  const showTimeSlider = useMemo(() => hasAnyForecast(loaded), [loaded])
+  const showTimeSlider = slots.length > 1
 
   const interactiveLayerIds = useMemo(() => {
     const ids: string[] = []
@@ -386,11 +423,12 @@ export default function MapView({ data }: MapViewProps) {
         onToggleLayer={toggle}
       />
 
-      {showTimeSlider && (
+      {showTimeSlider && selectedSlot && (
         <TimeSlider
-          value={forecastMinutes}
+          slots={slots}
+          selected={selectedSlot}
           onChange={(v) => {
-            setForecastMinutes(v)
+            setSelectedSlot(v)
             setPlaying(false)
           }}
           playing={playing}
@@ -402,19 +440,51 @@ export default function MapView({ data }: MapViewProps) {
 }
 
 interface TimeSliderProps {
-  value: ForecastStep
-  onChange: (v: ForecastStep) => void
+  slots: string[]
+  selected: string
+  onChange: (v: string) => void
   playing: boolean
   onTogglePlay: () => void
 }
 
-function TimeSlider({ value, onChange, playing, onTogglePlay }: TimeSliderProps) {
-  const label = value === 0 ? 'Analyse · T+0' : `Prévision · T+${value} min`
+function TimeSlider({ slots, selected, onChange, playing, onTogglePlay }: TimeSliderProps) {
+  const idx = slots.indexOf(selected)
+  const total = slots.length
+  // Indique quels slots changent de jour par rapport au précédent (pour
+  // afficher la date secondaire sur ces slots-là).
+  const showDateOn = useMemo(() => {
+    const set = new Set<number>()
+    for (let i = 0; i < slots.length; i++) {
+      if (i === 0) {
+        set.add(i)
+        continue
+      }
+      const prev = slots[i - 1].slice(0, 10)
+      const cur = slots[i].slice(0, 10)
+      if (prev !== cur) set.add(i)
+    }
+    return set
+  }, [slots])
+
+  const label = (() => {
+    const m = selected.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/)
+    if (!m) return selected
+    const date = m[1]
+    const time = `${m[2]}:${m[3]}`
+    const now = new Date()
+    const cur = new Date(selected)
+    if (cur.getTime() <= now.getTime() + 60_000 && cur.getTime() >= now.getTime() - 6 * 3600_000) {
+      return `Now · ${time} UTC`
+    }
+    return `${date} ${time} UTC`
+  })()
+
   return (
-    <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 rounded-xl border border-slate-800/70 bg-slate-950/85 backdrop-blur-md px-3 py-2 shadow-2xl">
+    <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 rounded-xl border border-slate-800/70 bg-slate-950/85 backdrop-blur-md px-3 py-2 shadow-2xl max-w-[90vw]">
       <button
         onClick={onTogglePlay}
-        className="size-8 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 flex items-center justify-center transition"
+        disabled={total < 2}
+        className="size-8 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 flex items-center justify-center transition disabled:opacity-40"
         aria-label={playing ? 'Pause' : 'Play'}
       >
         {playing ? (
@@ -424,25 +494,34 @@ function TimeSlider({ value, onChange, playing, onTogglePlay }: TimeSliderProps)
         )}
       </button>
 
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-1.5 min-w-0">
         <div className="flex items-center gap-1.5 text-[11px] text-slate-300">
           <Clock className="size-3 text-slate-500" />
           <span className="font-medium tabular-nums">{label}</span>
+          <span className="text-slate-600">·</span>
+          <span className="text-slate-500 tabular-nums">
+            {idx + 1}/{total}
+          </span>
         </div>
-        <div className="flex gap-1">
-          {FORECAST_STEPS.map((m) => {
-            const active = value === m
+        <div className="flex gap-1 overflow-x-auto pr-1">
+          {slots.map((s, i) => {
+            const active = s === selected
+            const lab = fmtSlotLabel(s, !showDateOn.has(i))
             return (
               <button
-                key={m}
-                onClick={() => onChange(m)}
-                className={`min-w-12 h-7 px-2 rounded-md text-[11px] font-mono tabular-nums transition border ${
+                key={s}
+                onClick={() => onChange(s)}
+                className={`shrink-0 min-w-12 h-9 px-2 rounded-md text-[11px] font-mono tabular-nums transition border flex flex-col items-center justify-center leading-tight ${
                   active
                     ? 'bg-sky-500/25 text-sky-100 border-sky-400/50 shadow-[0_0_10px_rgba(56,189,248,0.25)]'
                     : 'bg-slate-900/60 text-slate-400 border-slate-800/60 hover:bg-slate-800/60 hover:text-slate-200'
                 }`}
+                title={s}
               >
-                {m === 0 ? 'Now' : `+${m}'`}
+                <span>{lab.primary}</span>
+                {lab.secondary && (
+                  <span className="text-[9px] opacity-60">{lab.secondary.slice(5)}</span>
+                )}
               </button>
             )
           })}
