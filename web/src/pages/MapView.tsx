@@ -364,41 +364,42 @@ export default function MapView({ data }: MapViewProps) {
           const layer = loaded[name]
           if (!layer) return null
           const s = styleFor(name)
-          // Mode trails : opacité dégressive selon forecasttime (0 → 60 min).
-          // Les features sans forecasttime gardent opacity max (cas non-RDT).
-          const fillOpacity = showTrails
-            ? ([
-                'interpolate',
-                ['linear'],
-                ['to-number', ['coalesce', ['get', 'forecasttime'], 0]],
-                0,
-                0.22,
-                60,
-                0.04,
-              ] as unknown as number)
-            : 0.18
-          const lineOpacity = showTrails
-            ? ([
-                'interpolate',
-                ['linear'],
-                ['to-number', ['coalesce', ['get', 'forecasttime'], 0]],
-                0,
-                0.95,
-                60,
-                0.18,
-              ] as unknown as number)
-            : 0.85
-          const lineWidth = showTrails
-            ? ([
-                'interpolate',
-                ['linear'],
-                ['to-number', ['coalesce', ['get', 'forecasttime'], 0]],
-                0,
-                2,
-                60,
-                0.7,
-              ] as unknown as number)
-            : 1.5
+          // Mode trails : opacité dégressive selon forecasttime ("0" → "60").
+          // forecasttime arrive en STRING dans le GeoJSON (issu du GML
+          // typage texte), d'où la comparaison stricte par 'case' qui
+          // évite les pièges de to-number sur l'expression interpolate.
+          // Les features sans forecasttime tombent sur la valeur par défaut.
+          const trailFill = [
+            'case',
+            ['==', ['get', 'forecasttime'], '0'], 0.30,
+            ['==', ['get', 'forecasttime'], '15'], 0.22,
+            ['==', ['get', 'forecasttime'], '30'], 0.15,
+            ['==', ['get', 'forecasttime'], '45'], 0.09,
+            ['==', ['get', 'forecasttime'], '60'], 0.05,
+            0.30,
+          ] as unknown as number
+          const trailLine = [
+            'case',
+            ['==', ['get', 'forecasttime'], '0'], 0.95,
+            ['==', ['get', 'forecasttime'], '15'], 0.7,
+            ['==', ['get', 'forecasttime'], '30'], 0.5,
+            ['==', ['get', 'forecasttime'], '45'], 0.32,
+            ['==', ['get', 'forecasttime'], '60'], 0.18,
+            0.95,
+          ] as unknown as number
+          const trailWidth = [
+            'case',
+            ['==', ['get', 'forecasttime'], '0'], 2,
+            ['==', ['get', 'forecasttime'], '15'], 1.6,
+            ['==', ['get', 'forecasttime'], '30'], 1.3,
+            ['==', ['get', 'forecasttime'], '45'], 1,
+            ['==', ['get', 'forecasttime'], '60'], 0.7,
+            2,
+          ] as unknown as number
+
+          const fillOpacity = showTrails ? trailFill : 0.18
+          const lineOpacity = showTrails ? trailLine : 0.85
+          const lineWidth = showTrails ? trailWidth : 1.5
 
           return (
             <Source key={name} id={`src-${name}`} type="geojson" data={layer.data}>
