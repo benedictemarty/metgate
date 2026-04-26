@@ -43,12 +43,17 @@ func main() {
 
 	osUser := os.Getenv("OPENSKY_USER")
 	osPass := os.Getenv("OPENSKY_PASS")
-	acClient := aircraft.New(osUser, osPass)
+	osClientID := os.Getenv("OPENSKY_CLIENT_ID")
+	osClientSecret := os.Getenv("OPENSKY_CLIENT_SECRET")
+	acClient := aircraft.New(osUser, osPass, osClientID, osClientSecret)
 	acService := aircraft.NewService(acClient, 30*time.Minute)
-	if osUser == "" {
-		log.Print("opensky: anonymous (100 req/jour). Renseigner OPENSKY_USER/PASS pour 4000 req/jour.")
-	} else {
-		log.Printf("opensky: authenticated as %s", osUser)
+	switch {
+	case osClientID != "":
+		log.Printf("opensky: OAuth2 (client_id=%s…)", osClientID[:min(8, len(osClientID))])
+	case osUser != "":
+		log.Printf("opensky: basic auth as %s (legacy)", osUser)
+	default:
+		log.Print("opensky: anonymous (~100 req/jour). Voir .env pour OPENSKY_CLIENT_ID/SECRET.")
 	}
 
 	api := httpapi.NewAPI(cat, acService)

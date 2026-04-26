@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -41,26 +42,108 @@ type State struct {
 	TimeISO   string  `json:"time_iso"`
 }
 
-// Client interroge OpenSky. Auth basic optionnelle (sans : 100 req/jour).
+// Client interroge OpenSky.
+//
+// Authentification supportée :
+//   - OAuth2 client credentials (clientID / clientSecret) — méthode actuelle
+//     OpenSky depuis fin 2024. Nécessite l'auth des appels API via Bearer
+//     access_token ; le client gère le cache et le refresh.
+//   - Basic auth (user / pass) — méthode legacy, encore acceptée.
+//   - Anonyme (rien) — limité à ~100 req/jour.
 type Client struct {
-	baseURL string
-	user    string
-	pass    string
-	http    *http.Client
+	baseURL      string
+	authURL      string
+	user         string
+	pass         string
+	clientID     string
+	clientSecret string
+
+	tokenMu      sync.Mutex
+	tokenStr     string
+	tokenExpires time.Time
+
+	http *http.Client
 }
 
-func New(user, pass string) *Client {
+func New(user, pass, clientID, clientSecret string) *Client {
 	return &Client{
-		baseURL: "https://opensky-network.org",
-		user:    user,
-		pass:    pass,
-		http:    &http.Client{Timeout: 30 * time.Second},
+		baseURL:      "https://opensky-network.org",
+		authURL:      "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token",
+		user:         user,
+		pass:         pass,
+		clientID:     clientID,
+		clientSecret: clientSecret,
+		http:         &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
-// Authenticated retourne true si des credentials sont fournis.
+// Authenticated retourne true si des credentials sont fournis (OAuth2 ou Basic).
 func (c *Client) Authenticated() bool {
-	return c.user != ""
+	return c.clientID != "" || c.user != ""
+}
+
+// fetchToken récupère ou rafraîchit le Bearer OAuth2 (cache local).
+func (c *Client) fetchToken(ctx context.Context) (string, error) {
+	c.tokenMu.Lock()
+	defer c.tokenMu.Unlock()
+	if c.tokenStr != "" && time.Now().Before(c.tokenExpires) {
+		return c.tokenStr, nil
+	}
+	if c.clientID == "" {
+		return "", fmt.Errorf("no OAuth2 client_id configured")
+	}
+	form := fmt.Sprintf("grant_type=client_credentials&client_id=%s&client_secret=%s",
+		c.clientID, c.clientSecret)
+	req, err := http.NewRequestWithContext(ctx, "POST", c.authURL, strings.NewReader(form))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		max := 200
+		if len(body) < max {
+			max = len(body)
+		}
+		return "", fmt.Errorf("opensky auth %d: %s", resp.StatusCode, body[:max])
+	}
+	var tok struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int    `json:"expires_in"`
+		TokenType   string `json:"token_type"`
+	}
+	if err := json.Unmarshal(body, &tok); err != nil {
+		return "", fmt.Errorf("opensky auth decode: %w", err)
+	}
+	c.tokenStr = tok.AccessToken
+	// Marge de 30 s avant l'expiration pour éviter les requêtes 401
+	if tok.ExpiresIn > 30 {
+		c.tokenExpires = time.Now().Add(time.Duration(tok.ExpiresIn-30) * time.Second)
+	} else {
+		c.tokenExpires = time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second)
+	}
+	return c.tokenStr, nil
+}
+
+// authorize pose le bon header sur la requête (Bearer si OAuth2 sinon Basic).
+func (c *Client) authorize(ctx context.Context, req *http.Request) error {
+	if c.clientID != "" {
+		token, err := c.fetchToken(ctx)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		return nil
+	}
+	if c.user != "" {
+		req.SetBasicAuth(c.user, c.pass)
+	}
+	return nil
 }
 
 // FlightSegment est un segment de vol vu par OpenSky : les estimations
@@ -96,8 +179,8 @@ func (c *Client) FlightsByAircraft(
 	if err != nil {
 		return nil, err
 	}
-	if c.user != "" {
-		req.SetBasicAuth(c.user, c.pass)
+	if err := c.authorize(ctx, req); err != nil {
+		return nil, err
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -179,8 +262,8 @@ func (c *Client) QueryStates(
 	if err != nil {
 		return nil, err
 	}
-	if c.user != "" {
-		req.SetBasicAuth(c.user, c.pass)
+	if err := c.authorize(ctx, req); err != nil {
+		return nil, err
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -192,7 +275,6 @@ func (c *Client) QueryStates(
 		return nil, err
 	}
 	if resp.StatusCode != 200 {
-		// Tronquer le body en cas d'erreur (peut être HTML)
 		max := 200
 		if len(body) < max {
 			max = len(body)
