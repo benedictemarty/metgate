@@ -103,8 +103,12 @@ func (s *Service) ICAOIndex(ctx context.Context) (map[string][2]float64, error) 
 }
 
 // PointFamilies sont les couches WFS Point qu'on scanne pour les events
-// (METAR, TAF, etc.).
-var routePointFamilies = []string{"METAR_last", "TAF_last", "SPECI_last"}
+// (METAR, TAF, SPECI, Aerodrome Warnings WL = MAA, advisories).
+var routePointFamilies = []string{
+	"METAR_last", "TAF_last", "SPECI_last",
+	"WL_last", // Aerodrome Warning (MAA Météo France)
+	"VolcanicAshAdvisory_last", "TropicalCycloneAdvisory_last", "SpaceWeatherAdvisory_last",
+}
 
 // PolyFamilies sont les couches WFS Polygon qu'on scanne pour les events.
 var routePolyFamilies = []string{
@@ -447,6 +451,12 @@ func effectiveValidityWindow(
 		if iss, ok := props["issueTime"].(string); ok && iss != "" {
 			return iss, addMinutesToISO(iss, 24*60)
 		}
+	case "WL_last":
+		// Aerodrome Warning (MAA Météo France). Validité typique 4-8h
+		// depuis l'analyse. On utilise analysis_time → +12h par défaut.
+		if at, ok := props["analysis_time"].(string); ok && at != "" {
+			return at, addMinutesToISO(at, 12*60)
+		}
 	case "SIGMET_last", "VolcanicAshSIGMET_last", "TropicalCycloneSIGMET_last", "AIRMET_last":
 		if iss, ok := props["issueTime"].(string); ok && iss != "" {
 			return iss, addMinutesToISO(iss, 6*60)
@@ -502,8 +512,13 @@ func familyKind(family string) string {
 }
 
 func pointLabel(props map[string]interface{}, family string) string {
-	if icao, ok := props["locationIndicatorICAO"].(string); ok && icao != "" {
-		return strings.TrimSuffix(family, "_last") + " " + icao
+	// Plusieurs champs possibles selon le type de produit :
+	//  - locationIndicatorICAO : METAR, TAF, SPECI, LocalReport
+	//  - id                    : WL (Aerodrome Warning Météo France)
+	for _, k := range []string{"locationIndicatorICAO", "id"} {
+		if v, ok := props[k].(string); ok && v != "" {
+			return strings.TrimSuffix(family, "_last") + " " + strings.TrimSpace(v)
+		}
 	}
 	return strings.TrimSuffix(family, "_last")
 }
@@ -523,7 +538,7 @@ func compactProps(p map[string]interface{}) map[string]interface{} {
 	}
 	out := map[string]interface{}{}
 	for _, k := range []string{
-		"locationIndicatorICAO", "tac", "status", "cavok",
+		"locationIndicatorICAO", "id", "tac", "status", "cavok",
 		"airTemperature_C", "dewpointTemperature_C", "qnh_hPa",
 		"windDirection_deg", "windSpeed_kt",
 		"issuingAirTrafficServicesRegion", "validitystarttime", "validityendtime",
@@ -531,6 +546,8 @@ func compactProps(p map[string]interface{}) map[string]interface{} {
 		"producttype", "severity", "trackingid",
 		"begin_position", "end_position",
 		"observationTime", "issueTime",
+		// Champs spécifiques aux Aerodrome Warnings (WL)
+		"analysis_time", "cnl", "message_number",
 	} {
 		if v, ok := p[k]; ok && v != nil && v != "" {
 			out[k] = v

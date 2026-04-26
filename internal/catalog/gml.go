@@ -82,15 +82,21 @@ func parseMember(dec *xml.Decoder) (map[string]any, error) {
 				}
 				depth--
 			case "opmet_msg":
-				// CDATA IWXXM volumineux : on n'embarque PAS l'XML brut dans
-				// le GeoJSON. On en extrait soit le TAC d'origine (IWXXM
-				// 2021-2 et antérieur conservait translatedFailedTAC), soit
-				// on reconstruit un TAC minimal à partir des champs IWXXM 3.0.
+				// opmet_msg peut contenir :
+				//   - du IWXXM XML (METAR, TAF, SIGMET, AIRMET récents) → on
+				//     extrait le TAC ou on reconstruit depuis les champs scalaires
+				//   - du TAC brut (Aerodrome Warnings WL = code MAA Météo France,
+				//     parfois SIGMET/TAF anciens) → on le pose directement
 				txt, err := readNestedText(dec, t)
 				if err != nil {
 					return nil, err
 				}
-				enrichFromIWXXM(props, txt)
+				trimmed := strings.TrimSpace(txt)
+				if strings.HasPrefix(trimmed, "<") {
+					enrichFromIWXXM(props, trimmed)
+				} else if trimmed != "" {
+					props["tac"] = trimmed
+				}
 				depth--
 			case "msGeometry", "geom", "geometry", "the_geom":
 				g, err := parseGeometry(dec)

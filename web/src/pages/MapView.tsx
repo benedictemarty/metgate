@@ -43,6 +43,7 @@ const MAPPABLE_FAMILIES = new Set([
   'SPECI',
   'TAF',
   'LocalReport',
+  'WL', // Aerodrome Warning (= MAA Météo France, code WMO WL)
   'VolcanicAshAdvisory',
   'TropicalCycloneAdvisory',
   'SpaceWeatherAdvisory',

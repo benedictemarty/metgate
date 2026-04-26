@@ -690,6 +690,7 @@ function isPointKind(k: string): boolean {
     k === 'TAF' ||
     k === 'SPECI' ||
     k === 'LocalReport' ||
+    k === 'WL' ||
     k === 'VolcanicAshAdvisory' ||
     k === 'TropicalCycloneAdvisory' ||
     k === 'SpaceWeatherAdvisory'
@@ -697,8 +698,12 @@ function isPointKind(k: string): boolean {
 }
 
 function triangleLabel(ev: RouteEvent): string {
-  const icao = ev.properties?.locationIndicatorICAO as string | undefined
-  if (icao) return icao
+  // Pour les Points : ICAO en priorité (METAR/TAF/SPECI/LocalReport),
+  // sinon `id` (Aerodrome Warning WL/MAA), sinon FIR.
+  const icao = (ev.properties?.locationIndicatorICAO ?? ev.properties?.id) as
+    | string
+    | undefined
+  if (typeof icao === 'string' && icao.trim()) return icao.trim()
   if (ev.fir) return ev.fir
   if (ev.kind === 'CAT_EURAT01') {
     const top = ev.properties?.top as string | undefined
@@ -719,6 +724,7 @@ function triangleLabel(ev: RouteEvent): string {
 function triangleColorClass(k: string): string {
   if (k === 'METAR' || k === 'SPECI') return 'text-sky-400'
   if (k === 'TAF') return 'text-violet-400'
+  if (k === 'WL') return 'text-amber-300' // Aerodrome Warning (MAA)
   if (k.includes('SIGMET')) return 'text-rose-400'
   if (k.includes('AIRMET')) return 'text-amber-400'
   if (k === 'CAT_EURAT01') return 'text-fuchsia-400'
@@ -731,6 +737,7 @@ function triangleColorClass(k: string): string {
 function shadowColor(k: string): string {
   if (k === 'METAR' || k === 'SPECI') return 'rgba(56,189,248,0.6)'
   if (k === 'TAF') return 'rgba(167,139,250,0.6)'
+  if (k === 'WL') return 'rgba(252,211,77,0.7)' // Aerodrome Warning (MAA)
   if (k.includes('SIGMET')) return 'rgba(244,63,94,0.7)'
   if (k.includes('AIRMET')) return 'rgba(251,191,36,0.6)'
   if (k === 'CAT_EURAT01') return 'rgba(232,121,249,0.6)'
@@ -835,6 +842,7 @@ function EventRow({
 function iconForKind(k: string) {
   if (k === 'METAR' || k === 'SPECI') return Cloud
   if (k === 'TAF') return CloudSnow
+  if (k === 'WL') return AlertTriangle // Aerodrome Warning (MAA)
   if (k.includes('SIGMET') || k.includes('AIRMET')) return AlertTriangle
   if (k === 'CAT_EURAT01') return WindIcon
   if (k === 'GIVRAGE_EURAT01') return CloudSnow
@@ -846,6 +854,7 @@ function iconForKind(k: string) {
 function colorForKind(k: string) {
   if (k === 'METAR' || k === 'SPECI') return 'text-sky-400'
   if (k === 'TAF') return 'text-violet-400'
+  if (k === 'WL') return 'text-amber-300' // Aerodrome Warning (MAA)
   if (k.includes('SIGMET')) return 'text-rose-400'
   if (k.includes('AIRMET')) return 'text-amber-400'
   if (k === 'CAT_EURAT01') return 'text-fuchsia-400'
