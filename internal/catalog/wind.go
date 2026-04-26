@@ -51,25 +51,31 @@ type WindGrid struct {
 	CurrentIdx int        `json:"current_idx,omitempty"`
 }
 
-// WindGrid récupère le dernier coverage WIND, fait un GetCoverage subsetté
-// (niveau + bbox), décode le NetCDF, et renvoie la grille u,v.
+// WindGrid récupère le dernier coverage du dataset (WIND ou JET), fait un
+// GetCoverage subsetté (niveau pour WIND, bbox spatial), décode le NetCDF
+// et renvoie la grille u,v.
 //
-// Si allSteps==false : seul le pas le plus proche de now est renvoyé.
-// Si allSteps==true  : tous les pas du coverage sont renvoyés, plus
-// l'index du pas le plus proche de now (CurrentIdx).
+// Datasets supportés :
+//   - "WIND" (default) : vent par niveau de pression, 29 niveaux dispos
+//   - "JET"             : vent à un seul niveau (jet stream), level ignoré
 func (s *Service) WindGrid(
 	ctx context.Context,
+	dataset string,
 	levelPa float64,
 	bbox [4]float64,
 	allSteps bool,
 ) (*WindGrid, error) {
+	prefix := "WIND"
+	if dataset == "JET" {
+		prefix = "JET"
+	}
 	if levelPa <= 0 {
 		levelPa = 85000
 	}
 
-	coverageID, err := s.latestCoverageID(ctx, "WIND")
+	coverageID, err := s.latestCoverageID(ctx, prefix)
 	if err != nil {
-		return nil, fmt.Errorf("find latest WIND: %w", err)
+		return nil, fmt.Errorf("find latest %s: %w", prefix, err)
 	}
 
 	q := url.Values{}
@@ -77,7 +83,11 @@ func (s *Service) WindGrid(
 	q.Set("version", "2.0.1")
 	q.Set("request", "GetCoverage")
 	q.Set("coverageId", coverageID)
-	q.Add("subset", fmt.Sprintf("level(%g)", levelPa))
+	if prefix == "WIND" {
+		// Le coverage WIND est multi-niveaux ; on subset au niveau demandé.
+		// JET est déjà à un seul niveau, level n'est pas un axe à subsetter.
+		q.Add("subset", fmt.Sprintf("level(%g)", levelPa))
+	}
 	q.Add("subset", fmt.Sprintf("longitude(%g,%g)", bbox[0], bbox[2]))
 	q.Add("subset", fmt.Sprintf("latitude(%g,%g)", bbox[1], bbox[3]))
 
@@ -90,7 +100,11 @@ func (s *Service) WindGrid(
 			coverageID, resp.Status, truncate(resp.Body, 200))
 	}
 
-	return decodeWindNetCDF(coverageID, levelPa, bbox, resp.Body, allSteps)
+	effectiveLevel := levelPa
+	if prefix == "JET" {
+		effectiveLevel = 0 // JET = single level, niveau "n/a"
+	}
+	return decodeWindNetCDF(coverageID, effectiveLevel, bbox, resp.Body, allSteps)
 }
 
 // latestCoverageID lit les Capabilities WCS et retourne le CoverageId le
@@ -221,6 +235,23 @@ func decodeWindNetCDF(
 	flipLat := len(lats) >= 2 && lats[0] < lats[len(lats)-1]
 	flipLon := len(lons) >= 2 && lons[0] > lons[len(lons)-1]
 
+	// Garde-fou : MetGate (cas JET) utilise une "fill value" géante pour les
+	// pixels hors-domaine (~2.47e+34 m/s observé). Le record absolu de vent
+	// terrestre est ~140 m/s ; on traite comme manquant tout ce qui dépasse
+	// un seuil très large (200 m/s ≈ 388 kt) et on les rabat à 0 pour ne
+	// pas casser les particules ni gonfler speed_max_ms.
+	const maxRealisticWind = 200.0
+	clean := func(x float32) float32 {
+		ax := x
+		if ax < 0 {
+			ax = -ax
+		}
+		if math.IsNaN(float64(x)) || float64(ax) > maxRealisticWind {
+			return 0
+		}
+		return x
+	}
+
 	flatten := func(t int) (u, v []float32, maxSpeed float64) {
 		uLat := uAll[t][0]
 		vLat := vAll[t][0]
@@ -236,8 +267,8 @@ func decodeWindNetCDF(
 				if flipLon {
 					ir = width - 1 - i
 				}
-				uv := uLat[jr][ir]
-				vv := vLat[jr][ir]
+				uv := clean(uLat[jr][ir])
+				vv := clean(vLat[jr][ir])
 				u[j*width+i] = uv
 				v[j*width+i] = vv
 				s := math.Hypot(float64(uv), float64(vv))

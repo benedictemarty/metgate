@@ -32,10 +32,11 @@ const SPEED_FACTOR = 0.04 // deg/sec ≈ (m/s) * SPEED_FACTOR / cos(lat) — emp
 
 interface WindLayerProps {
   enabled: boolean
-  level?: number // Pa, default 85000
+  dataset: 'WIND' | 'JET'
+  level?: number // Pa, ignored if dataset='JET'
 }
 
-export default function WindLayer({ enabled, level = 85000 }: WindLayerProps) {
+export default function WindLayer({ enabled, dataset, level = 85000 }: WindLayerProps) {
   const { current: mapWrapper } = useMap()
   const map = mapWrapper?.getMap()
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -61,7 +62,13 @@ export default function WindLayer({ enabled, level = 85000 }: WindLayerProps) {
       const lonMax = Math.min(180, b.getEast())
       const latMin = Math.max(-90, b.getSouth())
       const latMax = Math.min(90, b.getNorth())
-      const url = `/api/wind?bbox=${lonMin.toFixed(2)},${latMin.toFixed(2)},${lonMax.toFixed(2)},${latMax.toFixed(2)}&level=${level}&allSteps=1`
+      const params = new URLSearchParams({
+        bbox: `${lonMin.toFixed(2)},${latMin.toFixed(2)},${lonMax.toFixed(2)},${latMax.toFixed(2)}`,
+        dataset,
+        allSteps: '1',
+      })
+      if (dataset === 'WIND') params.set('level', String(level))
+      const url = `/api/wind?${params.toString()}`
       setInfo({ status: 'loading' })
       fetch(url)
         .then((r) => {
@@ -95,7 +102,7 @@ export default function WindLayer({ enabled, level = 85000 }: WindLayerProps) {
       if (pending !== null) window.clearTimeout(pending)
       map.off('moveend', debouncedFetch)
     }
-  }, [enabled, map, level])
+  }, [enabled, map, level, dataset])
 
   const currentStep: WindStep | null = useMemo(() => {
     if (!grid || !grid.steps?.length) return null
@@ -246,8 +253,10 @@ export default function WindLayer({ enabled, level = 85000 }: WindLayerProps) {
       {grid && currentStep && (
         <div className="absolute bottom-24 right-4 z-10 px-3 py-2 rounded-lg bg-slate-950/85 backdrop-blur-md border border-slate-800/70 text-[10px] text-slate-300 shadow-2xl flex flex-col gap-2 min-w-[260px]">
           <div className="flex items-center gap-2">
-            <span className="text-slate-500">Vent</span>
-            <span className="font-mono">{(level / 100).toFixed(0)} hPa</span>
+            <span className="text-slate-500">{dataset === 'JET' ? 'Jet stream' : 'Vent'}</span>
+            {dataset === 'WIND' && (
+              <span className="font-mono">{(level / 100).toFixed(0)} hPa</span>
+            )}
             <span className="text-slate-600">·</span>
             <span className="font-mono">
               max {(currentStep.speed_max_ms * 1.94384).toFixed(0)} kt

@@ -254,6 +254,7 @@ export default function MapView({ data }: MapViewProps) {
   const [playing, setPlaying] = useState(false)
   const [showTrails, setShowTrails] = useState(false)
   const [windEnabled, setWindEnabled] = useState(false)
+  const [windDataset, setWindDataset] = useState<'WIND' | 'JET'>('WIND')
   const [windLevelPa, setWindLevelPa] = useState(85000) // 850 hPa par défaut
 
   const candidates: Family[] = useMemo(() => {
@@ -512,7 +513,7 @@ export default function MapView({ data }: MapViewProps) {
           )
         })}
 
-        <WindLayer enabled={windEnabled} level={windLevelPa} />
+        <WindLayer enabled={windEnabled} dataset={windDataset} level={windLevelPa} />
 
         {popup && (
           <Popup
@@ -562,7 +563,14 @@ export default function MapView({ data }: MapViewProps) {
         </button>
 
         {windEnabled && (
-          <WindLevelSelector value={windLevelPa} onChange={setWindLevelPa} />
+          <WindLevelSelector
+            dataset={windDataset}
+            value={windLevelPa}
+            onSelect={(d, lvl) => {
+              setWindDataset(d)
+              if (d === 'WIND') setWindLevelPa(lvl)
+            }}
+          />
         )}
       </div>
 
@@ -1008,24 +1016,39 @@ const WIND_LEVELS: Array<{ pa: number; fl: string; hpa: string }> = [
 ]
 
 function WindLevelSelector({
+  dataset,
   value,
-  onChange,
+  onSelect,
 }: {
+  dataset: 'WIND' | 'JET'
   value: number
-  onChange: (v: number) => void
+  onSelect: (dataset: 'WIND' | 'JET', level: number) => void
 }) {
   return (
     <div className="flex flex-col gap-1 px-2 py-2 rounded-lg border border-slate-800/70 bg-slate-950/85 backdrop-blur-md shadow-xl">
       <div className="text-[9px] uppercase tracking-wider text-slate-500 px-1">
-        Niveau
+        Source
       </div>
       <div className="flex flex-col gap-0.5">
+        <button
+          onClick={() => onSelect('JET', 0)}
+          className={`flex items-center justify-between gap-3 px-2 py-1 rounded text-[11px] font-mono tabular-nums transition border ${
+            dataset === 'JET'
+              ? 'border-cyan-400/50 bg-cyan-500/15 text-cyan-100 shadow-[0_0_8px_rgba(34,211,238,0.2)]'
+              : 'border-transparent text-slate-400 hover:bg-slate-800/40 hover:text-slate-200'
+          }`}
+          title="Jet stream pré-isolé (single-level)"
+        >
+          <span>JET</span>
+          <span className="text-[9px] text-slate-500">jet stream</span>
+        </button>
+        <div className="h-px bg-slate-800/60 my-0.5" />
         {WIND_LEVELS.map((l) => {
-          const active = l.pa === value
+          const active = dataset === 'WIND' && l.pa === value
           return (
             <button
               key={l.pa}
-              onClick={() => onChange(l.pa)}
+              onClick={() => onSelect('WIND', l.pa)}
               className={`flex items-center justify-between gap-3 px-2 py-1 rounded text-[11px] font-mono tabular-nums transition border ${
                 active
                   ? 'border-cyan-400/50 bg-cyan-500/15 text-cyan-100 shadow-[0_0_8px_rgba(34,211,238,0.2)]'
