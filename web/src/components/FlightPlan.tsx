@@ -2,12 +2,16 @@ import { useMemo, useState } from 'react'
 import { useMap, Source, Layer, Marker } from 'react-map-gl/maplibre'
 import {
   AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
   Cloud,
   CloudSnow,
   Mountain,
   Plane,
   Play,
   Pause,
+  SkipBack,
+  SkipForward,
   Wind as WindIcon,
   X,
   Zap,
@@ -255,24 +259,57 @@ export default function FlightPlan({
                 </div>
               </div>
             )}
-            <div className="mt-2 flex items-center gap-2">
-              <button
+            <div className="mt-2 flex items-center gap-1">
+              <CtrlBtn
+                onClick={() => onCursorChange(0)}
+                title="Revenir au départ"
+                disabled={cursorIdx <= 0}
+              >
+                <SkipBack className="size-3 text-emerald-200" />
+              </CtrlBtn>
+              <CtrlBtn
+                onClick={() => onCursorChange(Math.max(0, cursorIdx - 1))}
+                title="Reculer d'un waypoint"
+                disabled={cursorIdx <= 0}
+              >
+                <ChevronLeft className="size-3 text-emerald-200" />
+              </CtrlBtn>
+              <CtrlBtn
                 onClick={onTogglePlay}
-                className="size-7 rounded bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 flex items-center justify-center transition"
+                title={playing ? 'Pause' : 'Play'}
+                size="lg"
               >
                 {playing ? (
                   <Pause className="size-3.5 text-emerald-200" />
                 ) : (
                   <Play className="size-3.5 text-emerald-200 translate-x-[1px]" />
                 )}
-              </button>
+              </CtrlBtn>
+              <CtrlBtn
+                onClick={() =>
+                  onCursorChange(
+                    Math.min(plan.waypoints.length - 1, cursorIdx + 1),
+                  )
+                }
+                title="Avancer d'un waypoint"
+                disabled={cursorIdx >= plan.waypoints.length - 1}
+              >
+                <ChevronRight className="size-3 text-emerald-200" />
+              </CtrlBtn>
+              <CtrlBtn
+                onClick={() => onCursorChange(plan.waypoints.length - 1)}
+                title="Aller à l'arrivée"
+                disabled={cursorIdx >= plan.waypoints.length - 1}
+              >
+                <SkipForward className="size-3 text-emerald-200" />
+              </CtrlBtn>
               <input
                 type="range"
                 min={0}
                 max={plan.waypoints.length - 1}
                 value={cursorIdx >= 0 ? cursorIdx : 0}
                 onChange={(e) => onCursorChange(Number(e.target.value))}
-                className="flex-1 accent-emerald-400 h-1"
+                className="flex-1 accent-emerald-400 h-1 ml-1"
               />
               <span className="text-[10px] font-mono tabular-nums w-10 text-right text-slate-400">
                 {cursorIdx + 1}/{plan.waypoints.length}
@@ -566,4 +603,30 @@ function colorForKind(k: string) {
   if (k === 'RDT_MSG') return 'text-pink-400'
   if (k.includes('Volcanic')) return 'text-orange-400'
   return 'text-slate-400'
+}
+
+function CtrlBtn({
+  children,
+  onClick,
+  title,
+  disabled,
+  size = 'sm',
+}: {
+  children: React.ReactNode
+  onClick: () => void
+  title: string
+  disabled?: boolean
+  size?: 'sm' | 'lg'
+}) {
+  const dim = size === 'lg' ? 'size-7' : 'size-6'
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className={`${dim} rounded bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 flex items-center justify-center transition disabled:opacity-30 disabled:cursor-not-allowed`}
+    >
+      {children}
+    </button>
+  )
 }
