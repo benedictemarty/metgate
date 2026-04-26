@@ -22,6 +22,7 @@ import {
 import WindLayer from '../components/WindLayer'
 import TropoLayer from '../components/TropoLayer'
 import QvacisLayer, { QVACIS_FLS, type QvacisDataset } from '../components/QvacisLayer'
+import FlightPlan, { type RoutePlan } from '../components/FlightPlan'
 import { CloudFog, Link2, Link2Off, Mountain } from 'lucide-react'
 import type { Aggregate, Family } from '../types'
 
@@ -275,6 +276,29 @@ export default function MapView({ data }: MapViewProps) {
   const [masterInstant, setMasterInstant] = useState<string | null>(null)
   const [masterPlaying, setMasterPlaying] = useState(false)
 
+  // Plan de vol : si défini, prend la priorité sur le master slider WCS et
+  // pilote l'instant via l'index du curseur (waypoint courant).
+  const [routePlan, setRoutePlan] = useState<RoutePlan | null>(null)
+  const [routeCursor, setRouteCursor] = useState(0)
+  const [routePlaying, setRoutePlaying] = useState(false)
+
+  useEffect(() => {
+    if (!routePlan) {
+      setRouteCursor(0)
+      setRoutePlaying(false)
+    } else {
+      setRouteCursor(0)
+    }
+  }, [routePlan])
+
+  useEffect(() => {
+    if (!routePlaying || !routePlan) return
+    const id = window.setInterval(() => {
+      setRouteCursor((i) => (i + 1) % routePlan.waypoints.length)
+    }, 80)
+    return () => window.clearInterval(id)
+  }, [routePlaying, routePlan])
+
   // Quand une couche est désactivée, on retire ses timestamps pour ne pas
   // les laisser dans la timeline maître.
   useEffect(() => {
@@ -327,7 +351,13 @@ export default function MapView({ data }: MapViewProps) {
     return () => window.clearInterval(id)
   }, [wcsLinked, masterPlaying, masterTimeline])
 
-  const linkedInstantForLayers = wcsLinked ? masterInstant : null
+  // Quand un plan de vol est actif, l'instant qui pilote les couches WCS est
+  // celui du waypoint courant (vue 4D). Sinon, mode master classique.
+  const routeInstant =
+    routePlan && routePlan.waypoints[routeCursor]
+      ? routePlan.waypoints[routeCursor].time
+      : null
+  const linkedInstantForLayers = routeInstant ?? (wcsLinked ? masterInstant : null)
   const showWcsMasterSlider = wcsLinked && masterTimeline.length > 1
   const wcsActiveCount =
     (windEnabled ? 1 : 0) + (tropoEnabled ? 1 : 0) + (qvacisEnabled ? 1 : 0)
@@ -606,6 +636,18 @@ export default function MapView({ data }: MapViewProps) {
           fl={qvacisFL}
           linkedInstant={linkedInstantForLayers}
           onTimesLoaded={setQvacisTimes}
+        />
+
+        <FlightPlan
+          plan={routePlan}
+          onPlan={setRoutePlan}
+          cursorIdx={routePlan ? routeCursor : -1}
+          playing={routePlaying}
+          onTogglePlay={() => setRoutePlaying((p) => !p)}
+          onCursorChange={(i) => {
+            setRouteCursor(i)
+            setRoutePlaying(false)
+          }}
         />
 
         {popup && (

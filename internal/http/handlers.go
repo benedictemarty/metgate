@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/bmarty/metgate/internal/catalog"
 	"github.com/bmarty/metgate/internal/web"
@@ -30,6 +31,7 @@ func (a *API) Routes() *http.ServeMux {
 	m.HandleFunc("GET /api/wind", a.handleWind)
 	m.HandleFunc("GET /api/tropo", a.handleTropo)
 	m.HandleFunc("GET /api/qvacis", a.handleQvacis)
+	m.HandleFunc("GET /api/route", a.handleRoute)
 	m.Handle("GET /", web.Handler())
 	return m
 }
@@ -155,6 +157,38 @@ func (a *API) handleQvacis(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, grid)
+}
+
+// handleRoute calcule un plan de vol grand cercle entre deux ICAO.
+// Usage: /api/route?dep=LFPG&arr=LFBO&fl=350&gs=450&dep_time=2026-04-26T08:00:00Z
+func (a *API) handleRoute(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	dep := q.Get("dep")
+	arr := q.Get("arr")
+	if dep == "" || arr == "" {
+		http.Error(w, "params 'dep' et 'arr' (ICAO) requis", http.StatusBadRequest)
+		return
+	}
+	fl := 350
+	if v := q.Get("fl"); v != "" {
+		fmt.Sscanf(v, "%d", &fl)
+	}
+	gs := 450.0
+	if v := q.Get("gs"); v != "" {
+		fmt.Sscanf(v, "%f", &gs)
+	}
+	depTime := time.Now().UTC()
+	if v := q.Get("dep_time"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			depTime = t
+		}
+	}
+	plan, err := a.catalog.PlanRoute(r.Context(), dep, arr, fl, gs, depTime, 80)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, plan)
 }
 
 // handleFeature relaie un WFS GetFeature de MetGate (GML) en GeoJSON.
