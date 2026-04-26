@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,7 +28,7 @@ type RouteWaypoint struct {
 }
 
 // RoutePlan est le résultat d'un plan de vol simple : trajectoire grand
-// cercle DEP→ARR à FL constant, GS constant.
+// cercle DEP→ARR avec profil vertical trapézoïdal, GS constant.
 type RoutePlan struct {
 	Dep       Aerodrome       `json:"dep"`
 	Arr       Aerodrome       `json:"arr"`
@@ -37,6 +39,22 @@ type RoutePlan struct {
 	DistNM    float64         `json:"distance_nm"`
 	DurMin    float64         `json:"duration_min"`
 	Waypoints []RouteWaypoint `json:"waypoints"`
+	Events    []RouteEvent    `json:"events,omitempty"`
+}
+
+// RouteEvent est un événement météo rencontré le long de la route.
+type RouteEvent struct {
+	Kind            string         `json:"kind"`               // SIGMET / AIRMET / METAR / TAF / SPECI / CAT / GIVRAGE / RDT
+	Family          string         `json:"family"`             // FeatureType WFS d'origine
+	Label           string         `json:"label"`              // ex: "EHAM" ou "FIR LFFF — OBSC TS"
+	NearIdx         int            `json:"near_waypoint_idx"`  // index du waypoint le plus pertinent
+	DistanceNM      float64        `json:"distance_nm"`        // pour Points : distance min à la route
+	FIR             string         `json:"fir,omitempty"`      // issuingAirTrafficServicesRegion si dispo
+	WaypointTime    string         `json:"waypoint_time"`      // time du waypoint le plus proche
+	ValidityStart   string         `json:"validity_start,omitempty"`
+	ValidityEnd     string         `json:"validity_end,omitempty"`
+	WaypointInRange bool           `json:"waypoint_in_range"` // true si waypoint.time ∈ [start, end]
+	Properties      map[string]any `json:"properties,omitempty"`
 }
 
 const earthRadiusNM = 3440.065
@@ -79,6 +97,21 @@ func (s *Service) ICAOIndex(ctx context.Context) (map[string][2]float64, error) 
 		}
 	}
 	return idx, nil
+}
+
+// PointFamilies sont les couches WFS Point qu'on scanne pour les events
+// (METAR, TAF, etc.).
+var routePointFamilies = []string{"METAR_last", "TAF_last", "SPECI_last"}
+
+// PolyFamilies sont les couches WFS Polygon qu'on scanne pour les events.
+var routePolyFamilies = []string{
+	"AIRMET_last",
+	"SIGMET_last",
+	"VolcanicAshSIGMET_last",
+	"TropicalCycloneSIGMET_last",
+	"CAT_EURAT01_last",
+	"GIVRAGE_EURAT01_last",
+	"RDT_MSG_last",
 }
 
 // PlanRoute calcule un plan de vol grand cercle entre deux ICAO.
@@ -187,6 +220,274 @@ func profileFL(t, totalMin, cruise, climbMin, descentMin float64) int {
 		return int(peakFL * t / peakT)
 	}
 	return int(peakFL * (totalMin - t) / (totalMin - peakT))
+}
+
+// RouteEvents calcule les événements météo le long d'une route déjà planifiée.
+// - Pour chaque famille Point (METAR/TAF/SPECI), calcule la distance min entre
+//   le point et la route. Garde les features ≤ maxDistNM.
+// - Pour chaque famille Polygon (SIGMET/AIRMET/CAT/GIVRAGE/RDT), test si au
+//   moins un waypoint est dans le polygone. Note si le waypoint correspondant
+//   tombe dans la fenêtre de validité.
+// Trie les événements par moment de passage (waypoint time).
+func (s *Service) RouteEvents(
+	ctx context.Context,
+	plan *RoutePlan,
+	maxDistNM float64,
+) ([]RouteEvent, error) {
+	if plan == nil || len(plan.Waypoints) == 0 {
+		return nil, nil
+	}
+	if maxDistNM <= 0 {
+		maxDistNM = 50
+	}
+
+	var (
+		mu     sync.Mutex
+		events []RouteEvent
+		errs   []error
+		wg     sync.WaitGroup
+	)
+
+	process := func(family string, geomKind string) {
+		defer wg.Done()
+		// Pour les polygones (CAT, GIVRAGE) MetGate publie ~115 zones × 12
+		// fenêtres temporelles = >1000 features. Sans count élevé on ne voit
+		// que la 1ère fenêtre et on rate les events pour des vols futurs.
+		count := 2500
+		if geomKind == "Polygon" {
+			count = 12000
+		}
+		geo, _, err := s.FeatureGeoJSON(ctx, family, count)
+		if err != nil {
+			mu.Lock()
+			errs = append(errs, fmt.Errorf("%s: %w", family, err))
+			mu.Unlock()
+			return
+		}
+		var fc geoJSONFeatureCollection
+		if err := json.Unmarshal(geo, &fc); err != nil {
+			return
+		}
+		for _, f := range fc.Features {
+			ev, ok := matchFeature(plan, f, family, geomKind, maxDistNM)
+			if !ok {
+				continue
+			}
+			// Pour les polygones avec une fenêtre de validité, on ne garde que
+			// si le waypoint qui les croise tombe DANS cette fenêtre — sinon
+			// on remonte des CAT/GIVRAGE valides à d'autres heures.
+			if geomKind == "Polygon" && ev.ValidityStart != "" && !ev.WaypointInRange {
+				continue
+			}
+			mu.Lock()
+			events = append(events, ev)
+			mu.Unlock()
+		}
+	}
+
+	for _, fam := range routePointFamilies {
+		wg.Add(1)
+		go process(fam, "Point")
+	}
+	for _, fam := range routePolyFamilies {
+		wg.Add(1)
+		go process(fam, "Polygon")
+	}
+	wg.Wait()
+
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].WaypointTime < events[j].WaypointTime
+	})
+	return events, nil
+}
+
+// geoJSONFeatureCollection : décodage minimal pour parcourir features.
+type geoJSONFeatureCollection struct {
+	Features []geoJSONFeature `json:"features"`
+}
+
+type geoJSONFeature struct {
+	Geometry   geoJSONGeometry        `json:"geometry"`
+	Properties map[string]interface{} `json:"properties"`
+}
+
+type geoJSONGeometry struct {
+	Type        string          `json:"type"`
+	Coordinates json.RawMessage `json:"coordinates"`
+}
+
+// matchFeature : pour un Point, calcule la distance min à la route ; pour un
+// Polygon/MultiPolygon, cherche le 1er waypoint dans le polygone.
+// Retourne (event, true) si la feature concerne la route.
+func matchFeature(
+	plan *RoutePlan,
+	f geoJSONFeature,
+	family, geomKind string,
+	maxDistNM float64,
+) (RouteEvent, bool) {
+	var ev RouteEvent
+	ev.Family = family
+	ev.Kind = familyKind(family)
+	ev.Properties = compactProps(f.Properties)
+	if fir, ok := f.Properties["issuingAirTrafficServicesRegion"].(string); ok {
+		ev.FIR = strings.TrimSpace(fir)
+	}
+	ev.ValidityStart, _ = f.Properties["validitystarttime"].(string)
+	ev.ValidityEnd, _ = f.Properties["validityendtime"].(string)
+
+	switch f.Geometry.Type {
+	case "Point":
+		var c [2]float64
+		if err := json.Unmarshal(f.Geometry.Coordinates, &c); err != nil {
+			return ev, false
+		}
+		idx, dist := nearestWaypoint(plan, c[1], c[0])
+		if dist > maxDistNM {
+			return ev, false
+		}
+		ev.NearIdx = idx
+		ev.DistanceNM = dist
+		ev.WaypointTime = plan.Waypoints[idx].TimeISO
+		ev.WaypointInRange = isInValidity(ev.WaypointTime, ev.ValidityStart, ev.ValidityEnd)
+		ev.Label = pointLabel(f.Properties, family)
+		return ev, true
+	case "Polygon":
+		var rings [][][]float64
+		if err := json.Unmarshal(f.Geometry.Coordinates, &rings); err != nil {
+			return ev, false
+		}
+		idx, ok := firstWaypointIn(plan, rings)
+		if !ok {
+			return ev, false
+		}
+		ev.NearIdx = idx
+		ev.WaypointTime = plan.Waypoints[idx].TimeISO
+		ev.WaypointInRange = isInValidity(ev.WaypointTime, ev.ValidityStart, ev.ValidityEnd)
+		ev.Label = polyLabel(ev, family)
+		return ev, true
+	case "MultiPolygon":
+		var polys [][][][]float64
+		if err := json.Unmarshal(f.Geometry.Coordinates, &polys); err != nil {
+			return ev, false
+		}
+		bestIdx := -1
+		for _, rings := range polys {
+			idx, ok := firstWaypointIn(plan, rings)
+			if !ok {
+				continue
+			}
+			if bestIdx < 0 || idx < bestIdx {
+				bestIdx = idx
+			}
+		}
+		if bestIdx < 0 {
+			return ev, false
+		}
+		ev.NearIdx = bestIdx
+		ev.WaypointTime = plan.Waypoints[bestIdx].TimeISO
+		ev.WaypointInRange = isInValidity(ev.WaypointTime, ev.ValidityStart, ev.ValidityEnd)
+		ev.Label = polyLabel(ev, family)
+		return ev, true
+	}
+	return ev, false
+}
+
+func familyKind(family string) string {
+	stripped := strings.TrimSuffix(family, "_last")
+	return stripped
+}
+
+func pointLabel(props map[string]interface{}, family string) string {
+	if icao, ok := props["locationIndicatorICAO"].(string); ok && icao != "" {
+		return strings.TrimSuffix(family, "_last") + " " + icao
+	}
+	return strings.TrimSuffix(family, "_last")
+}
+
+func polyLabel(ev RouteEvent, family string) string {
+	stripped := strings.TrimSuffix(family, "_last")
+	if ev.FIR != "" {
+		return stripped + " · FIR " + ev.FIR
+	}
+	return stripped
+}
+
+// compactProps copie une sélection des propriétés utiles (skip les UUID, etc.).
+func compactProps(p map[string]interface{}) map[string]interface{} {
+	if p == nil {
+		return nil
+	}
+	out := map[string]interface{}{}
+	for _, k := range []string{
+		"locationIndicatorICAO", "tac", "status", "cavok",
+		"airTemperature_C", "dewpointTemperature_C", "qnh_hPa",
+		"windDirection_deg", "windSpeed_kt",
+		"issuingAirTrafficServicesRegion", "validitystarttime", "validityendtime",
+		"intensity", "cattype", "altitude", "top", "bottom",
+		"producttype", "severity", "trackingid",
+		"begin_position", "end_position",
+	} {
+		if v, ok := p[k]; ok && v != nil && v != "" {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+func nearestWaypoint(plan *RoutePlan, lat, lon float64) (int, float64) {
+	bestIdx := 0
+	bestDist := math.Inf(1)
+	for i, w := range plan.Waypoints {
+		d := gcDistance(w.Lat, w.Lon, lat, lon)
+		if d < bestDist {
+			bestDist = d
+			bestIdx = i
+		}
+	}
+	return bestIdx, bestDist
+}
+
+// firstWaypointIn retourne l'index du premier waypoint dans le polygone.
+// rings[0] est l'extérieur, rings[1..] sont les trous (ignorés ici).
+func firstWaypointIn(plan *RoutePlan, rings [][][]float64) (int, bool) {
+	if len(rings) == 0 {
+		return 0, false
+	}
+	for i, w := range plan.Waypoints {
+		if pointInRing(w.Lon, w.Lat, rings[0]) {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// pointInRing : ray casting standard (lon en X, lat en Y).
+// ring est une liste de [lon, lat].
+func pointInRing(lon, lat float64, ring [][]float64) bool {
+	in := false
+	n := len(ring)
+	for i, j := 0, n-1; i < n; j, i = i, i+1 {
+		xi, yi := ring[i][0], ring[i][1]
+		xj, yj := ring[j][0], ring[j][1]
+		if ((yi > lat) != (yj > lat)) &&
+			lon < (xj-xi)*(lat-yi)/(yj-yi)+xi {
+			in = !in
+		}
+	}
+	return in
+}
+
+func isInValidity(waypointTime, start, end string) bool {
+	if start == "" {
+		return true
+	}
+	if waypointTime < start {
+		return false
+	}
+	if end != "" && waypointTime >= end {
+		return false
+	}
+	return true
 }
 
 // gcDistance retourne la distance grand cercle (NM) entre deux points en deg.

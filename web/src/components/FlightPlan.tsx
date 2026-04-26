@@ -1,6 +1,17 @@
 import { useMemo, useState } from 'react'
 import { useMap, Source, Layer, Marker } from 'react-map-gl/maplibre'
-import { Plane, Play, Pause, X } from 'lucide-react'
+import {
+  AlertTriangle,
+  Cloud,
+  CloudSnow,
+  Mountain,
+  Plane,
+  Play,
+  Pause,
+  Wind as WindIcon,
+  X,
+  Zap,
+} from 'lucide-react'
 
 export interface Waypoint {
   lon: number
@@ -8,6 +19,20 @@ export interface Waypoint {
   fl: number
   time: string
   dist_nm: number
+}
+
+export interface RouteEvent {
+  kind: string
+  family: string
+  label: string
+  near_waypoint_idx: number
+  distance_nm: number
+  fir?: string
+  waypoint_time: string
+  validity_start?: string
+  validity_end?: string
+  waypoint_in_range: boolean
+  properties?: Record<string, unknown>
 }
 
 export interface RoutePlan {
@@ -20,6 +45,7 @@ export interface RoutePlan {
   distance_nm: number
   duration_min: number
   waypoints: Waypoint[]
+  events?: RouteEvent[]
 }
 
 interface FlightPlanProps {
@@ -55,7 +81,7 @@ export default function FlightPlan({
     setLoading(true)
     setError(null)
     try {
-      const url = `/api/route?dep=${encodeURIComponent(dep.toUpperCase())}&arr=${encodeURIComponent(arr.toUpperCase())}&fl=${fl}&gs=${gs}`
+      const url = `/api/route?dep=${encodeURIComponent(dep.toUpperCase())}&arr=${encodeURIComponent(arr.toUpperCase())}&fl=${fl}&gs=${gs}&events=1`
       const r = await fetch(url)
       if (!r.ok) {
         const txt = await r.text()
@@ -250,6 +276,14 @@ export default function FlightPlan({
                 {cursorIdx + 1}/{plan.waypoints.length}
               </span>
             </div>
+
+            {plan.events && plan.events.length > 0 && (
+              <EventsList
+                events={plan.events}
+                cursorIdx={cursorIdx}
+                onJump={(i) => onCursorChange(i)}
+              />
+            )}
           </>
         )}
       </div>
@@ -311,4 +345,109 @@ function bearingDeg(lat1: number, lon1: number, lat2: number, lon2: number): num
   const x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl)
   const b = (Math.atan2(y, x) * 180) / Math.PI
   return (b + 360) % 360
+}
+
+// ============================================================================
+// Liste des événements rencontrés (Phase B)
+// ============================================================================
+
+function EventsList({
+  events,
+  cursorIdx,
+  onJump,
+}: {
+  events: RouteEvent[]
+  cursorIdx: number
+  onJump: (idx: number) => void
+}) {
+  return (
+    <div className="mt-2 pt-2 border-t border-slate-800/60">
+      <div className="flex items-center justify-between text-[9px] uppercase tracking-wider text-slate-500 mb-1.5">
+        <span>Événements rencontrés</span>
+        <span className="font-mono">{events.length}</span>
+      </div>
+      <ul className="max-h-44 overflow-y-auto space-y-0.5 pr-1">
+        {events.map((ev, i) => (
+          <EventRow
+            key={i}
+            ev={ev}
+            active={cursorIdx === ev.near_waypoint_idx}
+            onClick={() => onJump(ev.near_waypoint_idx)}
+          />
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+function EventRow({
+  ev,
+  active,
+  onClick,
+}: {
+  ev: RouteEvent
+  active: boolean
+  onClick: () => void
+}) {
+  const Icon = iconForKind(ev.kind)
+  const color = colorForKind(ev.kind)
+  const t = ev.waypoint_time.match(/T(\d{2}:\d{2})/)?.[1] ?? ''
+  const tac = ev.properties?.tac as string | undefined
+  const intensity = ev.properties?.intensity as string | undefined
+  const top = ev.properties?.top as string | undefined
+  const bottom = ev.properties?.bottom as string | undefined
+
+  return (
+    <li>
+      <button
+        onClick={onClick}
+        className={`w-full text-left px-2 py-1 rounded text-[10px] transition border ${
+          active
+            ? 'border-emerald-400/40 bg-emerald-500/10'
+            : 'border-transparent hover:bg-slate-800/40'
+        }`}
+        title={tac || ev.label}
+      >
+        <div className="flex items-center gap-1.5">
+          <Icon className={`size-3 shrink-0 ${color}`} />
+          <span className="font-mono text-slate-300 flex-shrink-0">{t}</span>
+          <span className="font-medium text-slate-200 truncate">{ev.label}</span>
+          {ev.distance_nm > 0 && (
+            <span className="ml-auto text-slate-500 font-mono shrink-0">
+              {ev.distance_nm.toFixed(0)} NM
+            </span>
+          )}
+        </div>
+        {(intensity || top || bottom) && (
+          <div className="text-[9px] text-slate-500 font-mono pl-4 mt-0.5">
+            {intensity && `int=${intensity}`}{' '}
+            {bottom && top && `${(parseInt(bottom) / 0.3048 / 100).toFixed(0)}–${(parseInt(top) / 0.3048 / 100).toFixed(0)} FL`}
+          </div>
+        )}
+      </button>
+    </li>
+  )
+}
+
+function iconForKind(k: string) {
+  if (k === 'METAR' || k === 'SPECI') return Cloud
+  if (k === 'TAF') return CloudSnow
+  if (k.includes('SIGMET') || k.includes('AIRMET')) return AlertTriangle
+  if (k === 'CAT_EURAT01') return WindIcon
+  if (k === 'GIVRAGE_EURAT01') return CloudSnow
+  if (k === 'RDT_MSG') return Zap
+  if (k.includes('Volcanic')) return Mountain
+  return Cloud
+}
+
+function colorForKind(k: string) {
+  if (k === 'METAR' || k === 'SPECI') return 'text-sky-400'
+  if (k === 'TAF') return 'text-violet-400'
+  if (k.includes('SIGMET')) return 'text-rose-400'
+  if (k.includes('AIRMET')) return 'text-amber-400'
+  if (k === 'CAT_EURAT01') return 'text-fuchsia-400'
+  if (k === 'GIVRAGE_EURAT01') return 'text-cyan-300'
+  if (k === 'RDT_MSG') return 'text-pink-400'
+  if (k.includes('Volcanic')) return 'text-orange-400'
+  return 'text-slate-400'
 }

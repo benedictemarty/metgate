@@ -188,6 +188,12 @@ func (a *API) handleRoute(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if q.Get("events") == "1" || q.Get("events") == "true" {
+		events, err := a.catalog.RouteEvents(r.Context(), plan, 50)
+		if err == nil {
+			plan.Events = events
+		}
+	}
 	writeJSON(w, http.StatusOK, plan)
 }
 
