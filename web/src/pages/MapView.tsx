@@ -20,6 +20,8 @@ import {
   X,
 } from 'lucide-react'
 import WindLayer from '../components/WindLayer'
+import TropoLayer from '../components/TropoLayer'
+import { Mountain } from 'lucide-react'
 import type { Aggregate, Family } from '../types'
 
 interface MapViewProps {
@@ -256,6 +258,7 @@ export default function MapView({ data }: MapViewProps) {
   const [windEnabled, setWindEnabled] = useState(false)
   const [windDataset, setWindDataset] = useState<'WIND' | 'JET'>('WIND')
   const [windLevelPa, setWindLevelPa] = useState(85000) // 850 hPa par défaut
+  const [tropoEnabled, setTropoEnabled] = useState(false)
 
   const candidates: Family[] = useMemo(() => {
     if (!data) return []
@@ -514,6 +517,7 @@ export default function MapView({ data }: MapViewProps) {
         })}
 
         <WindLayer enabled={windEnabled} dataset={windDataset} level={windLevelPa} />
+        <TropoLayer enabled={tropoEnabled} />
 
         {popup && (
           <Popup
@@ -547,20 +551,34 @@ export default function MapView({ data }: MapViewProps) {
         onToggleLayer={toggle}
       />
 
-      {/* Toggle vent + sélecteur de niveau, en haut à droite */}
+      {/* Toggles WCS (Vent / Tropopause) en haut à droite */}
       <div className="absolute top-4 right-4 z-10 flex flex-col items-end gap-2">
-        <button
-          onClick={() => setWindEnabled((v) => !v)}
-          className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
-            windEnabled
-              ? 'border-cyan-400/50 bg-cyan-500/20 text-cyan-100 shadow-[0_0_15px_rgba(34,211,238,0.25)]'
-              : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
-          }`}
-          title="Particules de vent (WCS WIND)"
-        >
-          <WindIcon className="size-4" />
-          Vent
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => setTropoEnabled((v) => !v)}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
+              tropoEnabled
+                ? 'border-amber-400/50 bg-amber-500/20 text-amber-100 shadow-[0_0_15px_rgba(245,158,11,0.25)]'
+                : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
+            }`}
+            title="Altitude de la tropopause (raster colorisé)"
+          >
+            <Mountain className="size-4" />
+            Tropopause
+          </button>
+          <button
+            onClick={() => setWindEnabled((v) => !v)}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
+              windEnabled
+                ? 'border-cyan-400/50 bg-cyan-500/20 text-cyan-100 shadow-[0_0_15px_rgba(34,211,238,0.25)]'
+                : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
+            }`}
+            title="Particules de vent (WCS WIND/JET)"
+          >
+            <WindIcon className="size-4" />
+            Vent
+          </button>
+        </div>
 
         {windEnabled && (
           <WindLevelSelector

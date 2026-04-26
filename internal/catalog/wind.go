@@ -151,6 +151,36 @@ func (s *Service) latestCoverageID(ctx context.Context, prefix string) (string, 
 	return candidates[len(candidates)-1], nil
 }
 
+// tempNetCDF est un wrapper léger autour d'un fichier temporaire qui contient
+// le NetCDF retourné par MetGate. La lib batchatco/go-native-netcdf veut un
+// chemin sur disque, pas un reader.
+type tempNetCDF struct {
+	path string
+}
+
+func (t *tempNetCDF) cleanup() {
+	if t.path != "" {
+		_ = os.Remove(t.path)
+	}
+}
+
+func writeTempNetCDF(body []byte) (*tempNetCDF, error) {
+	tmp, err := os.CreateTemp("", "metgate-nc-*.nc")
+	if err != nil {
+		return nil, err
+	}
+	defer tmp.Close()
+	if _, err := io.Copy(tmp, bytes.NewReader(body)); err != nil {
+		_ = os.Remove(tmp.Name())
+		return nil, err
+	}
+	return &tempNetCDF{path: tmp.Name()}, nil
+}
+
+func openNetCDF(path string) (api.Group, error) {
+	return netcdf.Open(path)
+}
+
 func trimSpaces(s string) string {
 	out := make([]byte, 0, len(s))
 	for i := 0; i < len(s); i++ {

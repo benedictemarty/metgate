@@ -28,6 +28,7 @@ func (a *API) Routes() *http.ServeMux {
 	m.HandleFunc("GET /api/raw", a.proxyTo("/broker_service/RAW"))
 	m.HandleFunc("GET /api/feature", a.handleFeature)
 	m.HandleFunc("GET /api/wind", a.handleWind)
+	m.HandleFunc("GET /api/tropo", a.handleTropo)
 	m.Handle("GET /", web.Handler())
 	return m
 }
@@ -100,6 +101,27 @@ func (a *API) handleWind(w http.ResponseWriter, r *http.Request) {
 	}
 	allSteps := r.URL.Query().Get("allSteps") == "1" || r.URL.Query().Get("allSteps") == "true"
 	grid, err := a.catalog.WindGrid(r.Context(), dataset, level, bbox, allSteps)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, http.StatusOK, grid)
+}
+
+// handleTropo récupère le coverage TROPO le plus récent et renvoie la
+// grille d'altitude tropopause sur tous les timesteps.
+// Usage: /api/tropo?bbox=-15,35,30,65
+func (a *API) handleTropo(w http.ResponseWriter, r *http.Request) {
+	bboxStr := r.URL.Query().Get("bbox")
+	if bboxStr == "" {
+		bboxStr = "-15,35,30,65"
+	}
+	var bbox [4]float64
+	if _, err := fmt.Sscanf(bboxStr, "%f,%f,%f,%f", &bbox[0], &bbox[1], &bbox[2], &bbox[3]); err != nil {
+		http.Error(w, "bbox invalide", http.StatusBadRequest)
+		return
+	}
+	grid, err := a.catalog.TropoGrid(r.Context(), bbox)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
