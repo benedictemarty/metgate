@@ -316,20 +316,18 @@ export default function MapView({ data }: MapViewProps) {
   }, [slots, selectedSlot])
 
   // Re-filter chaque couche quand le slot ou le mode trails change.
+  // Toujours produire de nouvelles entrées : même quand le count reste
+  // identique (T+0 vs T+15 = 297 features dans les deux cas), le contenu
+  // a changé et la carte doit le voir pour re-render la Source.
   useEffect(() => {
     setLoaded((prev) => {
+      if (Object.keys(prev).length === 0) return prev
       const next: Record<string, FetchedLayer> = {}
-      let changed = false
       for (const [name, l] of Object.entries(prev)) {
         const filtered = filterBySlot(l.rawData, selectedSlot, showTrails)
-        if (filtered.features.length === l.data.features.length) {
-          next[name] = { ...l, data: filtered, count: filtered.features.length }
-          continue
-        }
         next[name] = { ...l, data: filtered, count: filtered.features.length }
-        changed = true
       }
-      return changed ? next : prev
+      return next
     })
   }, [selectedSlot, showTrails])
 
