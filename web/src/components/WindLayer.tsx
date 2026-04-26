@@ -328,8 +328,11 @@ export default function WindLayer({
             </div>
           )}
           {linkedInstant && (
-            <div className="text-[9px] text-cyan-300/70 italic">
-              synchronisé · step {effectiveStepIdx + 1}/{grid.steps.length}
+            <div className="text-[9px] text-cyan-300/70 italic flex items-center justify-between gap-2">
+              <span>synchro · step {effectiveStepIdx + 1}/{grid.steps.length}</span>
+              <span className="text-cyan-300/60 font-mono normal-case">
+                Δ{deltaMinutes(linkedInstant, currentStep.time)} min
+              </span>
             </div>
           )}
         </div>
@@ -342,6 +345,17 @@ function fmtStepTime(iso: string): string {
   const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/)
   if (!m) return iso
   return `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]} UTC`
+}
+
+// Écart en minutes (signé) entre instant demandé et timestamp du step retenu.
+// Indique si on est en interpolation/extrapolation au-delà du step idéal.
+function deltaMinutes(linked: string, stepTime: string): string {
+  const a = Date.parse(linked)
+  const b = Date.parse(stepTime)
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return '?'
+  const d = Math.round((a - b) / 60_000)
+  if (d === 0) return '0'
+  return d > 0 ? `+${d}` : `${d}`
 }
 
 function spawnParticle(g: WindGrid): Particle {

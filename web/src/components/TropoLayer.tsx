@@ -247,9 +247,12 @@ export default function TropoLayer({ enabled, linkedInstant, onTimesLoaded }: Tr
               </span>
             </div>
           )}
-          {linkedInstant && (
-            <div className="text-[9px] text-amber-300/70 italic">
-              synchronisé · step {effectiveStepIdx + 1}/{grid.steps.length}
+          {linkedInstant && step && (
+            <div className="text-[9px] text-amber-300/70 italic flex items-center justify-between gap-2">
+              <span>synchro · step {effectiveStepIdx + 1}/{grid.steps.length}</span>
+              <span className="text-amber-300/60 font-mono normal-case">
+                Δ{tropoDeltaMin(linkedInstant, step.time)} min
+              </span>
             </div>
           )}
           {/* Mini-légende palette */}
@@ -268,6 +271,15 @@ export default function TropoLayer({ enabled, linkedInstant, onTimesLoaded }: Tr
       )}
     </>
   )
+}
+
+function tropoDeltaMin(linked: string, stepTime: string): string {
+  const a = Date.parse(linked)
+  const b = Date.parse(stepTime)
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return '?'
+  const d = Math.round((a - b) / 60_000)
+  if (d === 0) return '0'
+  return d > 0 ? `+${d}` : `${d}`
 }
 
 function palette(t: number): [number, number, number] {

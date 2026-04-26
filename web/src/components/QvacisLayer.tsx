@@ -239,9 +239,12 @@ export default function QvacisLayer({
               </span>
             </div>
           )}
-          {linkedInstant && (
-            <div className="text-[9px] text-orange-300/70 italic">
-              synchronisé · step {effectiveStepIdx + 1}/{grid.steps.length}
+          {linkedInstant && step && (
+            <div className="text-[9px] text-orange-300/70 italic flex items-center justify-between gap-2">
+              <span>synchro · step {effectiveStepIdx + 1}/{grid.steps.length}</span>
+              <span className="text-orange-300/60 font-mono normal-case">
+                Δ{qvacisDeltaMin(linkedInstant, step.time)} min
+              </span>
             </div>
           )}
           <div className="flex items-center gap-1 mt-1">
@@ -262,6 +265,15 @@ export default function QvacisLayer({
       )}
     </>
   )
+}
+
+function qvacisDeltaMin(linked: string, stepTime: string): string {
+  const a = Date.parse(linked)
+  const b = Date.parse(stepTime)
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return '?'
+  const d = Math.round((a - b) / 60_000)
+  if (d === 0) return '0'
+  return d > 0 ? `+${d}` : `${d}`
 }
 
 // ashColor : palette logarithmique pour les concentrations en mg/m³
