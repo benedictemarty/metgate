@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { useMap, Source, Layer, Marker } from 'react-map-gl/maplibre'
+import { useMap, Source, Layer, Marker, Popup } from 'react-map-gl/maplibre'
 import {
   Activity,
   AlertOctagon,
@@ -106,6 +106,7 @@ export default function FlightPlan({
   const [gs, setGS] = useState(450)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [selectedEvent, setSelectedEvent] = useState<RouteEvent | null>(null)
 
   const submit = async () => {
     setLoading(true)
@@ -407,7 +408,26 @@ export default function FlightPlan({
             <EventMarkers
               events={plan.events}
               cursorIdx={cursorIdx >= 0 ? cursorIdx : 0}
+              onSelect={setSelectedEvent}
             />
+          )}
+          {selectedEvent && (
+            <Popup
+              longitude={selectedEvent.lon}
+              latitude={selectedEvent.lat}
+              anchor="bottom"
+              offset={14}
+              closeOnClick={false}
+              closeButton={false}
+              onClose={() => setSelectedEvent(null)}
+              maxWidth="380px"
+              className="metgate-popup"
+            >
+              <BulletinPopup
+                ev={selectedEvent}
+                onClose={() => setSelectedEvent(null)}
+              />
+            </Popup>
           )}
         </>
       )}
@@ -424,9 +444,11 @@ const EVENT_WINDOW = 8 // nb de waypoints autour du cursor où l'event est visib
 function EventMarkers({
   events,
   cursorIdx,
+  onSelect,
 }: {
   events: RouteEvent[]
   cursorIdx: number
+  onSelect: (ev: RouteEvent) => void
 }) {
   return (
     <>
@@ -444,19 +466,24 @@ function EventMarkers({
             latitude={ev.lat}
             anchor="bottom"
           >
-            <div
+            <button
+              type="button"
               style={{
                 opacity: o,
                 transition: 'opacity 200ms ease',
               }}
-              className={triangleColorClass(ev.kind)}
-              title={(ev.properties?.tac as string) || ev.label}
+              className={`${triangleColorClass(ev.kind)} cursor-pointer hover:scale-125 transition-transform`}
+              title={(ev.properties?.tac as string) || `${ev.label} — clic pour détail`}
+              onClick={(e) => {
+                e.stopPropagation()
+                onSelect(ev)
+              }}
             >
               {isPointKind(ev.kind) ? <ProductDot /> : <EventTriangle />}
               <div className="text-[8px] font-mono text-center -mt-0.5 text-slate-200 leading-none whitespace-nowrap">
                 {triangleLabel(ev)}
               </div>
-            </div>
+            </button>
           </Marker>
         )
       })}
@@ -946,5 +973,159 @@ function Sparkline({ values, cursorIdx }: { values: number[]; cursorIdx: number 
         strokeWidth="1"
       />
     </svg>
+  )
+}
+
+// ============================================================================
+// Popup affichant le bulletin / contenu détaillé d'un produit cliqué
+// ============================================================================
+
+const POPUP_EXCLUDE_KEYS = new Set([
+  'message_id',
+  'gml_id',
+  'ogc_fid',
+  'swpid',
+  'opmet_msg',
+  'tac',
+  'cavok',
+])
+
+function fmtKey(k: string): string {
+  return k
+    .replace(/_uom$/, '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^\w/, (c) => c.toUpperCase())
+}
+
+function fmtVal(v: unknown, key: string, props: Record<string, unknown>): string {
+  if (v === null || v === undefined) return ''
+  if (typeof v === 'boolean') return v ? 'yes' : 'no'
+  let s = String(v)
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):/)
+  if (m) s = `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]} UTC`
+  const uom = props[`${key}_uom`]
+  if (typeof uom === 'string' && uom !== '') s += ' ' + uom
+  return s
+}
+
+function BulletinPopup({
+  ev,
+  onClose,
+}: {
+  ev: RouteEvent
+  onClose: () => void
+}) {
+  const props = (ev.properties ?? {}) as Record<string, unknown>
+  const tac = props.tac as string | undefined
+  const cavok = props.cavok === true
+  const colorCls = triangleColorClass(ev.kind)
+  const headerTitle =
+    (props.locationIndicatorICAO as string | undefined) ||
+    (props.trackingid as string | undefined) ||
+    ev.fir ||
+    ev.label
+
+  // Champs scalaires utiles à montrer (en-dehors des UUIDs et du TAC)
+  const fields: Array<[string, string]> = []
+  for (const [k, v] of Object.entries(props)) {
+    if (POPUP_EXCLUDE_KEYS.has(k)) continue
+    if (k.endsWith('_uom')) continue
+    if (typeof v === 'object') continue
+    const s = fmtVal(v, k, props)
+    if (s !== '') fields.push([fmtKey(k), s])
+  }
+
+  return (
+    <div className="font-sans text-slate-100">
+      <div className="flex items-start justify-between gap-3 mb-2">
+        <div className="min-w-0">
+          <div
+            className={`text-base font-semibold tracking-tight truncate ${colorCls}`}
+          >
+            {headerTitle}
+          </div>
+          <div className="text-[10px] uppercase tracking-wider text-slate-400">
+            {ev.kind.replace('_last', '')}
+            {ev.fir && ev.fir !== headerTitle && ` · FIR ${ev.fir}`}
+          </div>
+        </div>
+        <button
+          onClick={onClose}
+          className="text-slate-500 hover:text-slate-200 transition shrink-0"
+          aria-label="Fermer"
+        >
+          <X className="size-4" />
+        </button>
+      </div>
+
+      {/* Fenêtre de validité */}
+      {(ev.validity_start || ev.validity_end) && (
+        <div className="text-[10px] text-slate-400 font-mono mb-2 flex justify-between gap-2">
+          <span>
+            {ev.validity_start
+              ? ev.validity_start.replace('T', ' ').replace('Z', '')
+              : '—'}
+          </span>
+          <span>→</span>
+          <span>
+            {ev.validity_end
+              ? ev.validity_end.replace('T', ' ').replace('Z', '')
+              : '—'}
+          </span>
+        </div>
+      )}
+
+      {/* Distance / position du waypoint le plus proche */}
+      <div className="text-[10px] text-slate-500 font-mono mb-2 flex justify-between">
+        <span>
+          passage {ev.waypoint_time.replace('T', ' ').replace('Z', ' UTC')}
+        </span>
+        {ev.distance_nm > 0 && <span>à {ev.distance_nm.toFixed(0)} NM</span>}
+      </div>
+
+      {/* TAC en mono si dispo */}
+      {tac && (
+        <pre className="text-[11px] font-mono text-slate-200 bg-slate-950/70 border border-slate-800/60 rounded-md p-2 whitespace-pre-wrap break-words mb-2">
+          {tac}
+        </pre>
+      )}
+
+      {/* Tableau des champs scalaires */}
+      {fields.length > 0 && (
+        <dl className="text-[10px] max-h-56 overflow-y-auto pr-1 mb-2">
+          {fields.map(([k, v]) => (
+            <div
+              key={k}
+              className="flex justify-between gap-3 py-0.5 border-b border-slate-800/40 last:border-0"
+            >
+              <dt className="text-slate-500 shrink-0">{k}</dt>
+              <dd
+                className="text-slate-200 font-mono text-right truncate"
+                title={v}
+              >
+                {v}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+
+      {/* Badges status */}
+      <div className="flex items-center gap-2 text-[10px]">
+        {cavok && (
+          <span className="px-1.5 py-0.5 rounded bg-emerald-900/40 text-emerald-300 border border-emerald-800/60">
+            CAVOK
+          </span>
+        )}
+        {ev.waypoint_in_range === false && (
+          <span className="px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300 border border-amber-800/60">
+            Hors fenêtre
+          </span>
+        )}
+      </div>
+    </div>
   )
 }
