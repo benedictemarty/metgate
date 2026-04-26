@@ -210,9 +210,16 @@ export default function FlightPlan({
               </div>
             </div>
             {cur && (
-              <div className="mt-2 pt-2 border-t border-slate-800/60 text-[10px] font-mono text-slate-300 space-y-0.5">
-                <div>{cur.time.replace('T', ' ').replace('Z', ' UTC')}</div>
-                <div className="flex justify-between text-slate-500">
+              <div className="mt-2 pt-2 border-t border-slate-800/60 font-mono space-y-1">
+                <div className="flex items-baseline justify-between">
+                  <span className="text-emerald-200 text-base font-semibold tracking-tight tabular-nums">
+                    FL{cur.fl.toString().padStart(3, '0')}
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    {cur.time.replace('T', ' ').replace('Z', ' UTC')}
+                  </span>
+                </div>
+                <div className="flex justify-between text-[10px] text-slate-500">
                   <span>
                     {cur.lat.toFixed(2)}°N {cur.lon.toFixed(2)}°E
                   </span>
