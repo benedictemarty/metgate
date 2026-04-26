@@ -92,13 +92,32 @@ interface FetchedLayer {
 
 // MetGate publie pour beaucoup de produits prévisionnels (RDT_MSG, CAT,
 // GIVRAGE...) plusieurs features par cellule/zone, une par fenêtre de
-// validité (validitystarttime). On les sépare avec un slider temporel ;
-// les features sans validitystarttime (cas METAR/TAF/SIGMET/...) sont
-// toujours affichées quel que soit le slot choisi.
+// validité [validitystarttime, validityendtime). Le slider sélectionne un
+// instant T, et on affiche les features dont la fenêtre contient T. Les
+// features sans validitystarttime (METAR/TAF/SIGMET/...) sont toujours
+// affichées quel que soit l'instant choisi.
 function featureValiditySlot(f: GeoJSON.Feature): string | null {
   const v = (f.properties as Record<string, unknown> | null)?.validitystarttime
   if (typeof v !== 'string' || v === '') return null
   return v
+}
+
+function featureValidityEnd(f: GeoJSON.Feature): string | null {
+  const v = (f.properties as Record<string, unknown> | null)?.validityendtime
+  if (typeof v !== 'string' || v === '') return null
+  return v
+}
+
+// Vrai si la feature est valide à l'instant donné (ISO string lex-comparable).
+// Les features sans start sont toujours valides ; sans end on assume une
+// fenêtre ouverte (visible dès lors que start <= instant).
+function isValidAt(f: GeoJSON.Feature, instant: string): boolean {
+  const start = featureValiditySlot(f)
+  if (start === null) return true
+  if (start > instant) return false
+  const end = featureValidityEnd(f)
+  if (end !== null && end <= instant) return false
+  return true
 }
 
 // Calcule l'opacité dégressive selon forecasttime (en minutes, 0..60+).
@@ -142,13 +161,12 @@ function filterBySlot(
   const base = (() => {
     if (slot === null && !showTrails) return geo.features
     return geo.features.filter((f) => {
-      const v = featureValiditySlot(f)
       const props = f.properties as Record<string, unknown> | null
       const ftRaw = props?.forecasttime
       const hasForecast = ftRaw !== undefined && ftRaw !== null && ftRaw !== ''
       if (showTrails && hasForecast) return true
-      if (v === null) return true
-      return v === slot
+      if (slot === null) return true
+      return isValidAt(f, slot)
     })
   })()
 
@@ -159,10 +177,15 @@ function filterBySlot(
   return { ...geo, features }
 }
 
-// True dès qu'au moins une couche chargée a des features avec forecasttime > 0
-// (typiquement RDT_MSG). Sert à activer/désactiver le bouton Trails.
-function hasTrailableLayer(layers: Record<string, FetchedLayer>): boolean {
-  for (const l of Object.values(layers)) {
+// True dès qu'au moins une couche ACTIVE (chargée + cochée) a des features
+// avec forecasttime > 0 (typiquement RDT_MSG). Le bouton Trails se cache
+// quand la couche est désactivée.
+function hasTrailableLayer(
+  layers: Record<string, FetchedLayer>,
+  active: Set<string>,
+): boolean {
+  for (const [name, l] of Object.entries(layers)) {
+    if (!active.has(name)) continue
     for (const f of l.rawData.features) {
       const ft = (f.properties as Record<string, unknown> | null)?.forecasttime
       if (ft === undefined || ft === null || ft === '') continue
@@ -173,9 +196,13 @@ function hasTrailableLayer(layers: Record<string, FetchedLayer>): boolean {
   return false
 }
 
-function collectSlots(layers: Record<string, FetchedLayer>): string[] {
+function collectSlots(
+  layers: Record<string, FetchedLayer>,
+  active: Set<string>,
+): string[] {
   const set = new Set<string>()
-  for (const l of Object.values(layers)) {
+  for (const [name, l] of Object.entries(layers)) {
+    if (!active.has(name)) continue
     for (const f of l.rawData.features) {
       const v = featureValiditySlot(f)
       if (v !== null) set.add(v)
@@ -300,7 +327,7 @@ export default function MapView({ data }: MapViewProps) {
     })
   }
 
-  const slots = useMemo(() => collectSlots(loaded), [loaded])
+  const slots = useMemo(() => collectSlots(loaded, active), [loaded, active])
 
   // Sélection automatique d'un slot par défaut quand les couches arrivent ou
   // changent. Si le slot courant n'est plus dans la liste, on retombe sur
@@ -345,7 +372,10 @@ export default function MapView({ data }: MapViewProps) {
   }, [playing, slots])
 
   const showTimeSlider = slots.length > 1
-  const trailsAvailable = useMemo(() => hasTrailableLayer(loaded), [loaded])
+  const trailsAvailable = useMemo(
+    () => hasTrailableLayer(loaded, active),
+    [loaded, active],
+  )
 
   const interactiveLayerIds = useMemo(() => {
     const ids: string[] = []
