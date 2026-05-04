@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"net/url"
+
+	"github.com/bmarty/metgate/internal/ncutil"
 )
 
 // TropoStep est un timestep d'un coverage TROPO. Alt est l'altitude de la
@@ -53,17 +55,11 @@ func (s *Service) TropoGrid(ctx context.Context, bbox [4]float64) (*TropoGrid, e
 }
 
 func decodeTropoNetCDF(coverageID string, bbox [4]float64, body []byte) (*TropoGrid, error) {
-	tmp, err := writeTempNetCDF(body)
+	nc, cleanup, err := ncutil.OpenBytes(body)
 	if err != nil {
 		return nil, err
 	}
-	defer tmp.cleanup()
-
-	nc, err := openNetCDF(tmp.path)
-	if err != nil {
-		return nil, err
-	}
-	defer nc.Close()
+	defer cleanup()
 
 	timeAxis, err := readFloat64Var(nc, "time")
 	if err != nil {

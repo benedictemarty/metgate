@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/bmarty/metgate/internal/ncutil"
 )
 
 // QvacisStep est un timestep d'un coverage QVACIS pour un FL donné. Conc est
@@ -102,17 +104,11 @@ func decodeQvacisNetCDF(
 	bbox [4]float64,
 	body []byte,
 ) (*QvacisGrid, error) {
-	tmp, err := writeTempNetCDF(body)
+	nc, cleanup, err := ncutil.OpenBytes(body)
 	if err != nil {
 		return nil, err
 	}
-	defer tmp.cleanup()
-
-	nc, err := openNetCDF(tmp.path)
-	if err != nil {
-		return nil, err
-	}
-	defer nc.Close()
+	defer cleanup()
 
 	// time est en minutes since 1970-01-01 (Unix epoch minutes), int32.
 	tv, err := nc.GetVariable("time")

@@ -1,20 +1,17 @@
 package catalog
 
 import (
-	"bytes"
 	"context"
 	"encoding/xml"
 	"fmt"
-	"io"
 	"math"
 	"net/url"
-	"os"
 	"sort"
 	"strings"
 	"time"
 
-	"github.com/batchatco/go-native-netcdf/netcdf"
 	"github.com/batchatco/go-native-netcdf/netcdf/api"
+	"github.com/bmarty/metgate/internal/ncutil"
 )
 
 // WindStep est un timestep individuel d'un coverage WIND. U et V sont en m/s,
@@ -151,36 +148,6 @@ func (s *Service) latestCoverageID(ctx context.Context, prefix string) (string, 
 	return candidates[len(candidates)-1], nil
 }
 
-// tempNetCDF est un wrapper léger autour d'un fichier temporaire qui contient
-// le NetCDF retourné par MetGate. La lib batchatco/go-native-netcdf veut un
-// chemin sur disque, pas un reader.
-type tempNetCDF struct {
-	path string
-}
-
-func (t *tempNetCDF) cleanup() {
-	if t.path != "" {
-		_ = os.Remove(t.path)
-	}
-}
-
-func writeTempNetCDF(body []byte) (*tempNetCDF, error) {
-	tmp, err := os.CreateTemp("", "metgate-nc-*.nc")
-	if err != nil {
-		return nil, err
-	}
-	defer tmp.Close()
-	if _, err := io.Copy(tmp, bytes.NewReader(body)); err != nil {
-		_ = os.Remove(tmp.Name())
-		return nil, err
-	}
-	return &tempNetCDF{path: tmp.Name()}, nil
-}
-
-func openNetCDF(path string) (api.Group, error) {
-	return netcdf.Open(path)
-}
-
 func trimSpaces(s string) string {
 	out := make([]byte, 0, len(s))
 	for i := 0; i < len(s); i++ {
@@ -203,24 +170,11 @@ func decodeWindNetCDF(
 	body []byte,
 	allSteps bool,
 ) (*WindGrid, error) {
-	// La lib batchatco/go-native-netcdf veut un fichier sur disque (pas un
-	// reader). On écrit le body dans un fichier temporaire.
-	tmp, err := os.CreateTemp("", "metgate-wind-*.nc")
+	nc, cleanup, err := ncutil.OpenBytes(body)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
-	if _, err := io.Copy(tmp, bytes.NewReader(body)); err != nil {
-		_ = tmp.Close()
-		return nil, err
-	}
-	_ = tmp.Close()
-
-	nc, err := netcdf.Open(tmp.Name())
-	if err != nil {
-		return nil, fmt.Errorf("netcdf open: %w", err)
-	}
-	defer nc.Close()
+	defer cleanup()
 
 	timeAxis, err := readFloat64Var(nc, "time")
 	if err != nil {
