@@ -3,8 +3,8 @@ package catalog
 import (
 	"context"
 	"encoding/xml"
-	"errors"
 	"fmt"
+	"log"
 	"regexp"
 	"sort"
 	"strings"
@@ -30,6 +30,10 @@ type Aggregate struct {
 	RAW       ServiceCatalog `json:"raw"`
 	WFS       ServiceCatalog `json:"wfs"`
 	WCS       ServiceCatalog `json:"wcs"`
+	// PartialFailures liste les services qui ont échoué (RAW/WFS/WCS).
+	// Présent (et non vide) en cas de succès partiel ; à exposer via
+	// X-Partial-Errors côté handler.
+	PartialFailures []string `json:"partial_failures,omitempty"`
 }
 
 // versionSuffix matche les suffixes qui distinguent les versions d'un produit.
@@ -46,7 +50,10 @@ func familyOf(s string) string {
 	return versionSuffix.ReplaceAllString(strings.TrimSpace(s), "")
 }
 
-// AggregateProducts interroge RAW + WFS + WCS en parallèle et agrège par famille.
+// AggregateProducts interroge RAW + WFS + WCS en parallèle et agrège par
+// famille. Les échecs partiels (un service KO sur trois) sont remontés via
+// `Aggregate.PartialFailures` et loggés ; on ne renvoie une erreur que si
+// les trois services ont échoué (le frontend n'a alors rien à afficher).
 func (s *Service) AggregateProducts(ctx context.Context) (*Aggregate, error) {
 	var (
 		wg                   sync.WaitGroup
@@ -97,15 +104,31 @@ func (s *Service) AggregateProducts(ctx context.Context) (*Aggregate, error) {
 	}()
 
 	wg.Wait()
-	if err := errors.Join(rawErr, wfsErr, wcsE); err != nil {
-		return nil, err
+
+	var failures []string
+	if rawErr != nil {
+		log.Printf("AggregateProducts RAW: %v", rawErr)
+		failures = append(failures, "RAW")
+	}
+	if wfsErr != nil {
+		log.Printf("AggregateProducts WFS: %v", wfsErr)
+		failures = append(failures, "WFS")
+	}
+	if wcsE != nil {
+		log.Printf("AggregateProducts WCS: %v", wcsE)
+		failures = append(failures, "WCS")
+	}
+	// Trois services KO → catalogue vide, on remonte une erreur claire.
+	if len(failures) == 3 {
+		return nil, fmt.Errorf("metgate indisponible: %v / %v / %v", rawErr, wfsErr, wcsE)
 	}
 
 	return &Aggregate{
-		FetchedAt: time.Now().UTC(),
-		RAW:       ServiceCatalog{Count: len(rawFams), Families: rawFams},
-		WFS:       ServiceCatalog{Count: len(wfsFams), Families: wfsFams},
-		WCS:       ServiceCatalog{Count: len(wcsFams), Families: wcsFams},
+		FetchedAt:       time.Now().UTC(),
+		RAW:             ServiceCatalog{Count: len(rawFams), Families: rawFams},
+		WFS:             ServiceCatalog{Count: len(wfsFams), Families: wfsFams},
+		WCS:             ServiceCatalog{Count: len(wcsFams), Families: wcsFams},
+		PartialFailures: failures,
 	}, nil
 }
 
