@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -92,8 +93,11 @@ func (c *Client) fetchToken(ctx context.Context) (string, error) {
 	if c.clientID == "" {
 		return "", fmt.Errorf("no OAuth2 client_id configured")
 	}
-	form := fmt.Sprintf("grant_type=client_credentials&client_id=%s&client_secret=%s",
-		c.clientID, c.clientSecret)
+	form := url.Values{
+		"grant_type":    {"client_credentials"},
+		"client_id":     {c.clientID},
+		"client_secret": {c.clientSecret},
+	}.Encode()
 	req, err := http.NewRequestWithContext(ctx, "POST", c.authURL, strings.NewReader(form))
 	if err != nil {
 		return "", err
