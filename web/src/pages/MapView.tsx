@@ -436,14 +436,25 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
     }
 
     // Normalise une feature SA/FT/FC vers le format IWXXM (locationIndicatorICAO).
-    const normFlat = (f: GeoJSON.Feature): GeoJSON.Feature => ({
-      ...f,
-      properties: {
-        ...f.properties,
-        locationIndicatorICAO: f.properties?.id,
-        observationTime: f.properties?.analysis_time,
-      },
-    })
+    // Mappe aussi `pressure` → `qnh_hPa` (MetGate SA_last utilise ce nom de champ).
+    const normFlat = (f: GeoJSON.Feature): GeoJSON.Feature => {
+      const p = f.properties ?? {}
+      const qnh =
+        p.qnh_hPa != null
+          ? undefined
+          : p.pressure != null
+            ? { qnh_hPa: Math.round(parseFloat(String(p.pressure))).toString() }
+            : undefined
+      return {
+        ...f,
+        properties: {
+          ...p,
+          locationIndicatorICAO: p.id,
+          observationTime: p.analysis_time,
+          ...qnh,
+        },
+      }
+    }
 
     active.forEach(async (name) => {
       const typeName = typeNameOf[name]
@@ -1125,6 +1136,14 @@ const POPUP_EXCLUDE_KEYS = new Set([
   'ogc_fid',
   'swpid',
   'opmet_msg',
+  // Doublons SA_last (déjà mappés vers les champs structurés standard)
+  'pressure',
+  'wind_dir',
+  'wind_speed',
+  'dewpoint',
+  'temperature',
+  'id',
+  'analysis_time',
 ])
 
 function fmtKey(k: string): string {

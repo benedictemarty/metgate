@@ -14,9 +14,11 @@ func Decode(typeName, tac string) string {
 	}
 	base := strings.TrimSuffix(typeName, "_last")
 	switch {
-	case base == "METAR" || base == "SPECI":
+	case base == "METAR" || base == "SPECI",
+		base == "SA" || base == "SP": // produits plats MetGate (SA_last, SP_last)
 		return DecodeMETAR(tac)
-	case base == "TAF":
+	case base == "TAF",
+		base == "FT" || base == "FC": // produits plats MetGate (FT_last, FC_last)
 		return DecodeTAF(tac)
 	case strings.EqualFold(base, "WL"):
 		return DecodeWL(tac)

@@ -127,6 +127,11 @@ func parseMember(dec *xml.Decoder, typeName string) (map[string]any, error) {
 					if d := decoder.Decode(typeName, tac); d != "" {
 						props["decoded"] = d
 					}
+					// Pour les produits plats (SA_last, SP_last) : extraire T/Td/QNH/vent
+					// depuis le TAC si les champs structurés sont absents.
+					if _, hasTemp := props["airTemperature_C"]; !hasTemp {
+						enrichFromTAC(props, tac)
+					}
 				}
 				out := map[string]any{
 					"type":       "Feature",
@@ -423,6 +428,13 @@ var (
 	rxWindSpd  = regexp.MustCompile(`<iwxxm:meanWindSpeed[^>]*uom="([^"]+)"[^>]*>([^<]+)</iwxxm:meanWindSpeed>`)
 	rxCAVOK    = regexp.MustCompile(`cloudAndVisibilityOK="(true|false)"`)
 	rxICAOInfo = regexp.MustCompile(`<aixm:designator>([^<]+)</aixm:designator>`)
+
+	// TAC brut (SA_last, SP_last, FT_last, FC_last) — patterns positionnels METAR/TAF OACI.
+	rxTACWindKT  = regexp.MustCompile(`\b(VRB|\d{3})(\d{2,3})(?:G\d{2,3})?KT\b`)
+	rxTACWindMPS = regexp.MustCompile(`\b(VRB|\d{3})(\d{2,3})(?:G\d{2,3})?MPS\b`)
+	rxTACTempDew = regexp.MustCompile(`\b(M?\d{2})/(M?\d{2})\b`)
+	rxTACQNH     = regexp.MustCompile(`\bQ(\d{4})\b`)
+	rxTACCAVOK   = regexp.MustCompile(`\bCAVOK\b`)
 )
 
 // enrichFromIWXXM extrait du payload IWXXM les champs courants et les ajoute
@@ -548,6 +560,57 @@ func trimDecimals(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// enrichFromTAC parse un TAC METAR/TAF brut (SA_last, SP_last, FT_last, FC_last)
+// et renseigne les mêmes champs structurés qu'enrichFromIWXXM (T, Td, QNH, wind).
+// N'écrase pas un champ déjà présent (priorité IWXXM si les deux coexistent).
+func enrichFromTAC(props map[string]any, tac string) {
+	set := func(k, v string) {
+		if _, exists := props[k]; !exists && v != "" {
+			props[k] = v
+		}
+	}
+
+	// Vent KT : 25012KT / VRB03KT / 25012G18KT
+	if m := rxTACWindKT.FindStringSubmatch(tac); len(m) >= 3 {
+		if m[1] != "VRB" {
+			set("windDirection_deg", m[1])
+		}
+		set("windSpeed_kt", m[2])
+	} else if m := rxTACWindMPS.FindStringSubmatch(tac); len(m) >= 3 {
+		// Vent MPS (ex: TAF russe/asiatique) → conversion en kt (×1.944, arrondi)
+		if m[1] != "VRB" {
+			set("windDirection_deg", m[1])
+		}
+		if n, err := strconv.Atoi(m[2]); err == nil {
+			set("windSpeed_kt", strconv.Itoa(int(float64(n)*1.944+0.5)))
+		}
+	}
+
+	// Température / point de rosée : 15/07 ou M03/M07 (négatif)
+	if m := rxTACTempDew.FindStringSubmatch(tac); len(m) >= 3 {
+		conv := func(s string) string {
+			if strings.HasPrefix(s, "M") {
+				return "-" + s[1:]
+			}
+			return s
+		}
+		set("airTemperature_C", conv(m[1]))
+		set("dewpointTemperature_C", conv(m[2]))
+	}
+
+	// QNH : Q1018
+	if m := rxTACQNH.FindStringSubmatch(tac); len(m) >= 2 {
+		set("qnh_hPa", m[1])
+	}
+
+	// CAVOK
+	if rxTACCAVOK.MatchString(tac) {
+		if _, exists := props["cavok"]; !exists {
+			props["cavok"] = true
+		}
+	}
 }
 
 // readNestedText lit le contenu textuel d'un élément, en tolérant un seul
