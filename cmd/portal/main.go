@@ -82,6 +82,15 @@ func main() {
 	}
 	apStore.LogStats()
 
+	// Pré-chargement CTH en arrière-plan dès le démarrage pour que le premier
+	// utilisateur ne subisse pas les 20+ s de téléchargement EUMETSAT.
+	ctx, cancelBg := context.WithCancel(context.Background())
+	defer cancelBg()
+	if euClient.Authenticated() {
+		ctService.StartBackground(ctx)
+		log.Print("CTH: pré-chargement EUMETSAT démarré en arrière-plan")
+	}
+
 	api := httpapi.NewAPI(cat, acService, ltService, satProxy, ctService, apStore)
 	log.Printf("cache TTL: %s", cacheTTL)
 

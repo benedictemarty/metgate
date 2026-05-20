@@ -27,10 +27,10 @@ import (
 const collectionCTTH = "EO:EUM:DAT:0681"
 
 type Service struct {
-	client *eumetsat.Client
-
-	mu     sync.Mutex
-	cache  *Snapshot
+	client    *eumetsat.Client
+	mu        sync.Mutex
+	cache     *Snapshot
+	refreshing bool // vrai pendant un refresh en arrière-plan
 }
 
 // Snapshot contient la grille CTH décodée d'un produit MTG, projetée en
@@ -42,10 +42,10 @@ type Snapshot struct {
 	FetchedAt time.Time
 	// Grille EPSG:4326 sur le disque MTG visible : -70..+70 lat, -70..+70 lon.
 	// FL[row][col] = niveau de vol du sommet (0 si pas de nuage).
-	BBox     [4]float64 // lonMin, latMin, lonMax, latMax
-	Width    int
-	Height   int
-	FL       []int16 // -1 = pas de donnée / hors disque
+	BBox   [4]float64 // lonMin, latMin, lonMax, latMax
+	Width  int
+	Height int
+	FL     []int16 // -1 = pas de donnée / hors disque
 }
 
 func NewService(client *eumetsat.Client) *Service {
@@ -56,33 +56,94 @@ func (s *Service) Authenticated() bool {
 	return s.client != nil && s.client.Authenticated()
 }
 
-// Latest retourne le snapshot courant (téléchargé + parsé), avec cache TTL.
+// StartBackground lance un goroutine qui pré-charge le snapshot au démarrage
+// puis le rafraîchit toutes les 10 minutes (cadence MTG-CTTH). Appelé depuis
+// main.go uniquement si les credentials EUMETSAT sont présents.
+func (s *Service) StartBackground(ctx context.Context) {
+	go func() {
+		s.refresh(ctx)
+		t := time.NewTicker(10 * time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				s.refresh(ctx)
+			}
+		}
+	}()
+}
+
+// Latest retourne le snapshot courant. Stale-while-revalidate : si le cache
+// est périmé mais existe, on le sert immédiatement et on déclenche un refresh
+// en arrière-plan. Seul le tout premier appel (cache vide) bloque.
 func (s *Service) Latest(ctx context.Context, ttl time.Duration) (*Snapshot, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.cache != nil && ttl > 0 && time.Since(s.cache.FetchedAt) < ttl {
-		return s.cache, nil
+		snap := s.cache
+		s.mu.Unlock()
+		return snap, nil
 	}
+	// Cache périmé mais présent : servir l'ancien + refresh arrière-plan.
+	if s.cache != nil && !s.refreshing {
+		snap := s.cache
+		s.refreshing = true
+		s.mu.Unlock()
+		go func() {
+			s.refresh(context.Background())
+		}()
+		return snap, nil
+	}
+	// Cache vide : bloquer le temps du premier téléchargement (inévitable).
+	if s.cache == nil {
+		s.mu.Unlock()
+		s.refresh(ctx)
+		s.mu.Lock()
+		snap := s.cache
+		s.mu.Unlock()
+		if snap == nil {
+			return nil, fmt.Errorf("CTH snapshot unavailable")
+		}
+		return snap, nil
+	}
+	snap := s.cache
+	s.mu.Unlock()
+	return snap, nil
+}
+
+// refresh télécharge et parse le dernier produit CTTH ; met à jour le cache.
+func (s *Service) refresh(ctx context.Context) {
 	id, dlURL, err := s.client.LatestProduct(ctx, collectionCTTH)
 	if err != nil {
-		return nil, err
+		s.mu.Lock(); s.refreshing = false; s.mu.Unlock()
+		return
 	}
+	s.mu.Lock()
 	if s.cache != nil && s.cache.ProductID == id {
 		s.cache.FetchedAt = time.Now()
-		return s.cache, nil
+		s.refreshing = false
+		s.mu.Unlock()
+		return
 	}
+	s.mu.Unlock()
+
 	zipBytes, err := s.client.Download(ctx, dlURL)
 	if err != nil {
-		return nil, err
+		s.mu.Lock(); s.refreshing = false; s.mu.Unlock()
+		return
 	}
 	snap, err := parseCTTHZip(zipBytes)
 	if err != nil {
-		return nil, err
+		s.mu.Lock(); s.refreshing = false; s.mu.Unlock()
+		return
 	}
 	snap.ProductID = id
 	snap.FetchedAt = time.Now()
+	s.mu.Lock()
 	s.cache = snap
-	return snap, nil
+	s.refreshing = false
+	s.mu.Unlock()
 }
 
 // PNG génère un PNG colorisé de la zone bbox, ne montrant que les pixels
