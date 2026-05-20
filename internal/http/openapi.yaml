@@ -1,0 +1,1015 @@
+openapi: "3.0.3"
+info:
+  title: MetGate Portal API
+  version: "0.3.0"
+  description: |
+    Portail météo ATM — agrège les services MetGate (Météo-France), OpenSky
+    et EUMETSAT dans une API REST unifiée. Le token MetGate est géré côté
+    serveur et n'est jamais exposé au navigateur.
+  contact:
+    name: bmarty
+    email: bmarty@mailo.com
+
+servers:
+  - url: /
+    description: Serveur courant
+
+tags:
+  - name: health
+    description: Santé du service
+  - name: catalog
+    description: Catalogue des produits MetGate (RAW / WFS / WCS)
+  - name: weather
+    description: Données météo décodées (METAR, TAF, SIGMET…)
+  - name: wcs
+    description: Coverages WCS (vent, tropopause, cendres volcaniques)
+  - name: route
+    description: Plan de vol synthétique
+  - name: aircraft
+    description: Suivi ADS-B via OpenSky
+  - name: airports
+    description: Base aérodromes OurAirports
+  - name: eumetsat
+    description: Produits EUMETSAT MTG (situationnel, non OPMET)
+  - name: proxy
+    description: Proxy transparent vers MetGate (token côté serveur)
+
+paths:
+
+  /healthz:
+    get:
+      tags: [health]
+      summary: Santé du service
+      operationId: healthz
+      responses:
+        "200":
+          description: Service opérationnel
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /api/products:
+    get:
+      tags: [catalog]
+      summary: Catalogue agrégé par famille (RAW + WFS + WCS)
+      operationId: getProducts
+      description: |
+        Interroge les trois services MetGate en parallèle et regroupe les
+        produits par famille (METAR, SIGMET, WIND, TROPO…). En cas d'échec
+        partiel d'un service, le résultat est retourné avec `X-Partial-Errors`.
+      responses:
+        "200":
+          description: Agrégat des familles de produits
+          headers:
+            X-Partial-Errors:
+              schema:
+                type: string
+              description: Erreurs partielles (séparées par virgule)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Aggregate"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+
+  /api/catalog:
+    get:
+      tags: [catalog]
+      summary: Capacités brutes d'un service (RAW / WFS / WCS)
+      operationId: getCatalog
+      parameters:
+        - name: service
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [RAW, WFS, WCS]
+            default: RAW
+          description: Service MetGate à interroger
+        - name: version
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Version du service (défaut 2.0.0 WFS, 2.0.1 WCS)
+      responses:
+        "200":
+          description: GetCapabilities (RAW→JSON, WFS/WCS→XML)
+          headers:
+            X-Cache:
+              $ref: "#/components/headers/XCache"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+
+  /api/feature:
+    get:
+      tags: [weather]
+      summary: Features WFS en GeoJSON (METAR, TAF, SIGMET, RDT…)
+      operationId: getFeature
+      description: |
+        Appelle WFS GetFeature sur MetGate, convertit GML 3.2 → GeoJSON et
+        décode les messages OPMET (TAC FR). Les produits plats MetGate
+        (SA_last, FT_last, FC_last) sont également supportés.
+      parameters:
+        - name: type
+          in: query
+          required: true
+          schema:
+            type: string
+            example: METAR_last
+          description: |
+            Nom du type WFS (ex: `METAR_last`, `SIGMET_last`, `RDT_MSG_last`,
+            `SA_last`, `FT_last`, `OPIC_GTD_last`…)
+        - name: count
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 100000
+            default: 0
+          description: Nombre max de features (0 = illimité)
+      responses:
+        "200":
+          description: GeoJSON FeatureCollection
+          headers:
+            X-Cache:
+              $ref: "#/components/headers/XCache"
+          content:
+            application/geo+json:
+              schema:
+                $ref: "#/components/schemas/FeatureCollection"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+
+  /api/wind:
+    get:
+      tags: [wcs]
+      summary: Grille vent (u,v) depuis WCS WIND ou JET
+      operationId: getWind
+      parameters:
+        - $ref: "#/components/parameters/bbox"
+        - name: level
+          in: query
+          required: false
+          schema:
+            type: number
+            default: 85000
+          description: Niveau de pression en Pa (ex: 85000 = 850 hPa)
+        - name: dataset
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [WIND, JET]
+            default: WIND
+        - name: allSteps
+          in: query
+          required: false
+          schema:
+            type: integer
+            enum: [0, 1]
+            default: 0
+          description: "1 = retourner tous les timesteps disponibles"
+      responses:
+        "200":
+          description: Grille u/v multi-step
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WindGrid"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+
+  /api/tropo:
+    get:
+      tags: [wcs]
+      summary: Grille altitude tropopause
+      operationId: getTropo
+      parameters:
+        - $ref: "#/components/parameters/bbox"
+      responses:
+        "200":
+          description: Grille altitude tropopause (m) multi-step
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScalarGrid"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+
+  /api/qvacis:
+    get:
+      tags: [wcs]
+      summary: Grille concentration cendres volcaniques (QVACIS)
+      operationId: getQvacis
+      parameters:
+        - $ref: "#/components/parameters/bbox"
+        - name: dataset
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [DETERMINISTIC, PROBABILISTIC]
+            default: DETERMINISTIC
+        - name: fl
+          in: query
+          required: false
+          schema:
+            type: integer
+            example: 325
+          description: Flight level (ex: 325 pour FL325)
+      responses:
+        "200":
+          description: Grille concentration cendres (mg/m³)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScalarGrid"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+
+  /api/route:
+    get:
+      tags: [route]
+      summary: Plan de vol synthétique DEP→ARR
+      operationId: getRoute
+      description: |
+        Calcule un plan grand cercle avec profil FL trapézoïdal
+        (montée/croisière/descente), croise les événements WFS actifs
+        et optionnellement le profil vent par waypoint.
+      parameters:
+        - name: dep
+          in: query
+          required: true
+          schema:
+            type: string
+            example: LFPG
+          description: ICAO de départ (4 lettres)
+        - name: arr
+          in: query
+          required: true
+          schema:
+            type: string
+            example: LFBO
+          description: ICAO d'arrivée (4 lettres)
+        - name: fl
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 350
+          description: Flight level de croisière
+        - name: speed
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 420
+          description: Vitesse sol en kt
+        - name: events
+          in: query
+          required: false
+          schema:
+            type: integer
+            enum: [0, 1]
+            default: 0
+          description: "1 = croiser les événements WFS (SIGMET, AIRMET, MAA…)"
+        - name: wind
+          in: query
+          required: false
+          schema:
+            type: integer
+            enum: [0, 1]
+            default: 0
+          description: "1 = calculer le profil vent par waypoint"
+      responses:
+        "200":
+          description: Plan de vol avec waypoints et événements
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoutePlan"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+
+  /api/aircraft/search:
+    get:
+      tags: [aircraft]
+      summary: Recherche d'aéronefs via OpenSky
+      operationId: searchAircraft
+      description: |
+        Recherche par callsign (`cs`) ou par bbox géographique. Retourne
+        200 avec liste vide et champ `error` en cas d'échec OpenSky
+        (rate limit, auth…) plutôt qu'un 502.
+      parameters:
+        - name: cs
+          in: query
+          required: false
+          schema:
+            type: string
+            example: AFR123
+          description: Sous-chaîne de callsign ou immatriculation
+        - $ref: "#/components/parameters/bboxOpt"
+      responses:
+        "200":
+          description: Liste d'états ADS-B
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AircraftSearchResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/aircraft/{icao24}:
+    get:
+      tags: [aircraft]
+      summary: État courant d'un aéronef (ADS-B)
+      operationId: getAircraftState
+      parameters:
+        - name: icao24
+          in: path
+          required: true
+          schema:
+            type: string
+            example: 3c6757
+          description: Identifiant ADS-B 24 bits en hexadécimal
+      responses:
+        "200":
+          description: État ADS-B courant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AircraftState"
+        "404":
+          description: Aéronef non trouvé
+        "502":
+          $ref: "#/components/responses/BadGateway"
+
+  /api/aircraft/{icao24}/route:
+    get:
+      tags: [aircraft, route]
+      summary: Plan de vol projeté depuis la position ADS-B courante
+      operationId: getAircraftRoute
+      parameters:
+        - name: icao24
+          in: path
+          required: true
+          schema:
+            type: string
+            example: 3c6757
+        - name: dur
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 720
+            default: 60
+          description: Durée de projection en minutes
+        - name: dest
+          in: query
+          required: false
+          schema:
+            type: string
+            example: LFBO
+          description: ICAO destination (détecté automatiquement via OpenSky si absent)
+        - name: events
+          in: query
+          required: false
+          schema:
+            type: integer
+            enum: [0, 1]
+            default: 0
+        - name: wind
+          in: query
+          required: false
+          schema:
+            type: integer
+            enum: [0, 1]
+            default: 0
+      responses:
+        "200":
+          description: Plan de vol projeté
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoutePlan"
+        "404":
+          description: Aéronef non trouvé
+        "502":
+          $ref: "#/components/responses/BadGateway"
+
+  /api/airports/search:
+    get:
+      tags: [airports]
+      summary: Recherche d'aérodromes (OurAirports)
+      operationId: searchAirports
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+            example: LFPG
+          description: ICAO, IATA, nom ou ville
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 12
+      responses:
+        "200":
+          description: Liste d'aérodromes triés par pertinence
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AirportSearchResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /api/airport/{icao}:
+    get:
+      tags: [airports]
+      summary: Fiche aérodrome + pistes
+      operationId: getAirport
+      parameters:
+        - name: icao
+          in: path
+          required: true
+          schema:
+            type: string
+            example: LFPG
+          description: Code ICAO 4 lettres
+      responses:
+        "200":
+          description: Fiche aérodrome avec liste des pistes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AirportDetail"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: Aérodrome inconnu
+
+  /api/lightning:
+    get:
+      tags: [eumetsat]
+      summary: Flashes foudre MTG-LI (EUMETSAT)
+      operationId: getLightning
+      description: |
+        Retourne les flashes du dernier produit MTG-LI LFL (~10 min) en
+        GeoJSON Points. Source EUMETSAT — situationnel, non OPMET.
+        Requiert `EUMETSAT_CONSUMER_KEY/SECRET`.
+      parameters:
+        - $ref: "#/components/parameters/bboxOpt"
+        - name: since
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+            example: "2026-05-20T21:00:00Z"
+          description: Filtrer les flashes antérieurs à cette date (RFC3339)
+      responses:
+        "200":
+          description: GeoJSON FeatureCollection de flashes
+          content:
+            application/geo+json:
+              schema:
+                $ref: "#/components/schemas/FeatureCollection"
+        "503":
+          description: EUMETSAT non configuré
+
+  /api/cloudtop:
+    get:
+      tags: [eumetsat]
+      summary: Image PNG sommets nuageux MTG-FCI CTTH (EUMETSAT)
+      operationId: getCloudtop
+      description: |
+        PNG colorisé des sommets nuageux au-dessus de `minfl` sur la bbox
+        demandée. Source EUMETSAT MTG-FCI — situationnel, non OPMET.
+        Cache interne 5 min (cadence produit 10 min).
+      parameters:
+        - $ref: "#/components/parameters/bbox"
+        - name: minfl
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 600
+            default: 0
+          description: Seuil de flight level minimum
+        - name: w
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 64
+            maximum: 4096
+            default: 1024
+          description: Largeur du PNG en pixels
+        - name: h
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 64
+            maximum: 4096
+            default: 768
+          description: Hauteur du PNG en pixels
+      responses:
+        "200":
+          description: Image PNG des sommets nuageux
+          headers:
+            X-Fetched-At:
+              schema:
+                type: string
+                format: date-time
+              description: Horodatage du snapshot EUMETSAT utilisé
+            X-Source:
+              schema:
+                type: string
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+        "503":
+          description: EUMETSAT non configuré
+        "502":
+          $ref: "#/components/responses/BadGateway"
+
+  /api/satellite/tile:
+    get:
+      tags: [eumetsat]
+      summary: Tuile WMS EUMETView (satellite FCI IR / RGB Convection)
+      operationId: getSatelliteTile
+      description: |
+        Proxy vers EUMETView WMS (https://view.eumetsat.int). Cache interne
+        60 s par tuile. Header `X-Cache: HIT/MISS`.
+      parameters:
+        - name: layer
+          in: query
+          required: true
+          schema:
+            type: string
+            example: mtg_fci:ir_105
+          description: Identifiant de la couche WMS EUMETView
+        - name: style
+          in: query
+          required: false
+          schema:
+            type: string
+            default: ""
+        - name: time
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Instant ISO 8601 de la tuile
+        - name: z
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: x
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: y
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Tuile PNG
+          headers:
+            X-Cache:
+              $ref: "#/components/headers/XCache"
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+        "502":
+          $ref: "#/components/responses/BadGateway"
+
+  /api/wfs:
+    get:
+      tags: [proxy]
+      summary: Proxy WFS MetGate (token côté serveur)
+      operationId: proxyWFS
+      description: Transmet tous les query params à MetGate WFS. Retourne le XML brut.
+      parameters:
+        - name: service
+          in: query
+          required: false
+          schema:
+            type: string
+            default: WFS
+        - name: version
+          in: query
+          required: false
+          schema:
+            type: string
+            default: "2.0.0"
+        - name: request
+          in: query
+          required: true
+          schema:
+            type: string
+            example: GetFeature
+      responses:
+        "200":
+          description: Réponse XML MetGate
+          headers:
+            X-Cache:
+              $ref: "#/components/headers/XCache"
+          content:
+            application/xml:
+              schema:
+                type: string
+        "502":
+          $ref: "#/components/responses/BadGateway"
+
+  /api/wcs:
+    get:
+      tags: [proxy]
+      summary: Proxy WCS MetGate (token côté serveur)
+      operationId: proxyWCS
+      parameters:
+        - name: service
+          in: query
+          required: false
+          schema:
+            type: string
+            default: WCS
+        - name: version
+          in: query
+          required: false
+          schema:
+            type: string
+            default: "2.0.1"
+        - name: request
+          in: query
+          required: true
+          schema:
+            type: string
+            example: GetCoverage
+      responses:
+        "200":
+          description: Réponse WCS MetGate (NetCDF-4 ou XML)
+          headers:
+            X-Cache:
+              $ref: "#/components/headers/XCache"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+
+  /api/raw:
+    get:
+      tags: [proxy]
+      summary: Proxy RAW MetGate (CSV produits situationnels)
+      operationId: proxyRAW
+      responses:
+        "200":
+          description: CSV MetGate
+          headers:
+            X-Cache:
+              $ref: "#/components/headers/XCache"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+
+components:
+
+  headers:
+    XCache:
+      schema:
+        type: string
+        enum: [HIT, MISS]
+      description: Indique si la réponse provient du cache interne
+
+  parameters:
+    bbox:
+      name: bbox
+      in: query
+      required: false
+      schema:
+        type: string
+        example: "-15,35,30,65"
+      description: "Emprise géographique : lonMin,latMin,lonMax,latMax (WGS84)"
+    bboxOpt:
+      name: bbox
+      in: query
+      required: false
+      schema:
+        type: string
+        example: "-10,35,30,65"
+      description: "Emprise géographique optionnelle : lonMin,latMin,lonMax,latMax"
+
+  responses:
+    BadRequest:
+      description: Paramètre manquant ou invalide
+      content:
+        text/plain:
+          schema:
+            type: string
+    BadGateway:
+      description: Erreur upstream (MetGate / OpenSky / EUMETSAT)
+      content:
+        text/plain:
+          schema:
+            type: string
+
+  schemas:
+
+    Aggregate:
+      type: object
+      properties:
+        raw:
+          type: object
+          properties:
+            families:
+              type: array
+              items:
+                $ref: "#/components/schemas/Family"
+        wfs:
+          type: object
+          properties:
+            families:
+              type: array
+              items:
+                $ref: "#/components/schemas/Family"
+        wcs:
+          type: object
+          properties:
+            families:
+              type: array
+              items:
+                $ref: "#/components/schemas/Family"
+        partial_failures:
+          type: array
+          items:
+            type: string
+
+    Family:
+      type: object
+      properties:
+        name:
+          type: string
+          example: METAR
+        count:
+          type: integer
+          example: 3
+        latest:
+          type: string
+          example: METAR_last
+        format:
+          type: string
+          example: IWXXM
+
+    FeatureCollection:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [FeatureCollection]
+        features:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+                enum: [Feature]
+              geometry:
+                type: object
+              properties:
+                type: object
+                description: |
+                  Champs METAR : locationIndicatorICAO, observationTime, tac,
+                  decoded, airTemperature_C, dewpointTemperature_C, qnh_hPa,
+                  windDirection_deg, windSpeed_kt, visibility_m, clouds, cavok
+
+    WindGrid:
+      type: object
+      properties:
+        dataset:
+          type: string
+          example: WIND
+        level_pa:
+          type: number
+          example: 85000
+        valid_time:
+          type: string
+          format: date-time
+        lons:
+          type: array
+          items:
+            type: number
+        lats:
+          type: array
+          items:
+            type: number
+        u:
+          type: array
+          description: Composante u (est, m/s) — tableau 2D aplati [lat][lon]
+          items:
+            type: number
+        v:
+          type: array
+          description: Composante v (nord, m/s) — tableau 2D aplati [lat][lon]
+          items:
+            type: number
+
+    ScalarGrid:
+      type: object
+      properties:
+        valid_time:
+          type: string
+          format: date-time
+        lons:
+          type: array
+          items:
+            type: number
+        lats:
+          type: array
+          items:
+            type: number
+        values:
+          type: array
+          description: Valeurs scalaires (m pour tropo, mg/m³ pour QVACIS)
+          items:
+            type: number
+
+    RoutePlan:
+      type: object
+      properties:
+        dep:
+          type: string
+          example: LFPG
+        arr:
+          type: string
+          example: LFBO
+        distance_nm:
+          type: number
+        fl:
+          type: integer
+        waypoints:
+          type: array
+          items:
+            $ref: "#/components/schemas/Waypoint"
+        events:
+          type: array
+          items:
+            type: object
+
+    Waypoint:
+      type: object
+      properties:
+        lon:
+          type: number
+        lat:
+          type: number
+        fl:
+          type: integer
+        eta:
+          type: string
+          format: date-time
+        wind_head_kt:
+          type: number
+        wind_cross_kt:
+          type: number
+
+    AircraftState:
+      type: object
+      properties:
+        icao24:
+          type: string
+          example: 3c6757
+        callsign:
+          type: string
+          example: DLH123
+        longitude:
+          type: number
+        latitude:
+          type: number
+        altitude:
+          type: number
+          description: Altitude barométrique en mètres
+        velocity:
+          type: number
+          description: Vitesse sol en m/s
+        true_track:
+          type: number
+          description: Cap vrai en degrés
+        on_ground:
+          type: boolean
+
+    AircraftSearchResult:
+      type: object
+      properties:
+        query:
+          type: string
+        authenticated:
+          type: boolean
+        count:
+          type: integer
+        states:
+          type: array
+          items:
+            $ref: "#/components/schemas/AircraftState"
+        error:
+          type: string
+          description: Présent uniquement en cas d'erreur OpenSky (pas de 502)
+
+    AirportSearchResult:
+      type: object
+      properties:
+        query:
+          type: string
+        count:
+          type: integer
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/Airport"
+
+    AirportDetail:
+      type: object
+      properties:
+        airport:
+          $ref: "#/components/schemas/Airport"
+        runways:
+          type: array
+          items:
+            $ref: "#/components/schemas/Runway"
+        has_geometry:
+          type: boolean
+
+    Airport:
+      type: object
+      properties:
+        icao:
+          type: string
+          example: LFPG
+        iata:
+          type: string
+          example: CDG
+        name:
+          type: string
+          example: Paris Charles de Gaulle
+        city:
+          type: string
+        country:
+          type: string
+        lat:
+          type: number
+        lon:
+          type: number
+        elevation_ft:
+          type: integer
+        type:
+          type: string
+          example: large_airport
+
+    Runway:
+      type: object
+      properties:
+        le_ident:
+          type: string
+          example: "09L"
+        he_ident:
+          type: string
+          example: "27R"
+        length_ft:
+          type: integer
+        width_ft:
+          type: integer
+        le_lat:
+          type: number
+        le_lon:
+          type: number
+        he_lat:
+          type: number
+        he_lon:
+          type: number

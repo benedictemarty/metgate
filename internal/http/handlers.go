@@ -50,6 +50,8 @@ func (a *API) Routes() *http.ServeMux {
 	m.HandleFunc("GET /api/cloudtop", a.handleCloudtop)
 	m.HandleFunc("GET /api/airport/{icao}", a.handleAirport)
 	m.HandleFunc("GET /api/airports/search", a.handleAirportsSearch)
+	m.HandleFunc("GET /api/openapi.yaml", a.handleOpenAPI)
+	m.HandleFunc("GET /api/docs", a.handleDocs)
 	m.Handle("GET /", web.Handler())
 	return m
 }
