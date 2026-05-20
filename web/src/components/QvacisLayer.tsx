@@ -32,9 +32,10 @@ interface QvacisLayerProps {
   fl: number
   linkedInstant?: string | null
   onTimesLoaded?: (times: string[]) => void
+  onLoadingChange?: (loading: boolean) => void
 }
 
-export default function QvacisLayer({ enabled, dataset, fl, linkedInstant, onTimesLoaded }: QvacisLayerProps) {
+export default function QvacisLayer({ enabled, dataset, fl, linkedInstant, onTimesLoaded, onLoadingChange }: QvacisLayerProps) {
   const { current: mapRef } = useMap()
   const map = mapRef?.getMap()
   const [grid, setGrid] = useState<QvacisGrid | null>(null)
@@ -48,6 +49,7 @@ export default function QvacisLayer({ enabled, dataset, fl, linkedInstant, onTim
     let aborted = false
     const url = `/api/qvacis?dataset=${dataset}&fl=${fl}&bbox=${QVACIS_BBOX.join(',')}`
     setInfo({ status: 'loading' })
+    onLoadingChange?.(true)
     fetch(url)
       .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
       .then((g: QvacisGrid) => {
@@ -56,8 +58,9 @@ export default function QvacisLayer({ enabled, dataset, fl, linkedInstant, onTim
         setStepIdx(g.current_idx ?? 0)
         if (onTimesLoaded) onTimesLoaded(g.steps?.map((s) => s.time) ?? [])
         setInfo({ status: 'idle' })
+        onLoadingChange?.(false)
       })
-      .catch((e) => { if (!aborted) setInfo({ status: 'error', msg: String(e) }) })
+      .catch((e) => { if (!aborted) { setInfo({ status: 'error', msg: String(e) }); onLoadingChange?.(false) } })
     return () => { aborted = true }
   }, [enabled, map, dataset, fl])
 

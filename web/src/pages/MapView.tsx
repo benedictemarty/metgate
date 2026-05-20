@@ -281,6 +281,9 @@ export default function MapView({ data }: MapViewProps) {
   const [qvacisFL, setQvacisFL] = useState(325)
   const [showFlightPlan, setShowFlightPlan] = useState(true)
   const [showTracker, setShowTracker] = useState(true)
+  const [windLoading, setWindLoading] = useState(false)
+  const [tropoLoading, setTropoLoading] = useState(false)
+  const [qvacisLoading, setQvacisLoading] = useState(false)
 
   // Mode synchronisé : un slider maître pilote toutes les couches WCS actives.
   // Chaque WCS layer remonte ses timestamps via onTimesLoaded ; le master
@@ -619,8 +622,11 @@ export default function MapView({ data }: MapViewProps) {
     })
   }
 
+  const isLoading = loading.size > 0 || windLoading || tropoLoading || qvacisLoading
+
   return (
-    <div className="relative h-[calc(100vh-72px)] w-full overflow-hidden">
+    <div className="relative h-[calc(100vh-72px)] w-full overflow-hidden"
+      style={{ cursor: isLoading ? 'wait' : undefined }}>
       <MapGL
         initialViewState={{ longitude: 6, latitude: 47, zoom: 4 }}
         mapStyle={MAP_STYLE}
@@ -628,7 +634,7 @@ export default function MapView({ data }: MapViewProps) {
         attributionControl={{ compact: true }}
         interactiveLayerIds={interactiveLayerIds}
         onClick={handleMapClick}
-        cursor={interactiveLayerIds.length > 0 ? 'pointer' : 'grab'}
+        cursor={isLoading ? 'wait' : interactiveLayerIds.length > 0 ? 'pointer' : 'grab'}
       >
         <NavigationControl position="bottom-right" />
         <ScaleControl position="bottom-left" />
@@ -707,11 +713,13 @@ export default function MapView({ data }: MapViewProps) {
           level={windLevelPa}
           linkedInstant={linkedInstantForLayers}
           onTimesLoaded={setWindTimes}
+          onLoadingChange={setWindLoading}
         />
         <TropoLayer
           enabled={tropoEnabled}
           linkedInstant={linkedInstantForLayers}
           onTimesLoaded={setTropoTimes}
+          onLoadingChange={setTropoLoading}
         />
         <QvacisLayer
           enabled={qvacisEnabled}
@@ -719,6 +727,7 @@ export default function MapView({ data }: MapViewProps) {
           fl={qvacisFL}
           linkedInstant={linkedInstantForLayers}
           onTimesLoaded={setQvacisTimes}
+          onLoadingChange={setQvacisLoading}
         />
         <LightningLayer enabled={lightningEnabled} />
         <SatRasterLayer

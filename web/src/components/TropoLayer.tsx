@@ -25,9 +25,10 @@ interface TropoLayerProps {
   enabled: boolean
   linkedInstant?: string | null
   onTimesLoaded?: (times: string[]) => void
+  onLoadingChange?: (loading: boolean) => void
 }
 
-export default function TropoLayer({ enabled, linkedInstant, onTimesLoaded }: TropoLayerProps) {
+export default function TropoLayer({ enabled, linkedInstant, onTimesLoaded, onLoadingChange }: TropoLayerProps) {
   const { current: mapRef } = useMap()
   const map = mapRef?.getMap()
   const [grid, setGrid] = useState<TropoGrid | null>(null)
@@ -42,6 +43,7 @@ export default function TropoLayer({ enabled, linkedInstant, onTimesLoaded }: Tr
     let aborted = false
     const [lonMin, latMin, lonMax, latMax] = TROPO_BBOX
     setInfo({ status: 'loading' })
+    onLoadingChange?.(true)
     fetch(`/api/tropo?bbox=${lonMin},${latMin},${lonMax},${latMax}`)
       .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
       .then((g: TropoGrid) => {
@@ -50,8 +52,9 @@ export default function TropoLayer({ enabled, linkedInstant, onTimesLoaded }: Tr
         setStepIdx(g.current_idx ?? 0)
         if (onTimesLoaded) onTimesLoaded(g.steps?.map((s) => s.time) ?? [])
         setInfo({ status: 'idle' })
+        onLoadingChange?.(false)
       })
-      .catch((e) => { if (!aborted) setInfo({ status: 'error', msg: String(e) }) })
+      .catch((e) => { if (!aborted) { setInfo({ status: 'error', msg: String(e) }); onLoadingChange?.(false) } })
     return () => { aborted = true }
   }, [enabled, map])
 

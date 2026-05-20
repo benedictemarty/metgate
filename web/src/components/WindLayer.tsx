@@ -40,6 +40,7 @@ interface WindLayerProps {
   // Notifie le parent des timestamps disponibles dès que la grille est
   // chargée. Le parent les agrège pour le slider master.
   onTimesLoaded?: (times: string[]) => void
+  onLoadingChange?: (loading: boolean) => void
 }
 
 export default function WindLayer({
@@ -48,6 +49,7 @@ export default function WindLayer({
   level = 85000,
   linkedInstant,
   onTimesLoaded,
+  onLoadingChange,
 }: WindLayerProps) {
   const { current: mapWrapper } = useMap()
   const map = mapWrapper?.getMap()
@@ -82,6 +84,7 @@ export default function WindLayer({
       if (dataset === 'WIND') params.set('level', String(level))
       const url = `/api/wind?${params.toString()}`
       setInfo({ status: 'loading' })
+      onLoadingChange?.(true)
       fetch(url)
         .then((r) => {
           if (!r.ok) throw new Error(`HTTP ${r.status}`)
@@ -98,9 +101,10 @@ export default function WindLayer({
             onTimesLoaded(g.steps?.map((s) => s.time) ?? [])
           }
           setInfo({ status: 'idle' })
+          onLoadingChange?.(false)
         })
         .catch((e) => {
-          if (!aborted) setInfo({ status: 'error', msg: String(e) })
+          if (!aborted) { setInfo({ status: 'error', msg: String(e) }); onLoadingChange?.(false) }
         })
     }
 
