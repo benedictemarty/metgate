@@ -718,7 +718,7 @@ function WindParticles({
     const vel = new Float32Array(N * 3) // une vitesse par particule
     const trails = new Float32Array(N) // longueur du trail (s) par particule
     for (let i = 0; i < N; i++) {
-      spawnFilament(i, pos, col, vel, trails, winds, nmToUnits)
+      spawnFilament(i, pos, col, vel, trails, winds)
     }
     return { positions: pos, colors: col, velocities: vel, trailLengths: trails }
   }, [winds, nmToUnits])
@@ -748,7 +748,7 @@ function WindParticles({
       const z = arr[i * 6 + 2]
       const horizR = Math.sqrt(x * x + z * z)
       if (horizR > RADIUS - 0.3 || y > RADIUS - 0.5 || y < 0.4) {
-        spawnFilament(i, arr, colArr, velocities, trailLengths, winds, nmToUnits)
+        spawnFilament(i, arr, colArr, velocities, trailLengths, winds)
       }
     }
     ref.current.geometry.attributes.position.needsUpdate = true
@@ -782,7 +782,6 @@ function spawnFilament(
   vel: Float32Array,
   trails: Float32Array,
   winds: WindLevel[],
-  nmToUnits: number,
 ) {
   const r = Math.sqrt(Math.random()) * (RADIUS - 0.8)
   const theta = Math.random() * Math.PI * 2
@@ -804,9 +803,13 @@ function spawnFilament(
   }
   const c = closest ? new THREE.Color(closest.color) : new THREE.Color(0x67e8f9)
 
-  // Vitesse (m/s amplifié pour viz)
+  // Vitesse visuelle découplée du rayon scène : on utilise une référence fixe
+  // (équivalent 30 NM) pour que les traînes restent des traits visibles à
+  // toutes les échelles (5/15/30/100 NM). Sans ça, à 100 NM nmToUnits=0.22
+  // produit des traînes de 0.09 unités = points indiscernables.
   const VIZ_SPEED_FACTOR = 80
-  const speedUnitsPerSec = closest ? (closest.kt / 3600) * nmToUnits * VIZ_SPEED_FACTOR : 0
+  const REF_NM_TO_UNITS = RADIUS / 30
+  const speedUnitsPerSec = closest ? (closest.kt / 3600) * REF_NM_TO_UNITS * VIZ_SPEED_FACTOR : 0
   const towards = closest ? (closest.dirDeg + 180) % 360 : 0
   const dirRad = (towards * Math.PI) / 180
   const vx = speedUnitsPerSec * Math.sin(dirRad)
