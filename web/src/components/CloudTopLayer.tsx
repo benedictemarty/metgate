@@ -17,6 +17,7 @@ interface CloudTopLayerProps {
   minFL: number
   onMinFLChange: (fl: number) => void
   opacity?: number
+  onLoadingChange?: (loading: boolean) => void
 }
 
 export default function CloudTopLayer({
@@ -24,6 +25,7 @@ export default function CloudTopLayer({
   minFL,
   onMinFLChange,
   opacity = 0.65,
+  onLoadingChange,
 }: CloudTopLayerProps) {
   const { current: mapRef } = useMap()
   const map = mapRef?.getMap()
@@ -59,6 +61,17 @@ export default function CloudTopLayer({
       [lonMax, latMin],
       [lonMin, latMin],
     ]
+
+    // Signal chargement — MapLibre fetch l'image en interne (pas de fetch() JS).
+    // On écoute sourcedata pour détecter la fin du chargement.
+    onLoadingChange?.(true)
+    const onSourceData = (e: { sourceId?: string }) => {
+      if (e.sourceId === SOURCE_ID && map.isSourceLoaded(SOURCE_ID)) {
+        onLoadingChange?.(false)
+        map.off('sourcedata', onSourceData)
+      }
+    }
+    map.on('sourcedata', onSourceData)
 
     const src = map.getSource(SOURCE_ID) as
       | { updateImage: (o: { url: string; coordinates: typeof coords }) => void }

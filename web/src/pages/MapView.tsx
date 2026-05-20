@@ -286,6 +286,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
   const [windLoading, setWindLoading] = useState(false)
   const [tropoLoading, setTropoLoading] = useState(false)
   const [qvacisLoading, setQvacisLoading] = useState(false)
+  const [cthLoading, setCthLoading] = useState(false)
 
   // Mode synchronisé : un slider maître pilote toutes les couches WCS actives.
   // Chaque WCS layer remonte ses timestamps via onTimesLoaded ; le master
@@ -624,7 +625,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
     })
   }
 
-  const isLoading = loading.size > 0 || windLoading || tropoLoading || qvacisLoading
+  const isLoading = loading.size > 0 || windLoading || tropoLoading || qvacisLoading || cthLoading
 
   return (
     <div className="relative h-[calc(100vh-72px)] w-full overflow-hidden"
@@ -757,6 +758,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
           minFL={cthMinFL}
           onMinFLChange={setCthMinFL}
           opacity={0.65}
+          onLoadingChange={setCthLoading}
         />
 
         <FlightPlan
