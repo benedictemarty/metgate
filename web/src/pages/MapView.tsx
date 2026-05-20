@@ -1221,6 +1221,9 @@ function FeaturePopup({
   })()
   if (visiText) metarFields.push(['Visi', visiText])
 
+  const cloudsDecoded = props.clouds as string | undefined
+  if (cloudsDecoded) metarFields.push(['Nuages', cloudsDecoded])
+
   // Toutes les autres props scalaires non exclues, hors champs *_uom
   // (déjà concaténés à leur valeur principale).
   const otherFields: Array<[string, string]> = []
@@ -1230,6 +1233,7 @@ function FeaturePopup({
     if (k.startsWith('airTemperature') || k.startsWith('dewpointTemperature')) continue
     if (k.startsWith('qnh') || k.startsWith('windDirection') || k.startsWith('windSpeed')) continue
     if (k.startsWith('visibility')) continue
+    if (k === 'clouds' || k === 'cloud') continue
     if (typeof v === 'object') continue
     const s = fmtVal(v, k, props)
     if (s !== '') otherFields.push([fmtKey(k), s])

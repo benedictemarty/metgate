@@ -133,6 +133,15 @@ func parseMember(dec *xml.Decoder, typeName string) (map[string]any, error) {
 						enrichFromTAC(props, tac)
 					}
 				}
+				// Champ `cloud` des produits plats (SA_last, FT_last, FC_last) :
+				// décoder les groupes ciel en texte FR si `clouds` n'est pas déjà posé.
+				if _, hasClouds := props["clouds"]; !hasClouds {
+					if cloudStr, ok := props["cloud"].(string); ok && cloudStr != "" {
+						if decoded := decoder.DecodeCloudGroups(cloudStr); decoded != "" {
+							props["clouds"] = decoded
+						}
+					}
+				}
 				out := map[string]any{
 					"type":       "Feature",
 					"geometry":   geom,
@@ -430,6 +439,13 @@ var (
 	rxVisi     = regexp.MustCompile(`<iwxxm:prevailingVisibility[^>]*uom="([^"]+)"[^>]*>([^<]+)</iwxxm:prevailingVisibility>`)
 	rxICAOInfo = regexp.MustCompile(`<aixm:designator>([^<]+)</aixm:designator>`)
 
+	// Cloud layers IWXXM 3.0 — chaque <iwxxm:CloudLayer> contient amount + base.
+	rxCloudLayer  = regexp.MustCompile(`(?s)<iwxxm:CloudLayer[^>]*>.*?</iwxxm:CloudLayer>`)
+	rxCloudAmount = regexp.MustCompile(`CloudAmountReportedAtAerodrome/(FEW|SCT|BKN|OVC)`)
+	rxCloudBase   = regexp.MustCompile(`<iwxxm:base[^>]*>\s*([^<]+)\s*</iwxxm:base>`)
+	rxCloudCBTCU  = regexp.MustCompile(`/(CB|TCU)"`)
+	rxNilClouds   = regexp.MustCompile(`nilCloud[^>]+>(true)</`)
+
 	// TAC brut (SA_last, SP_last, FT_last, FC_last) — patterns positionnels METAR/TAF OACI.
 	rxTACWindKT  = regexp.MustCompile(`\b(VRB|\d{3})(\d{2,3})(?:G\d{2,3})?KT\b`)
 	rxTACWindMPS = regexp.MustCompile(`\b(VRB|\d{3})(\d{2,3})(?:G\d{2,3})?MPS\b`)
@@ -508,6 +524,9 @@ func enrichFromIWXXM(props map[string]any, opmet string) {
 	}
 	if visi != "" {
 		props["visibility_m"] = visi
+	}
+	if clouds := extractCloudsFromIWXXM(opmet); clouds != "" {
+		props["clouds"] = clouds
 	}
 	if cavok {
 		props["cavok"] = true
@@ -616,6 +635,59 @@ func enrichFromTAC(props map[string]any, tac string) {
 			props["cavok"] = true
 		}
 	}
+}
+
+// extractCloudsFromIWXXM extrait toutes les couches nuageuses d'un payload
+// IWXXM 3.0 et les retourne sous forme de chaîne lisible FR séparée par " | ".
+// Retourne "" si CAVOK ou aucune couche trouvée.
+func extractCloudsFromIWXXM(opmet string) string {
+	if m := rxCAVOK.FindStringSubmatch(opmet); len(m) >= 2 && m[1] == "true" {
+		return "" // CAVOK déjà traité ailleurs
+	}
+	if rxNilClouds.MatchString(opmet) {
+		return ""
+	}
+	covers := map[string]string{
+		"FEW": "1 à 2 octas",
+		"SCT": "3 à 4 octas",
+		"BKN": "5 à 7 octas",
+		"OVC": "ciel couvert (8 octas)",
+	}
+	layers := rxCloudLayer.FindAllString(opmet, -1)
+	var parts []string
+	for _, layer := range layers {
+		amtM := rxCloudAmount.FindStringSubmatch(layer)
+		if len(amtM) < 2 {
+			continue
+		}
+		cover, ok := covers[amtM[1]]
+		if !ok {
+			continue
+		}
+		baseM := rxCloudBase.FindStringSubmatch(layer)
+		if len(baseM) < 2 {
+			parts = append(parts, cover)
+			continue
+		}
+		baseF, err := strconv.ParseFloat(strings.TrimSpace(baseM[1]), 64)
+		if err != nil {
+			parts = append(parts, cover)
+			continue
+		}
+		heightFt := int(baseF)
+		heightM := int(baseF * 0.3048)
+		suffix := ""
+		if m := rxCloudCBTCU.FindStringSubmatch(layer); len(m) >= 2 {
+			switch m[1] {
+			case "CB":
+				suffix = " CB"
+			case "TCU":
+				suffix = " TCU"
+			}
+		}
+		parts = append(parts, fmt.Sprintf("%s à %d ft (~%d m)%s", cover, heightFt, heightM, suffix))
+	}
+	return strings.Join(parts, " | ")
 }
 
 // readNestedText lit le contenu textuel d'un élément, en tolérant un seul

@@ -15,7 +15,7 @@ var (
 	rxVisM    = regexp.MustCompile(`^(\d{4})(NDV)?$`)
 	rxVisSM   = regexp.MustCompile(`^(M)?(\d+)(?:/(\d+))?SM$`)
 	rxRVR     = regexp.MustCompile(`^R(\d{2}[LCR]?)/(M|P)?(\d{4})(?:V(M|P)?(\d{4}))?(FT)?(/[NDU])?$`)
-	rxSky     = regexp.MustCompile(`^(FEW|SCT|BKN|OVC)(\d{3})(CB|TCU)?$`)
+	rxSky     = regexp.MustCompile(`^(FEW|SCT|BKN|OVC)(\d{3})(CB|TCU|///)?$`)
 	rxVV      = regexp.MustCompile(`^VV(\d{3})$`)
 	rxTemp    = regexp.MustCompile(`^(M?\d{1,2})/(M?\d{1,2})$`)
 	rxQNH     = regexp.MustCompile(`^(Q|A)(\d{4})$`)
@@ -250,6 +250,8 @@ func decodeSky(m []string) string {
 		suffix = " — cumulonimbus (CB)"
 	case "TCU":
 		suffix = " — cumulus bourgeonnants (TCU)"
+	case "///":
+		// type non observé (station auto) — on l'ignore
 	}
 	return fmt.Sprintf("Nuages : %s à %d ft (~%.0f m)%s", cover, heightFt, heightM, suffix)
 }
@@ -310,4 +312,28 @@ func normTemp(s string) string {
 		return "-" + strings.TrimLeft(s[1:], "0")
 	}
 	return strings.TrimLeft(s, "0")
+}
+
+// DecodeCloudGroups décode un ou plusieurs groupes ciel séparés par des espaces
+// (ex: "FEW086 OVC110", "SCT030CB BKN033", "SKC") en texte FR.
+// Retourne "" si aucun groupe reconnu.
+func DecodeCloudGroups(s string) string {
+	var parts []string
+	for _, tok := range strings.Fields(s) {
+		switch tok {
+		case "SKC", "CLR":
+			parts = append(parts, "Ciel clair")
+			continue
+		case "NSC":
+			parts = append(parts, "Aucun nuage significatif (NSC)")
+			continue
+		case "NCD":
+			parts = append(parts, "Aucun nuage détecté (NCD)")
+			continue
+		}
+		if m := rxSky.FindStringSubmatch(tok); m != nil {
+			parts = append(parts, decodeSky(m))
+		}
+	}
+	return strings.Join(parts, " | ")
 }
