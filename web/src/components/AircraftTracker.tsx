@@ -22,6 +22,9 @@ export interface AircraftState {
   baro_alt_ft: number
   fl: number
   time_iso: string
+  // champs ajoutés par le portail
+  found?: boolean
+  stale?: boolean
 }
 
 interface SearchResp {
@@ -81,21 +84,31 @@ export default function AircraftTracker({
     }
   }
 
-  // Polling de l'avion sélectionné
+  const [lostContact, setLostContact] = useState(false)
+
+  // Polling de l'avion sélectionné — s'arrête dès que found:false
   useEffect(() => {
     if (!selected) return
+    setLostContact(false)
+    let stopped = false
     const tick = async () => {
+      if (stopped) return
       try {
         const r = await fetch(`/api/aircraft/${selected.icao24}`)
         if (!r.ok) return
-        const s: AircraftState = await r.json()
+        const s: AircraftState & { found?: boolean } = await r.json()
+        if (s.found === false) {
+          setLostContact(true)
+          stopped = true
+          return
+        }
+        setLostContact(false)
         onSelect(s)
-      } catch {
-        /* ignore transient errors */
-      }
+      } catch { /* ignore transient errors */ }
     }
+    tick()
     const id = window.setInterval(tick, POLL_INTERVAL_MS)
-    return () => window.clearInterval(id)
+    return () => { stopped = true; window.clearInterval(id) }
   }, [selected?.icao24, onSelect])
 
   // Centre la carte sur l'avion à la sélection
@@ -236,6 +249,18 @@ export default function AircraftTracker({
               </span>
             </div>
             <div className="text-[0.625rem] text-slate-400 mb-2">{selected.origin_country}</div>
+            {lostContact && (
+              <div className="mb-2 px-2 py-1 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[0.625rem] flex items-center gap-1.5">
+                <span className="size-1.5 rounded-full bg-amber-400 shrink-0" />
+                Contact perdu — poll arrêté
+              </div>
+            )}
+            {!lostContact && selected.stale && (
+              <div className="mb-2 px-2 py-1 rounded bg-slate-700/40 border border-slate-600/40 text-slate-400 text-[0.625rem] flex items-center gap-1.5">
+                <span className="size-1.5 rounded-full bg-slate-500 shrink-0" />
+                Position en cache (OpenSky indisponible)
+              </div>
+            )}
             <dl className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[0.625rem]">
               <div className="flex justify-between">
                 <dt className="text-slate-500">FL</dt>

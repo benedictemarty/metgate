@@ -185,6 +185,10 @@ func (a *API) handleAircraftSearch(w http.ResponseWriter, r *http.Request) {
 
 // handleAircraftState : /api/aircraft/{icao24}
 // État courant d'un avion par identifiant ADS-B (24 bits hex).
+// Retourne toujours 200 pour éviter les erreurs console navigateur :
+//   - état live  → {…State, stale:false}
+//   - état stale → {…State, stale:true}  (dernier connu en mémoire)
+//   - introuvable → {found:false, icao24:…}
 func (a *API) handleAircraftState(w http.ResponseWriter, r *http.Request) {
 	icao := strings.TrimSpace(r.PathValue("icao24"))
 	if icao == "" {
@@ -196,11 +200,21 @@ func (a *API) handleAircraftState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	if st == nil {
-		http.Error(w, "aucun état pour "+icao, http.StatusNotFound)
+	type stateResp struct {
+		aircraft.State
+		Found bool `json:"found"`
+		Stale bool `json:"stale"`
+	}
+	if st != nil {
+		writeJSON(w, http.StatusOK, stateResp{State: *st, Found: true, Stale: false})
 		return
 	}
-	writeJSON(w, http.StatusOK, st)
+	// Fallback : dernier état connu en mémoire (stale = plus mis à jour par OpenSky).
+	if hist := a.aircraft.History(icao); len(hist) > 0 {
+		writeJSON(w, http.StatusOK, stateResp{State: hist[len(hist)-1], Found: true, Stale: true})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"found": false, "icao24": icao})
 }
 
 // handleAircraftRoute : /api/aircraft/{icao24}/route?dur=60&dest=ICAO&events=1&wind=1
