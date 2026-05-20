@@ -427,6 +427,7 @@ var (
 	rxWindDir  = regexp.MustCompile(`<iwxxm:meanWindDirection[^>]*uom="([^"]+)"[^>]*>([^<]+)</iwxxm:meanWindDirection>`)
 	rxWindSpd  = regexp.MustCompile(`<iwxxm:meanWindSpeed[^>]*uom="([^"]+)"[^>]*>([^<]+)</iwxxm:meanWindSpeed>`)
 	rxCAVOK    = regexp.MustCompile(`cloudAndVisibilityOK="(true|false)"`)
+	rxVisi     = regexp.MustCompile(`<iwxxm:prevailingVisibility[^>]*uom="([^"]+)"[^>]*>([^<]+)</iwxxm:prevailingVisibility>`)
 	rxICAOInfo = regexp.MustCompile(`<aixm:designator>([^<]+)</aixm:designator>`)
 
 	// TAC brut (SA_last, SP_last, FT_last, FC_last) — patterns positionnels METAR/TAF OACI.
@@ -484,6 +485,7 @@ func enrichFromIWXXM(props map[string]any, opmet string) {
 	qnh, _ := get(rxQNH)
 	wdir, _ := get(rxWindDir)
 	wspd, _ := get(rxWindSpd)
+	visi, _ := get(rxVisi)
 	cavok := false
 	if m := rxCAVOK.FindStringSubmatch(opmet); len(m) >= 2 && m[1] == "true" {
 		cavok = true
@@ -503,6 +505,9 @@ func enrichFromIWXXM(props map[string]any, opmet string) {
 	}
 	if wspd != "" {
 		props["windSpeed_kt"] = wspd
+	}
+	if visi != "" {
+		props["visibility_m"] = visi
 	}
 	if cavok {
 		props["cavok"] = true

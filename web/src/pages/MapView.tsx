@@ -445,6 +445,10 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
           : p.pressure != null
             ? { qnh_hPa: Math.round(parseFloat(String(p.pressure))).toString() }
             : undefined
+      // `visi` (mètres, float string) → visibility_m pour normalisation avec IWXXM
+      const vis = p.visibility_m != null ? undefined : p.visi != null ? { visibility_m: String(p.visi) } : undefined
+      // cavok est une string "true"/"false" dans les produits plats
+      const cavokNorm = p.cavok != null ? { cavok: p.cavok === true || p.cavok === 'true' } : undefined
       return {
         ...f,
         properties: {
@@ -452,6 +456,8 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
           locationIndicatorICAO: p.id,
           observationTime: p.analysis_time,
           ...qnh,
+          ...vis,
+          ...cavokNorm,
         },
       }
     }
@@ -1136,12 +1142,13 @@ const POPUP_EXCLUDE_KEYS = new Set([
   'ogc_fid',
   'swpid',
   'opmet_msg',
-  // Doublons SA_last (déjà mappés vers les champs structurés standard)
+  // Doublons SA_last/FT_last (déjà mappés vers les champs structurés standard)
   'pressure',
   'wind_dir',
   'wind_speed',
   'dewpoint',
   'temperature',
+  'visi',
   'id',
   'analysis_time',
 ])
@@ -1184,7 +1191,7 @@ function FeaturePopup({
   const tac = props.tac as string | undefined
   const decoded = props.decoded as string | undefined
   const status = props.status as string | undefined
-  const cavok = props.cavok === true
+  const cavok = props.cavok === true || props.cavok === 'true'
 
   const headerTitle = icao ?? (props.trackingid as string | undefined) ?? family.replace(/_last$/, '')
   const headerTime =
@@ -1201,6 +1208,19 @@ function FeaturePopup({
   pushMetar('Wind dir', 'windDirection_deg', '°')
   pushMetar('Wind speed', 'windSpeed_kt', ' kt')
 
+  // Visibilité : CAVOK ou valeur en mètres → texte lisible
+  const visiRaw = props.visibility_m as string | undefined
+  const visiText = (() => {
+    if (cavok) return '≥ 10 km (CAVOK)'
+    if (!visiRaw) return undefined
+    const n = parseFloat(visiRaw)
+    if (isNaN(n)) return visiRaw
+    if (n >= 9999) return '≥ 10 km'
+    if (n >= 1000) return `${+(n / 1000).toFixed(1)} km`
+    return `${Math.round(n)} m`
+  })()
+  if (visiText) metarFields.push(['Visi', visiText])
+
   // Toutes les autres props scalaires non exclues, hors champs *_uom
   // (déjà concaténés à leur valeur principale).
   const otherFields: Array<[string, string]> = []
@@ -1209,6 +1229,7 @@ function FeaturePopup({
     if (k.endsWith('_uom')) continue
     if (k.startsWith('airTemperature') || k.startsWith('dewpointTemperature')) continue
     if (k.startsWith('qnh') || k.startsWith('windDirection') || k.startsWith('windSpeed')) continue
+    if (k.startsWith('visibility')) continue
     if (typeof v === 'object') continue
     const s = fmtVal(v, k, props)
     if (s !== '') otherFields.push([fmtKey(k), s])
