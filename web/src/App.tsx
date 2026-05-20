@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
-import { Cloud, FileText, Globe, Loader2, Map as MapIcon, Moon, Sun, TrendingUp } from 'lucide-react'
+import { Cloud, FileText, Globe, Loader2, Map as MapIcon, Moon, Sun, TrendingUp, BookOpen } from 'lucide-react'
 import Catalog from './pages/Catalog'
 import type { Aggregate } from './types'
 
@@ -100,6 +100,15 @@ export default function App() {
               label="Profil"
             />
           </nav>
+          <a
+            href="/api/docs"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Documentation API (OpenAPI / Swagger)"
+            className="size-8 rounded-lg border border-slate-800 bg-slate-900/40 flex items-center justify-center text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition"
+          >
+            <BookOpen className="size-4" />
+          </a>
           </div>
         </div>
       </header>
