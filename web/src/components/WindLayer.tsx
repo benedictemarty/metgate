@@ -230,10 +230,25 @@ export default function WindLayer({
           continue
         }
 
+        // Au dézoom max, 1° géographique = fraction de pixel → traits invisibles.
+        // On impose une longueur minimale de 2 px en preservant la direction ;
+        // la position géographique de la particule reste correcte (newLon/newLat).
+        const dx = next.x - prev.x
+        const dy = next.y - prev.y
+        const pixLen = Math.sqrt(dx * dx + dy * dy)
+        const MIN_PX = 2.0
+        let drawNextX = next.x
+        let drawNextY = next.y
+        if (pixLen > 0.001 && pixLen < MIN_PX) {
+          const s = MIN_PX / pixLen
+          drawNextX = prev.x + dx * s
+          drawNextY = prev.y + dy * s
+        }
+
         ctx.strokeStyle = colorForSpeed(uv.speed, speedMax)
         ctx.beginPath()
         ctx.moveTo(prev.x, prev.y)
-        ctx.lineTo(next.x, next.y)
+        ctx.lineTo(drawNextX, drawNextY)
         ctx.stroke()
 
         p.lon = newLon
