@@ -421,73 +421,74 @@ export default function MapView({ data }: MapViewProps) {
   }, [candidates])
 
   useEffect(() => {
+    // Produits plats MetGate (format `id`+`tac`) enrichissant les flux IWXXM.
+    // Chargés en arrière-plan pour ne pas retarder l'affichage du produit principal.
+    const FLAT_FALLBACKS: Record<string, string[]> = {
+      METAR: ['SA_last'],
+      SPECI: ['SP_last'],
+      TAF:   ['FT_last', 'FC_last'],
+    }
+
+    // Normalise une feature SA/FT/FC vers le format IWXXM (locationIndicatorICAO).
+    const normFlat = (f: GeoJSON.Feature): GeoJSON.Feature => ({
+      ...f,
+      properties: {
+        ...f.properties,
+        locationIndicatorICAO: f.properties?.id,
+        observationTime: f.properties?.analysis_time,
+      },
+    })
+
     active.forEach(async (name) => {
       const typeName = typeNameOf[name]
       if (!typeName || loaded[name] || loading.has(name) || errors[name]) return
       setLoading((prev) => new Set(prev).add(name))
       try {
-        // Produits plats MetGate (format `id` + `tac`) à fusionner avec les IWXXM
-        // correspondants pour couvrir les zones absentes (ED* Allemagne, K* USA, etc.).
-        // Priorité : IWXXM d'abord, plat seulement pour les stations manquantes.
-        const FLAT_FALLBACKS: Record<string, string[]> = {
-          METAR: ['SA_last'],
-          SPECI: ['SP_last'],
-          TAF:   ['FT_last', 'FC_last'],
-        }
-        const flatTypes = FLAT_FALLBACKS[name] ?? []
-
-        // On demande large car certaines familles (RDT_MSG) renvoient ~5
-        // features de prévision par cellule ; on filtre ensuite T+0 côté front.
-        const [r, ...flatResponses] = await Promise.all([
-          fetch(`/api/feature?type=${encodeURIComponent(typeName)}&count=2000`),
-          ...flatTypes.map((t) => fetch(`/api/feature?type=${t}&count=2000`)),
-        ])
+        // 1. Charge et affiche le produit principal (IWXXM) immédiatement.
+        const r = await fetch(`/api/feature?type=${encodeURIComponent(typeName)}&count=2000`)
         if (!r.ok) {
           const detail = await r.text()
           throw new Error(`HTTP ${r.status}: ${detail.slice(0, 80)}`)
         }
         const geo = (await r.json()) as GeoJSON.FeatureCollection
-
-        // Fusion des produits plats : normalise `id` → `locationIndicatorICAO`
-        // et `analysis_time` → `observationTime`, puis ajoute les stations absentes.
-        if (flatTypes.length > 0) {
-          const knownIcao = new Set(
-            (geo.features ?? []).map((f) => f.properties?.locationIndicatorICAO as string),
-          )
-          for (const flatRes of flatResponses) {
-            if (!flatRes?.ok) continue
-            const geoFlat = (await flatRes.json()) as GeoJSON.FeatureCollection
-            const added = (geoFlat.features ?? [])
-              .filter((f) => {
-                const id = f.properties?.id as string | undefined
-                return id && !knownIcao.has(id)
-              })
-              .map((f) => {
-                const id = f.properties?.id as string
-                knownIcao.add(id)
-                return {
-                  ...f,
-                  properties: {
-                    ...f.properties,
-                    locationIndicatorICAO: id,
-                    observationTime: f.properties?.analysis_time,
-                  },
-                }
-              })
-            geo.features = [...(geo.features ?? []), ...added]
-          }
-        }
-
         const filtered = filterBySlot(geo, selectedSlot, showTrails)
         setLoaded((prev) => ({
           ...prev,
-          [name]: {
-            rawData: geo,
-            data: filtered,
-            count: filtered.features.length,
-            total: geo.features?.length ?? 0,
-          },
+          [name]: { rawData: geo, data: filtered, count: filtered.features.length, total: geo.features?.length ?? 0 },
         }))
+
+        // 2. Enrichit avec les produits plats en arrière-plan (SA_last, FT_last…).
+        //    Ne bloque pas l'affichage initial — ajoute les stations manquantes dès qu'elles arrivent.
+        const flatTypes = FLAT_FALLBACKS[name] ?? []
+        for (const flatType of flatTypes) {
+          fetch(`/api/feature?type=${flatType}&count=2000`)
+            .then((res) => (res.ok ? res.json() : null))
+            .then((geoFlat: GeoJSON.FeatureCollection | null) => {
+              if (!geoFlat) return
+              setLoaded((prev) => {
+                const cur = prev[name]
+                if (!cur) return prev
+                const known = new Set(
+                  (cur.rawData.features ?? []).map((f) => f.properties?.locationIndicatorICAO as string),
+                )
+                const added = (geoFlat.features ?? []).filter((f) => {
+                  const id = f.properties?.id as string | undefined
+                  return id && !known.has(id)
+                }).map(normFlat)
+                if (added.length === 0) return prev
+                const merged: GeoJSON.FeatureCollection = {
+                  ...cur.rawData,
+                  features: [...(cur.rawData.features ?? []), ...added],
+                }
+                const filteredMerged = filterBySlot(merged, selectedSlot, showTrails)
+                return {
+                  ...prev,
+                  [name]: { rawData: merged, data: filteredMerged, count: filteredMerged.features.length, total: merged.features.length },
+                }
+              })
+            })
+            .catch(() => {})
+        }
       } catch (e) {
         setErrors((prev) => ({
           ...prev,
@@ -747,47 +748,27 @@ export default function MapView({ data }: MapViewProps) {
           opacity={0.65}
         />
 
-        {showFlightPlan ? (
-          <FlightPlan
-            plan={routePlan}
-            onPlan={isLivePlan ? () => {} : setManualPlan}
-            cursorIdx={routePlan ? routeCursor : -1}
-            playing={routePlaying}
-            onTogglePlay={() => setRoutePlaying((p) => !p)}
-            onCursorChange={(i) => {
-              setRouteCursor(i)
-              setRoutePlaying(false)
-            }}
-            onClose={() => setShowFlightPlan(false)}
-          />
-        ) : (
-          <button
-            onClick={() => setShowFlightPlan(true)}
-            title="Afficher le plan de vol"
-            className="absolute top-4 left-[19rem] z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-950/85 border border-emerald-400/40 text-emerald-300 text-xs font-medium backdrop-blur-md shadow-lg hover:bg-slate-900/90 transition"
-          >
-            <Plane className="size-3.5" />
-            Plan de vol
-          </button>
-        )}
+        <FlightPlan
+          plan={routePlan}
+          onPlan={isLivePlan ? () => {} : setManualPlan}
+          cursorIdx={routePlan ? routeCursor : -1}
+          playing={routePlaying}
+          onTogglePlay={() => setRoutePlaying((p) => !p)}
+          onCursorChange={(i) => {
+            setRouteCursor(i)
+            setRoutePlaying(false)
+          }}
+          onClose={() => setShowFlightPlan(false)}
+          visible={showFlightPlan}
+        />
 
-        {showTracker ? (
-          <AircraftTracker
-            selected={trackedAircraft}
-            onSelect={setTrackedAircraft}
-            onLivePlan={setLivePlan}
-            onClose={() => setShowTracker(false)}
-          />
-        ) : (
-          <button
-            onClick={() => setShowTracker(true)}
-            title="Afficher le suivi ADS-B"
-            className="absolute bottom-4 left-[19rem] z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-950/85 border border-rose-400/30 text-rose-300 text-xs font-medium backdrop-blur-md shadow-lg hover:bg-slate-900/90 transition"
-          >
-            <Radio className="size-3.5" />
-            Suivi avion
-          </button>
-        )}
+        <AircraftTracker
+          selected={trackedAircraft}
+          onSelect={setTrackedAircraft}
+          onLivePlan={setLivePlan}
+          onClose={() => setShowTracker(false)}
+          visible={showTracker}
+        />
 
         {popup && (
           <Popup
@@ -809,6 +790,26 @@ export default function MapView({ data }: MapViewProps) {
           </Popup>
         )}
       </MapGL>
+
+      {/* Boutons flip-flop Plan de vol / Suivi avion — hors MapGL pour éviter l'overflow du canvas */}
+      {!showFlightPlan && (
+        <button
+          onClick={() => setShowFlightPlan(true)}
+          className="absolute top-4 left-[19rem] z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-950/90 border border-emerald-400/40 text-emerald-300 text-xs font-medium backdrop-blur-md shadow-lg hover:bg-slate-900 transition"
+        >
+          <Plane className="size-3.5" />
+          Plan de vol
+        </button>
+      )}
+      {!showTracker && (
+        <button
+          onClick={() => setShowTracker(true)}
+          className="absolute bottom-4 left-[19rem] z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-950/90 border border-rose-400/30 text-rose-300 text-xs font-medium backdrop-blur-md shadow-lg hover:bg-slate-900 transition"
+        >
+          <Radio className="size-3.5" />
+          Suivi avion
+        </button>
+      )}
 
       <Sidebar
         open={sidebarOpen}
@@ -1299,7 +1300,7 @@ function Sidebar({
       <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800/70">
         <div className="flex items-center gap-2">
           <LayersIcon className="size-4 text-slate-400" />
-          <div className="text-sm font-medium">Couches WFS</div>
+          <div className="text-sm font-medium">Couches météo</div>
         </div>
         <button
           onClick={onToggle}

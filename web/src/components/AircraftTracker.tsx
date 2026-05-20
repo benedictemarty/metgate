@@ -38,6 +38,7 @@ interface AircraftTrackerProps {
   onSelect: (s: AircraftState | null) => void
   onLivePlan: (plan: RoutePlan | null) => void
   onClose?: () => void
+  visible?: boolean
 }
 
 export default function AircraftTracker({
@@ -45,6 +46,7 @@ export default function AircraftTracker({
   onSelect,
   onLivePlan,
   onClose,
+  visible = true,
 }: AircraftTrackerProps) {
   const { current: mapRef } = useMap()
   const map = mapRef?.getMap()
@@ -141,7 +143,7 @@ export default function AircraftTracker({
           que le Plan de vol), mais en bas pour ne pas se chevaucher.
           La sidebar WFS occupe la colonne 0 (left-4 → bottom-4), le Plan de
           vol prend left-[19rem] top-4, on prend left-[19rem] bottom-4. */}
-      <div className="absolute bottom-4 left-[19rem] z-10 w-72 px-3 py-3 rounded-xl border border-rose-400/30 bg-slate-950/85 backdrop-blur-md shadow-2xl">
+      <div className={`absolute bottom-4 left-[19rem] z-10 w-72 px-3 py-3 rounded-xl border border-rose-400/30 bg-slate-950/85 backdrop-blur-md shadow-2xl ${visible ? '' : 'hidden'}`}>
         <div className="flex items-center gap-2 mb-2">
           <Radio className="size-4 text-rose-300" />
           <div className="text-sm font-medium">Suivi avion (ADS-B)</div>
@@ -167,7 +169,7 @@ export default function AircraftTracker({
           {onClose && (
             <button
               onClick={onClose}
-              className="text-slate-600 hover:text-slate-300 transition"
+              className="text-slate-400 hover:text-white transition"
               title="Réduire"
             >
               <ChevronDown className="size-4" />

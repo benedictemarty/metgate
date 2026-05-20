@@ -94,6 +94,7 @@ interface FlightPlanProps {
   onTogglePlay: () => void
   onCursorChange: (idx: number) => void
   onClose?: () => void
+  visible?: boolean
 }
 
 export default function FlightPlan({
@@ -104,6 +105,7 @@ export default function FlightPlan({
   onTogglePlay,
   onCursorChange,
   onClose,
+  visible = true,
 }: FlightPlanProps) {
   const { current: mapRef } = useMap()
   const map = mapRef?.getMap()
@@ -210,7 +212,7 @@ export default function FlightPlan({
           plan
             ? 'top-4 left-[19rem] w-72 border-emerald-400/40 bg-slate-950/85'
             : 'top-4 left-[19rem] w-72 border-slate-800/70 bg-slate-950/80'
-        }`}
+        } ${visible ? '' : 'hidden'}`}
       >
         <div className="flex items-center gap-2 mb-2">
           <Plane className="size-4 text-emerald-300" />
@@ -228,7 +230,7 @@ export default function FlightPlan({
             {onClose && (
               <button
                 onClick={onClose}
-                className="text-slate-600 hover:text-slate-300 transition"
+                className="text-slate-400 hover:text-white transition"
                 title="Réduire"
               >
                 <ChevronDown className="size-4" />
