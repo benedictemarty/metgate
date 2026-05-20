@@ -560,17 +560,19 @@ func formatTAC(icao string, props map[string]any, temp, dew, qnh, wdir, wspd str
 	if wdir != "" || wspd != "" {
 		if wdir == "" {
 			wdir = "VRB"
+		} else if d, err := strconv.Atoi(trimDecimals(wdir)); err == nil {
+			wdir = fmt.Sprintf("%03d", d) // padder à 3 chiffres : "20" → "020"
 		}
 		if wspd == "" {
 			wspd = "//"
 		}
-		fmt.Fprintf(&sb, "%s/%sKT ", trimDecimals(wdir), trimDecimals(wspd))
+		fmt.Fprintf(&sb, "%s/%sKT ", wdir, trimDecimals(wspd))
 	}
 	if cavok {
 		sb.WriteString("CAVOK ")
 	}
 	if temp != "" || dew != "" {
-		fmt.Fprintf(&sb, "%s/%s ", trimDecimals(temp), trimDecimals(dew))
+		fmt.Fprintf(&sb, "%s/%s ", toMPrefix(temp), toMPrefix(dew))
 	}
 	if qnh != "" {
 		fmt.Fprintf(&sb, "Q%s ", trimDecimals(qnh))
@@ -582,6 +584,23 @@ func trimDecimals(s string) string {
 	if i := strings.IndexByte(s, '.'); i >= 0 {
 		// "31.0" → "31", "1007.0" → "1007"
 		return s[:i]
+	}
+	return s
+}
+
+// toMPrefix convertit une température IWXXM ("-5.0", "9.0") en format METAR
+// ("M05", "09") avec le préfixe M pour les négatifs et padding à 2 chiffres.
+func toMPrefix(s string) string {
+	s = trimDecimals(s)
+	neg := strings.HasPrefix(s, "-")
+	if neg {
+		s = s[1:]
+	}
+	if n, err := strconv.Atoi(s); err == nil {
+		if neg {
+			return fmt.Sprintf("M%02d", n)
+		}
+		return fmt.Sprintf("%02d", n)
 	}
 	return s
 }

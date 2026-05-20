@@ -19,6 +19,8 @@ var (
 	rxVV      = regexp.MustCompile(`^VV(\d{3})$`)
 	rxTemp    = regexp.MustCompile(`^(M?\d{1,2})/(M?\d{1,2})$`)
 	rxQNH     = regexp.MustCompile(`^(Q|A)(\d{4})$`)
+	rxMissing = regexp.MustCompile(`^/+$`)             // // //// //////
+	rxRVRClrd = regexp.MustCompile(`^R(\d{2}[LCR]?)/CLRD(\d{2})$`) // R26/CLRD70
 )
 
 // DecodeMETAR transforme un TAC METAR/SPECI en texte FR multi-ligne.
@@ -92,6 +94,45 @@ func DecodeMETAR(tac string) string {
 			lines = append(lines, "Ciel clair")
 			i++
 			continue
+		case "AUTO":
+			lines = append(lines, "Station automatique (AUTO)")
+			i++
+			continue
+		case "COR":
+			lines = append(lines, "Message corrigé (COR)")
+			i++
+			continue
+		case "SPECI":
+			i++ // mot-clé SPECI en tête du TAC — déjà traité dans le header
+			continue
+		}
+
+		// Données manquantes : //, ////, etc. → ignorer silencieusement
+		if rxMissing.MatchString(tok) {
+			i++
+			continue
+		}
+
+		// Heure en double (TAC reconstruit depuis IWXXM) → ignorer
+		if rxTime.MatchString(tok) {
+			i++
+			continue
+		}
+
+		// RE<phénomène> : météo récente (RERA, RETS, RESHGR, RE// …)
+		if strings.HasPrefix(tok, "RE") && len(tok) > 2 {
+			suffix := tok[2:]
+			if rxMissing.MatchString(suffix) || suffix == "" {
+				i++
+				continue
+			}
+			if w := decodeWeather(suffix); w != "" {
+				lines = append(lines, "Phénomène récent : "+w)
+			} else {
+				lines = append(lines, "Phénomène récent : "+suffix)
+			}
+			i++
+			continue
 		}
 
 		if m := rxWind.FindStringSubmatch(tok); m != nil {
@@ -112,6 +153,11 @@ func DecodeMETAR(tac string) string {
 		}
 		if m := rxVisSM.FindStringSubmatch(tok); m != nil {
 			lines = append(lines, decodeVisSM(m))
+			i++
+			continue
+		}
+		if m := rxRVRClrd.FindStringSubmatch(tok); m != nil {
+			lines = append(lines, fmt.Sprintf("RVR piste %s : piste dégagée (CLRD), coeff. %s", m[1], m[2]))
 			i++
 			continue
 		}
