@@ -21,9 +21,13 @@ interface TropoGrid {
 const SOURCE_ID = 'metgate-tropo-src'
 const LAYER_ID = 'metgate-tropo-layer'
 
-// Échelle d'altitude tropopause (m). Hors plage = clamp.
-const ALT_MIN_M = 5500
-const ALT_MAX_M = 13500
+// Bbox fixe (lonMin, latMin, lonMax, latMax) couvrant le domaine d'intérêt
+// du portail (Europe + Atlantique nord + Afrique + Méditerranée). Choix
+// délibéré : la couche tropopause ne re-fetch PAS sur zoom — sinon en
+// gros zoom la grille redemandée se ré-aligne sur la viewport et l'œil
+// perçoit la couche comme « collée » à la France au lieu de rester
+// géographiquement stable.
+const TROPO_BBOX: [number, number, number, number] = [-60, -40, 60, 75]
 
 interface TropoLayerProps {
   enabled: boolean
@@ -41,48 +45,31 @@ export default function TropoLayer({ enabled, linkedInstant, onTimesLoaded }: Tr
     status: 'idle',
   })
 
-  // Fetch on enable + on viewport change.
+  // Fetch unique au mount / activation : on utilise une bbox fixe pour
+  // que la couche reste géographiquement stable, indépendamment du zoom.
   useEffect(() => {
     if (!enabled || !map) return
     let aborted = false
-    let pending: number | null = null
-
-    const fetchTropo = () => {
-      const b = map.getBounds()
-      const lonMin = Math.max(-180, b.getWest())
-      const lonMax = Math.min(180, b.getEast())
-      const latMin = Math.max(-90, b.getSouth())
-      const latMax = Math.min(90, b.getNorth())
-      const url = `/api/tropo?bbox=${lonMin.toFixed(2)},${latMin.toFixed(2)},${lonMax.toFixed(2)},${latMax.toFixed(2)}`
-      setInfo({ status: 'loading' })
-      fetch(url)
-        .then((r) => {
-          if (!r.ok) throw new Error(`HTTP ${r.status}`)
-          return r.json()
-        })
-        .then((g: TropoGrid) => {
-          if (aborted) return
-          setGrid(g)
-          setStepIdx(g.current_idx ?? 0)
-          if (onTimesLoaded) onTimesLoaded(g.steps?.map((s) => s.time) ?? [])
-          setInfo({ status: 'idle' })
-        })
-        .catch((e) => {
-          if (!aborted) setInfo({ status: 'error', msg: String(e) })
-        })
-    }
-
-    const debouncedFetch = () => {
-      if (pending !== null) window.clearTimeout(pending)
-      pending = window.setTimeout(fetchTropo, 350)
-    }
-
-    fetchTropo()
-    map.on('moveend', debouncedFetch)
+    const [lonMin, latMin, lonMax, latMax] = TROPO_BBOX
+    const url = `/api/tropo?bbox=${lonMin},${latMin},${lonMax},${latMax}`
+    setInfo({ status: 'loading' })
+    fetch(url)
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        return r.json()
+      })
+      .then((g: TropoGrid) => {
+        if (aborted) return
+        setGrid(g)
+        setStepIdx(g.current_idx ?? 0)
+        if (onTimesLoaded) onTimesLoaded(g.steps?.map((s) => s.time) ?? [])
+        setInfo({ status: 'idle' })
+      })
+      .catch((e) => {
+        if (!aborted) setInfo({ status: 'error', msg: String(e) })
+      })
     return () => {
       aborted = true
-      if (pending !== null) window.clearTimeout(pending)
-      map.off('moveend', debouncedFetch)
     }
   }, [enabled, map])
 
@@ -127,6 +114,13 @@ export default function TropoLayer({ enabled, linkedInstant, onTimesLoaded }: Tr
     if (!ctx) return
     const img = ctx.createImageData(grid.width, grid.height)
     const data = img.data
+    // Échelle de palette dérivée des bornes réelles renvoyées par le step,
+    // au lieu de constantes en dur (qui clampaient massivement les pixels
+    // tropicaux au bleu pur et créaient des transitions brutales aux
+    // hautes latitudes). Garde-fou anti div-par-0 si min == max.
+    const altMin = step.alt_min_m
+    const altMax = step.alt_max_m
+    const span = Math.max(1, altMax - altMin)
     for (let i = 0; i < step.alt.length; i++) {
       const a = step.alt[i]
       const k = i * 4
@@ -135,7 +129,7 @@ export default function TropoLayer({ enabled, linkedInstant, onTimesLoaded }: Tr
         data[k + 3] = 0
         continue
       }
-      const t = Math.max(0, Math.min(1, (a - ALT_MIN_M) / (ALT_MAX_M - ALT_MIN_M)))
+      const t = Math.max(0, Math.min(1, (a - altMin) / span))
       const c = palette(t)
       data[k] = c[0]
       data[k + 1] = c[1]
@@ -203,19 +197,19 @@ export default function TropoLayer({ enabled, linkedInstant, onTimesLoaded }: Tr
   return (
     <>
       {info.status === 'loading' && !grid && (
-        <div className="absolute top-4 right-44 z-10 px-2 py-1 rounded bg-slate-950/80 backdrop-blur text-[10px] text-slate-400 border border-slate-800/60">
+        <div className="absolute top-4 right-44 z-10 px-2 py-1 rounded bg-slate-950/80 backdrop-blur text-[0.625rem] text-slate-400 border border-slate-800/60">
           chargement tropopause…
         </div>
       )}
       {grid && step && (
-        <div className="absolute bottom-44 right-4 z-10 px-3 py-2 rounded-lg bg-slate-950/85 backdrop-blur-md border border-slate-800/70 text-[10px] text-slate-300 shadow-2xl flex flex-col gap-2 min-w-[260px]">
+        <div className="absolute bottom-44 right-4 z-10 px-3 py-2 rounded-lg bg-slate-950/85 backdrop-blur-md border border-slate-800/70 text-[0.625rem] text-slate-300 shadow-2xl flex flex-col gap-2 min-w-[260px]">
           <div className="flex items-center gap-2">
             <span className="text-slate-500">Tropopause</span>
             <span className="font-mono">
               {(step.alt_min_m / 1000).toFixed(1)}–{(step.alt_max_m / 1000).toFixed(1)} km
             </span>
           </div>
-          <div className="text-[9px] text-slate-500 font-mono truncate">
+          <div className="text-[0.5625rem] text-slate-500 font-mono truncate">
             {grid.coverage_id} · {step.time.replace('T', ' ').replace('Z', ' UTC')}
           </div>
           {grid.steps.length > 1 && !linkedInstant && (
@@ -242,22 +236,24 @@ export default function TropoLayer({ enabled, linkedInstant, onTimesLoaded }: Tr
                 }}
                 className="flex-1 accent-amber-400 h-1"
               />
-              <span className="font-mono tabular-nums text-[10px] w-10 text-right">
+              <span className="font-mono tabular-nums text-[0.625rem] w-10 text-right">
                 {stepIdx + 1}/{grid.steps.length}
               </span>
             </div>
           )}
           {linkedInstant && step && (
-            <div className="text-[9px] text-amber-300/70 italic flex items-center justify-between gap-2">
+            <div className="text-[0.5625rem] text-amber-300/70 italic flex items-center justify-between gap-2">
               <span>synchro · step {effectiveStepIdx + 1}/{grid.steps.length}</span>
               <span className="text-amber-300/60 font-mono normal-case">
                 Δ{tropoDeltaMin(linkedInstant, step.time)} min
               </span>
             </div>
           )}
-          {/* Mini-légende palette */}
+          {/* Mini-légende palette — bornes dynamiques calées sur le step. */}
           <div className="flex items-center gap-1 mt-1">
-            <span className="text-[9px] text-slate-500 w-7 text-right">5.5km</span>
+            <span className="text-[0.5625rem] text-slate-500 w-9 text-right">
+              {(step.alt_min_m / 1000).toFixed(1)}km
+            </span>
             <div
               className="flex-1 h-2 rounded-sm"
               style={{
@@ -265,7 +261,9 @@ export default function TropoLayer({ enabled, linkedInstant, onTimesLoaded }: Tr
                   'linear-gradient(to right, rgb(200,60,60), rgb(240,140,60), rgb(240,220,80), rgb(120,200,100), rgb(60,130,200))',
               }}
             />
-            <span className="text-[9px] text-slate-500 w-8">13.5km</span>
+            <span className="text-[0.5625rem] text-slate-500 w-9">
+              {(step.alt_max_m / 1000).toFixed(1)}km
+            </span>
           </div>
         </div>
       )}

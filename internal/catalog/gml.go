@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/bmarty/metgate/internal/decoder"
 )
 
 // GMLToGeoJSON convertit une wfs:FeatureCollection GML 3.2 (sortie MetGate)
@@ -23,7 +25,7 @@ import (
 //     séparément via une route dédiée si besoin.
 //   - axe-order EPSG:4326 dans MetGate = lat,lon ; on swap en [lon,lat]
 //     pour respecter GeoJSON RFC 7946.
-func GMLToGeoJSON(body []byte) ([]byte, error) {
+func GMLToGeoJSON(body []byte, typeName string) ([]byte, error) {
 	dec := xml.NewDecoder(bytes.NewReader(body))
 	features := []map[string]any{}
 
@@ -39,7 +41,7 @@ func GMLToGeoJSON(body []byte) ([]byte, error) {
 		if !ok || se.Name.Local != "member" {
 			continue
 		}
-		f, err := parseMember(dec)
+		f, err := parseMember(dec, typeName)
 		if err != nil {
 			return nil, err
 		}
@@ -56,7 +58,8 @@ func GMLToGeoJSON(body []byte) ([]byte, error) {
 
 // parseMember consomme le contenu jusqu'au </member> et tente d'en extraire
 // une feature GeoJSON. Renvoie nil si aucune géométrie utilisable.
-func parseMember(dec *xml.Decoder) (map[string]any, error) {
+// typeName (ex: "METAR_last") sert à router le décodage TAC → texte FR.
+func parseMember(dec *xml.Decoder, typeName string) (map[string]any, error) {
 	props := map[string]any{}
 	var geom map[string]any
 	depth := 0
@@ -119,6 +122,11 @@ func parseMember(dec *xml.Decoder) (map[string]any, error) {
 			if t.Name.Local == "member" {
 				if geom == nil {
 					return nil, nil
+				}
+				if tac, ok := props["tac"].(string); ok && tac != "" {
+					if d := decoder.Decode(typeName, tac); d != "" {
+						props["decoded"] = d
+					}
 				}
 				out := map[string]any{
 					"type":       "Feature",
@@ -424,6 +432,30 @@ var (
 func enrichFromIWXXM(props map[string]any, opmet string) {
 	if m := rxTACAttr.FindStringSubmatch(opmet); len(m) >= 2 && strings.TrimSpace(m[1]) != "" {
 		props["tac"] = strings.TrimSpace(m[1])
+		return
+	}
+
+	// Cas TAF / SIGMET / AIRMET (IWXXM 3.0+) : pas de TAC reconstituable
+	// simple, on décode directement le XML structuré en français. Consigne :
+	// « afficher le TAC s'il existe, sinon uniquement la traduction ».
+	if strings.Contains(opmet, "<iwxxm:TAF") || strings.Contains(opmet, ":TAF ") {
+		if d := decoder.DecodeIWXXMTAF(opmet); d != "" {
+			props["decoded"] = d
+		}
+		return
+	}
+	if strings.Contains(opmet, "<iwxxm:SIGMET ") ||
+		strings.Contains(opmet, "<iwxxm:VolcanicAshSIGMET") ||
+		strings.Contains(opmet, "<iwxxm:TropicalCycloneSIGMET") {
+		if d := decoder.DecodeIWXXMSIGMET(opmet); d != "" {
+			props["decoded"] = d
+		}
+		return
+	}
+	if strings.Contains(opmet, "<iwxxm:AIRMET") {
+		if d := decoder.DecodeIWXXMAIRMET(opmet); d != "" {
+			props["decoded"] = d
+		}
 		return
 	}
 

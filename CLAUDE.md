@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Vue d'ensemble
 
-Portail web Go qui consomme l'API **MetGate** de Météo-France et expose aux services ATM une vue catalogue + une carte interactive (METAR/TAF/SIGMET, particules de vent, tropopause, cendres volcaniques). Frontend SPA React/TypeScript embarqué dans le binaire Go (`go:embed`).
+Portail web Go qui consomme l'API **MetGate** de Météo-France et expose aux services ATM une vue catalogue + une carte interactive (METAR/TAF/SIGMET/MAA, particules de vent, tropopause, cendres volcaniques) ainsi qu'un module de suivi ADS-B (OpenSky) avec plan de route synthétique et météo le long de la trajectoire. Frontend SPA React/TypeScript embarqué dans le binaire Go (`go:embed`).
 
 - Spec OpenAPI MetGate : `api/openapi.json` (~30k lignes, export Apidog — non utilisée par `oapi-codegen` à cause d'extensions `x-apidog` mal placées).
 - Auth : token applicatif unique côté serveur, jamais exposé au navigateur. Le portail est **multi-utilisateurs locaux** prévus, mais l'auth interne (login/JWT) **n'est pas encore implémentée**.
@@ -30,7 +30,18 @@ METGATE_BASE_URL=https://metgate-int.meteo.fr
 METGATE_TOKEN=<token applicatif>
 PORT=8080
 METGATE_CACHE_TTL_SECONDS=60
+
+# OpenSky (suivi ADS-B). Optionnel : sans credentials, /api/aircraft/* renvoie 503.
+# OAuth2 client_credentials (méthode actuelle, fin 2024+) — JSON téléchargé depuis
+# Personal Account Settings → Download credentials.
+OPENSKY_CLIENT_ID=
+OPENSKY_CLIENT_SECRET=
+# Auth Basic (legacy, anciens comptes uniquement)
+OPENSKY_USER=
+OPENSKY_PASS=
 ```
+
+Tests : `make test` (= `go test ./...`).
 
 ## Architecture backend (Go)
 
@@ -45,6 +56,12 @@ internal/catalog/
   wind.go                   WCS WIND/JET → NetCDF-4 → grille u,v multi-step
   tropo.go                  WCS TROPO → NetCDF-4 → grille altitude tropopause
   qvacis.go                 WCS QVACIS det/proba → NetCDF-4 → grille concentration cendres
+  route.go                  plan de route ICAO→ICAO synthétique : grand cercle, profil FL climb/cruise/descent, projection d'événements WFS (SIGMET/AIRMET/MAA/RDT/CAT) le long de la trajectoire
+  wind_profile.go           profil vent waypoint-par-waypoint le long d'une route (subset WCS WIND, niveau pression dérivé du FL, head/tail/cross wind)
+internal/aircraft/
+  opensky.go                client OpenSky : auth OAuth2 client_credentials (token cache) ou Basic legacy, GetStates, FlightsByAircraft
+  history.go                ring buffer en mémoire (par icao24) des State observés ; permet de tracer le passé même quand on n'a pas reçu OpenSky en continu
+  service.go                wrap client + history ; Search, State (pousse en history), FlightsByAircraft, History
 internal/http/handlers.go   routes HTTP, middleware logs, X-Cache header
 internal/web/
   embed.go                  go:embed du frontend buildé (dist/) + handler SPA fallback
@@ -62,6 +79,10 @@ internal/web/
 | `GET /api/wind?dataset=WIND\|JET&level=Pa&bbox=...&allSteps=1` | grille u,v décodée du WCS NetCDF |
 | `GET /api/tropo?bbox=...` | grille altitude tropopause (m) |
 | `GET /api/qvacis?dataset=DETERMINISTIC\|PROBABILISTIC&fl=325&bbox=...` | grille concentration cendres (mg/m³) |
+| `GET /api/route?dep=LFPG&arr=LFBO&fl=350&speed=420&events=1&wind=1&...` | plan synthétique + waypoints + events WFS croisés + profil vent optionnel |
+| `GET /api/aircraft/search?q=AFR123\|F-...` | recherche par callsign/registration via OpenSky |
+| `GET /api/aircraft/{icao24}` | dernier State (et alimente le history en mémoire) |
+| `GET /api/aircraft/{icao24}/route` | plan synthétique projeté autour de la position courante + events WFS |
 | `GET /api/wfs\|wcs\|raw?...` | proxy brut (token côté serveur) |
 | `GET /` | SPA React |
 
@@ -79,6 +100,8 @@ web/src/
     WindLayer.tsx           overlay canvas particules animées (WIND/JET)
     TropoLayer.tsx          MapLibre image source (PNG canvas) altitude tropopause
     QvacisLayer.tsx         idem QVACIS (concentration cendres)
+    AircraftTracker.tsx     panneau recherche callsign + suivi temps réel (poll OpenSky), passé accumulé en mémoire (D3) + slider full-range
+    FlightPlan.tsx          rendu route : grand cercle, waypoints, événements météo croisés, profil vent
   index.css                 Tailwind v4 + style maplibregl-popup dark
 ```
 
@@ -106,6 +129,13 @@ Stack : React 19 + TS 6 + Vite 8 + Tailwind v4 + Lucide + MapLibre 5 + react-map
 - **typeName** : utiliser le `family.latest` retourné par `/api/products` (`METAR_last`, etc.), pas le nom de famille.
 - **`opmet_msg`** : CDATA IWXXM volumineux (souvent > 10 KB). On extrait sélectivement le TAC (attribut `translatedFailedTAC` IWXXM 2021-2) ou on reconstruit un TAC depuis les champs IWXXM 3.0 (T/Td/QNH/wind/CAVOK).
 
+### Aircraft / OpenSky
+
+- **Auth** : OAuth2 `client_credentials` (priorité) avec cache du token, fallback Basic pour les vieux comptes. Si aucun credential n'est fourni, `Service.Authenticated()` est faux et les handlers `/api/aircraft/*` renvoient 503 — c'est volontaire, pas un bug.
+- **Throttling OpenSky** : compte gratuit limité, on s'appuie donc sur le `History` en mémoire (par icao24) pour reconstruire la trace passée plutôt que de réinterroger. Le buffer est alimenté à chaque appel `/api/aircraft/{icao24}` côté frontend (poll régulier).
+- **Plan synthétique** (`/api/route`, `/api/aircraft/{icao24}/route`) : grand cercle DEP→ARR (ou projection vers l'avant depuis l'avion réel), profil FL trapézoïdal climb/cruise/descent, ETA waypoint par interpolation linéaire du temps total. Les events WFS sont matchés par `effectiveValidityWindow` (fenêtre temporelle) puis intersection géo (point dans polygone, ou plus proche waypoint).
+- **Profil vent route** (`wind_profile.go`) : `flToNearestPressurePa` mappe FL → niveau de pression du WCS WIND (le WCS n'a pas tous les FL ; on prend le plus proche). Sample u,v au step temporel le plus proche de l'ETA waypoint, projeté en head/tail/cross via le bearing du segment. Le commit `fix(wind): caler le niveau de pression Wind sur le FL de l'avion suivi` impose : utiliser le FL réel de l'avion, pas le cruise FL planifié.
+
 ### Frontend / MapLibre
 
 - **Slider temporel** : basé sur `validitystarttime` ; `isValidAt(slot)` filtre les features dont la fenêtre `[start, end)` contient l'instant choisi (permet de cumuler couches RDT 15 min + CAT 3 h).
@@ -121,6 +151,8 @@ Stack : React 19 + TS 6 + Vite 8 + Tailwind v4 + Lucide + MapLibre 5 + react-map
 - **Erreur 4xx du cache** : on ne cache que les 200, mais on ne fait pas de back-off sur les erreurs transitoires.
 - **WFS pagination** : count=2000 récupère beaucoup de RDT_MSG, mais MetGate peut en avoir plus → on perd les surplus. Pas critique pour la visu.
 - **Bbox QVACIS** : figée Atlantique/Sahara `[-33, 21, 36, 34]` car le coverage est régional ; ne suit pas la viewport.
+- **Index ICAO aérodromes** : `ICAOIndex` lit le RAW de MetGate ; pas de fallback statique, donc `/api/route` dépend de la disponibilité MetGate côté DEP/ARR.
+- **OpenSky history** : in-memory uniquement, perdu au redémarrage. Pas de persistance Postgres / fichier.
 
 ## Style et instructions globales utilisateur
 

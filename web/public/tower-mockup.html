@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>MetGate · Tour Tactique 3D — Mockup</title>
+<meta name="viewport" content="width=1920">
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; }
+  /* dôme 3D simulé en CSS avec perspective sphère */
+  .dome-bg {
+    background:
+      radial-gradient(ellipse at center bottom, rgba(56,189,248,0.05) 0%, transparent 65%),
+      radial-gradient(ellipse at center 40%, rgba(167,139,250,0.07) 0%, transparent 60%),
+      linear-gradient(to bottom, rgb(2,6,23) 0%, rgb(15,23,42) 60%, rgb(7,17,35) 100%);
+  }
+  .grid-radial {
+    background-image:
+      repeating-radial-gradient(circle at center, transparent 0, transparent 119px, rgba(148,163,184,0.10) 120px),
+      conic-gradient(from 0deg at center,
+        transparent 0deg, transparent 29.8deg, rgba(148,163,184,0.10) 30deg,
+        transparent 30.2deg, transparent 59.8deg, rgba(148,163,184,0.10) 60deg,
+        transparent 60.2deg, transparent 89.8deg, rgba(148,163,184,0.10) 90deg,
+        transparent 90.2deg, transparent 119.8deg, rgba(148,163,184,0.10) 120deg,
+        transparent 120.2deg, transparent 149.8deg, rgba(148,163,184,0.10) 150deg,
+        transparent 150.2deg, transparent 179.8deg, rgba(148,163,184,0.10) 180deg,
+        transparent 180.2deg, transparent 209.8deg, rgba(148,163,184,0.10) 210deg,
+        transparent 210.2deg, transparent 239.8deg, rgba(148,163,184,0.10) 240deg,
+        transparent 240.2deg, transparent 269.8deg, rgba(148,163,184,0.10) 270deg,
+        transparent 270.2deg, transparent 299.8deg, rgba(148,163,184,0.10) 300deg,
+        transparent 300.2deg, transparent 329.8deg, rgba(148,163,184,0.10) 330deg,
+        transparent 330.2deg, transparent 360deg);
+  }
+  .tropopause {
+    position: absolute; left: 0; right: 0; top: 32%;
+    height: 1px;
+    background: linear-gradient(to right, transparent, rgba(56,189,248,0.4), rgba(56,189,248,0.5), rgba(56,189,248,0.4), transparent);
+    box-shadow: 0 0 20px rgba(56,189,248,0.15);
+  }
+  .tropopause::after {
+    content: 'TROPOPAUSE  ~ FL370';
+    position: absolute;
+    right: 24px; top: -16px;
+    font-size: 9px; letter-spacing: 0.2em;
+    color: rgb(125,211,252); font-family: ui-monospace, monospace;
+  }
+  /* Cellules orageuses (cylindres pseudo-3D) */
+  .cell {
+    position: absolute;
+    border-radius: 4px 4px 8px 8px;
+    box-shadow: inset 0 0 20px rgba(255,255,255,0.08);
+  }
+  .cell::before {
+    content: ''; position: absolute; inset: 0 0 auto 0; height: 8px;
+    background: rgba(255,255,255,0.2); border-radius: 4px 4px 0 0;
+  }
+  .lightning {
+    position: absolute; width: 12px; height: 12px;
+    background: radial-gradient(circle, rgba(254,243,199,1) 0%, rgba(252,211,77,0.8) 40%, transparent 70%);
+    border-radius: 50%;
+    animation: flash 1.6s infinite ease-in-out;
+    pointer-events: none;
+  }
+  @keyframes flash {
+    0%, 100% { opacity: 0.2; transform: scale(0.6); }
+    50% { opacity: 1; transform: scale(1.3); box-shadow: 0 0 20px rgba(254,243,199,0.8); }
+  }
+  .windvec { position: absolute; transform-origin: 0 50%; }
+  .runway-strip {
+    background: repeating-linear-gradient(90deg, rgba(255,255,255,0.15) 0 8px, transparent 8px 18px);
+  }
+  /* Aérodromes voisins (point + label) */
+  .ad-marker { position: absolute; }
+  .ad-marker .dot { width: 5px; height: 5px; background: rgb(56,189,248); border-radius: 50%; box-shadow: 0 0 8px rgba(56,189,248,0.6); }
+  .ad-marker .label { font-size: 9px; font-family: ui-monospace, monospace; color: rgb(148,163,184); margin-top: 2px; letter-spacing: 0.05em; }
+</style>
+</head>
+<body class="bg-slate-950 text-slate-200 antialiased">
+
+<!-- Header -->
+<header class="border-b border-slate-800/70 px-6 py-3 flex items-center justify-between bg-slate-950/60 backdrop-blur">
+  <div class="flex items-center gap-3">
+    <div class="size-8 rounded-lg bg-gradient-to-br from-cyan-400 to-blue-600 flex items-center justify-center text-slate-950 font-bold text-sm">M</div>
+    <div>
+      <div class="text-sm font-medium">MetGate Portal</div>
+      <div class="text-[10px] text-slate-500 tracking-wider uppercase">ATM weather services · metgate-int</div>
+    </div>
+  </div>
+  <nav class="flex items-center gap-1">
+    <button class="px-3 py-1.5 rounded-md text-[13px] text-slate-400 hover:bg-slate-900">Catalogue</button>
+    <button class="px-3 py-1.5 rounded-md text-[13px] text-slate-400 hover:bg-slate-900">Carte</button>
+    <button class="px-3 py-1.5 rounded-md text-[13px] bg-slate-800 text-cyan-300 border border-slate-700">Tour 3D</button>
+  </nav>
+</header>
+
+<!-- Sub-header : sélecteur aérodrome + heure -->
+<div class="border-b border-slate-800/50 px-6 py-2.5 flex items-center justify-between bg-slate-900/30 text-[12px]">
+  <div class="flex items-center gap-5">
+    <div class="flex items-center gap-2">
+      <span class="text-slate-500 uppercase tracking-wider text-[10px]">Aéroport</span>
+      <select class="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-cyan-200 mono">
+        <option>LFPG · Paris CDG</option>
+        <option>LFPO · Paris ORY</option>
+        <option>LFBO · Toulouse</option>
+        <option>LFML · Marseille</option>
+      </select>
+    </div>
+    <div class="flex items-center gap-2">
+      <span class="text-slate-500 uppercase tracking-wider text-[10px]">Mode</span>
+      <div class="flex bg-slate-900 border border-slate-700 rounded overflow-hidden">
+        <button class="px-2.5 py-1 text-cyan-200 bg-slate-800">Aéroport</button>
+        <button class="px-2.5 py-1 text-slate-500">Avion</button>
+      </div>
+    </div>
+    <div class="flex items-center gap-2">
+      <span class="text-slate-500 uppercase tracking-wider text-[10px]">Rayon</span>
+      <select class="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-200 mono">
+        <option>30 NM</option>
+        <option selected>50 NM</option>
+        <option>100 NM</option>
+      </select>
+    </div>
+  </div>
+  <div class="flex items-center gap-4 text-slate-400 mono">
+    <span>UTC 14:32:18</span>
+    <span class="text-slate-500">·</span>
+    <span>METAR -2 min · TAF -47 min · CTH -3 min · LI -1 min</span>
+  </div>
+</div>
+
+<!-- Main grid : 3D + panel -->
+<main class="grid" style="grid-template-columns: 1fr 420px; height: calc(100vh - 96px);">
+
+  <!-- ZONE 3D -->
+  <section class="relative dome-bg overflow-hidden">
+
+    <!-- Boussole en haut à gauche -->
+    <div class="absolute top-4 left-4 z-20 flex flex-col gap-2">
+      <div class="size-24 rounded-full border-2 border-slate-700/80 bg-slate-950/70 backdrop-blur flex items-center justify-center relative shadow-2xl">
+        <span class="absolute top-1 text-[10px] text-rose-300 font-bold mono">N</span>
+        <span class="absolute right-1.5 text-[10px] text-slate-500 mono">E</span>
+        <span class="absolute bottom-1 text-[10px] text-slate-500 mono">S</span>
+        <span class="absolute left-1.5 text-[10px] text-slate-500 mono">W</span>
+        <!-- Aiguille direction de vue -->
+        <div class="absolute" style="transform: rotate(245deg); transform-origin: center;">
+          <div class="w-0.5 h-10 bg-gradient-to-t from-cyan-400 to-transparent rounded -translate-y-5"></div>
+        </div>
+        <span class="text-[9px] text-cyan-300 font-mono mt-0.5">245°</span>
+      </div>
+      <div class="text-[9px] text-slate-500 mono text-center">Vue · pitch 25°</div>
+    </div>
+
+    <!-- Alertes flottantes en haut -->
+    <div class="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex gap-2">
+      <div class="px-3 py-1.5 rounded-full bg-red-950/80 border border-red-500/50 text-red-200 text-[11px] flex items-center gap-1.5 shadow-2xl">
+        <span class="size-1.5 rounded-full bg-red-400 animate-pulse"></span>
+        <span>Cb FL420 finale 27L</span>
+      </div>
+      <div class="px-3 py-1.5 rounded-full bg-amber-950/80 border border-amber-500/40 text-amber-200 text-[11px] flex items-center gap-1.5 shadow-2xl">
+        <span class="size-1.5 rounded-full bg-amber-400"></span>
+        <span>Foudre 8 NM SE</span>
+      </div>
+    </div>
+
+    <!-- Zone scénique 3D simulée -->
+    <div class="absolute inset-0 grid-radial">
+
+      <!-- Tropopause -->
+      <div class="tropopause"></div>
+
+      <!-- Cellule Cb principale (FL420) -->
+      <div class="cell"
+           style="left: 62%; top: 30%; width: 95px; height: 220px;
+                  background: linear-gradient(to top, rgba(125,211,252,0.5), rgba(56,189,248,0.55) 30%, rgba(74,222,128,0.6) 50%, rgba(250,204,21,0.65) 70%, rgba(239,68,68,0.7) 90%);">
+        <div class="absolute -top-7 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-red-950/80 border border-red-500/50 text-[9px] text-red-200 mono whitespace-nowrap">FL420 · Cb</div>
+      </div>
+      <!-- Foudre dans cellule -->
+      <div class="lightning" style="left: 64%; top: 42%;"></div>
+      <div class="lightning" style="left: 67%; top: 52%; animation-delay: 0.5s;"></div>
+      <div class="lightning" style="left: 65%; top: 60%; animation-delay: 1.1s;"></div>
+
+      <!-- Cellule TCU secondaire (FL280) -->
+      <div class="cell"
+           style="left: 28%; top: 50%; width: 70px; height: 130px;
+                  background: linear-gradient(to top, rgba(125,211,252,0.4), rgba(56,189,248,0.5) 40%, rgba(74,222,128,0.55) 80%);">
+        <div class="absolute -top-6 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded bg-emerald-950/70 border border-emerald-500/40 text-[9px] text-emerald-200 mono whitespace-nowrap">FL280 · TCU</div>
+      </div>
+
+      <!-- Stratus bas -->
+      <div class="cell"
+           style="left: 45%; top: 70%; width: 200px; height: 35px;
+                  background: linear-gradient(to top, rgba(125,211,252,0.3), rgba(125,211,252,0.4));">
+      </div>
+
+      <!-- Centre : marqueur LFPG + pistes 27L/27R -->
+      <div class="absolute left-1/2 top-[78%] -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-1">
+        <div class="size-3 rounded-full bg-cyan-300 ring-4 ring-cyan-500/30"></div>
+        <div class="text-[10px] mono text-cyan-200 tracking-wider">LFPG</div>
+      </div>
+      <!-- Représentation pistes (E-W) -->
+      <div class="absolute left-1/2 top-[78%] -translate-x-1/2 -translate-y-1/2" style="width: 200px;">
+        <div class="flex flex-col gap-3 -mt-2">
+          <div class="runway-strip h-2 rounded-sm border border-slate-600/40"></div>
+          <div class="runway-strip h-2 rounded-sm border border-slate-600/40"></div>
+        </div>
+      </div>
+
+      <!-- Aérodromes voisins -->
+      <div class="ad-marker" style="left: 38%; top: 75%;">
+        <div class="dot"></div><div class="label">LFPB</div>
+      </div>
+      <div class="ad-marker" style="left: 71%; top: 80%;">
+        <div class="dot"></div><div class="label">LFPV</div>
+      </div>
+      <div class="ad-marker" style="left: 25%; top: 82%;">
+        <div class="dot"></div><div class="label">LFOL</div>
+      </div>
+
+      <!-- Vecteurs vent (4 niveaux) -->
+      <div class="absolute left-6 top-1/2 -translate-y-1/2 flex flex-col gap-3">
+        <div class="windvec flex items-center gap-2">
+          <span class="text-[9px] text-slate-500 mono w-12">FL400</span>
+          <svg width="80" height="14" viewBox="0 0 80 14"><line x1="2" y1="7" x2="76" y2="7" stroke="#ef4444" stroke-width="2"/><polygon points="76,3 80,7 76,11" fill="#ef4444"/></svg>
+          <span class="text-[9px] text-rose-300 mono">110 kt 270°</span>
+        </div>
+        <div class="windvec flex items-center gap-2">
+          <span class="text-[9px] text-slate-500 mono w-12">FL250</span>
+          <svg width="60" height="14" viewBox="0 0 60 14"><line x1="2" y1="7" x2="56" y2="7" stroke="#fbbf24" stroke-width="1.5"/><polygon points="56,3 60,7 56,11" fill="#fbbf24"/></svg>
+          <span class="text-[9px] text-amber-300 mono">75 kt 280°</span>
+        </div>
+        <div class="windvec flex items-center gap-2">
+          <span class="text-[9px] text-slate-500 mono w-12">FL100</span>
+          <svg width="35" height="14" viewBox="0 0 35 14"><line x1="2" y1="7" x2="31" y2="7" stroke="#67e8f9" stroke-width="1.5"/><polygon points="31,3 35,7 31,11" fill="#67e8f9"/></svg>
+          <span class="text-[9px] text-cyan-300 mono">35 kt 260°</span>
+        </div>
+        <div class="windvec flex items-center gap-2">
+          <span class="text-[9px] text-slate-500 mono w-12">FL050</span>
+          <svg width="20" height="14" viewBox="0 0 20 14"><line x1="2" y1="7" x2="16" y2="7" stroke="#67e8f9" stroke-width="1.5"/><polygon points="16,3 20,7 16,11" fill="#67e8f9"/></svg>
+          <span class="text-[9px] text-cyan-300 mono">15 kt 270°</span>
+        </div>
+      </div>
+
+      <!-- Avion ADS-B en finale 27L -->
+      <div class="absolute left-[68%] top-[78%]">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#22d3ee" stroke-width="1.5"><path d="M12 2L13 8L22 12L13 16L12 22L11 16L2 12L11 8L12 2Z" fill="rgba(34,211,238,0.3)"/></svg>
+        <div class="absolute top-full text-[9px] mono text-cyan-300 whitespace-nowrap">AFR1234 · 5 NM</div>
+      </div>
+
+      <!-- Échelle radiale (graduations NM au sol) -->
+      <div class="absolute bottom-12 left-1/2 -translate-x-1/2 flex gap-6 text-[9px] mono text-slate-600">
+        <span>50</span><span>20</span><span>10</span><span>5 NM</span><span>10</span><span>20</span><span>50</span>
+      </div>
+    </div>
+
+    <!-- Slider FL flottant en bas à droite zone 3D -->
+    <div class="absolute bottom-4 right-4 z-20 px-3 py-2 rounded-lg bg-slate-950/85 border border-violet-900/40 backdrop-blur text-[10px] flex items-center gap-3 min-w-[260px] shadow-2xl">
+      <span class="text-violet-200 uppercase tracking-wider mono">Filtre FL</span>
+      <input type="range" min="0" max="500" value="250" step="50" class="flex-1 accent-violet-400">
+      <span class="text-violet-200 mono w-12 text-right">FL250</span>
+    </div>
+
+    <!-- Contrôles caméra en bas -->
+    <div class="absolute bottom-4 left-4 z-20 flex items-center gap-2 px-2 py-2 rounded-lg bg-slate-950/85 border border-slate-700/80 backdrop-blur shadow-2xl">
+      <!-- Pan -->
+      <div class="flex flex-col items-center text-[9px] text-slate-500 mono">
+        <button class="size-6 rounded hover:bg-slate-800 flex items-center justify-center">↑</button>
+        <div class="flex">
+          <button class="size-6 rounded hover:bg-slate-800 flex items-center justify-center">←</button>
+          <button class="size-6 rounded hover:bg-slate-800 flex items-center justify-center">→</button>
+        </div>
+        <button class="size-6 rounded hover:bg-slate-800 flex items-center justify-center">↓</button>
+      </div>
+      <div class="w-px h-12 bg-slate-700"></div>
+      <!-- Yaw -->
+      <div class="flex items-center gap-1 text-[10px]">
+        <button class="size-7 rounded hover:bg-slate-800 flex items-center justify-center text-slate-300" title="Yaw -">↺</button>
+        <button class="size-7 rounded hover:bg-slate-800 flex items-center justify-center text-slate-300" title="Yaw +">↻</button>
+      </div>
+      <div class="w-px h-12 bg-slate-700"></div>
+      <!-- Tilt -->
+      <div class="flex flex-col gap-0.5">
+        <button class="size-6 rounded hover:bg-slate-800 flex items-center justify-center text-slate-300 text-[9px] mono" title="Tilt up">▲</button>
+        <button class="size-6 rounded hover:bg-slate-800 flex items-center justify-center text-slate-300 text-[9px] mono" title="Tilt down">▼</button>
+      </div>
+      <div class="w-px h-12 bg-slate-700"></div>
+      <!-- Zoom -->
+      <div class="flex items-center gap-1">
+        <button class="size-7 rounded hover:bg-slate-800 flex items-center justify-center text-slate-300 mono">−</button>
+        <span class="text-[9px] text-slate-400 mono w-7 text-center">1.2×</span>
+        <button class="size-7 rounded hover:bg-slate-800 flex items-center justify-center text-slate-300 mono">+</button>
+      </div>
+      <div class="w-px h-12 bg-slate-700"></div>
+      <!-- Reset / modes -->
+      <div class="flex items-center gap-1">
+        <button class="px-2 py-1 rounded hover:bg-slate-800 text-[9px] text-slate-400 mono uppercase tracking-wider">Tour</button>
+        <button class="px-2 py-1 rounded hover:bg-slate-800 text-[9px] text-slate-400 mono uppercase tracking-wider">Approche</button>
+        <button class="px-2 py-1 rounded bg-slate-800 text-cyan-300 text-[9px] mono uppercase tracking-wider">Plongée</button>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- PANNEAU DROIT -->
+  <aside class="bg-slate-950 border-l border-slate-800/70 overflow-y-auto">
+
+    <!-- Bandeau alertes -->
+    <div class="px-4 py-3 bg-gradient-to-b from-red-950/40 to-transparent border-b border-red-900/40">
+      <div class="flex items-center gap-2 mb-2">
+        <span class="text-[9px] uppercase tracking-wider text-red-300 font-bold">⚠ Alertes actives</span>
+        <span class="ml-auto text-[9px] text-slate-500 mono">3</span>
+      </div>
+      <ul class="space-y-1.5 text-[11px]">
+        <li class="flex items-start gap-2">
+          <span class="size-1.5 rounded-full bg-red-400 mt-1.5 shrink-0"></span>
+          <span><span class="text-red-200">Cb FL420</span> en finale 27L · contournement requis</span>
+        </li>
+        <li class="flex items-start gap-2">
+          <span class="size-1.5 rounded-full bg-amber-400 mt-1.5 shrink-0"></span>
+          <span><span class="text-amber-200">Foudre</span> à 8 NM SE · 24 impacts/10 min</span>
+        </li>
+        <li class="flex items-start gap-2">
+          <span class="size-1.5 rounded-full bg-violet-400 mt-1.5 shrink-0"></span>
+          <span><span class="text-violet-200">SIGMET</span> SEV TURB FL250-FL400 valide jusque 16:00Z</span>
+        </li>
+      </ul>
+    </div>
+
+    <!-- METAR / Traduction -->
+    <div class="px-4 py-3 border-b border-slate-800/50">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-[9px] uppercase tracking-wider text-slate-500">METAR · LFPG</span>
+        <span class="text-[9px] text-slate-500 mono">011430Z · -2 min</span>
+      </div>
+      <pre class="text-[11px] mono text-slate-200 bg-slate-900/60 border border-slate-800 rounded p-2 whitespace-pre-wrap break-words">METAR LFPG 011430Z 27015G25KT 8000 -SHRA SCT025 BKN040CB 12/08 Q1015 NOSIG=</pre>
+      <div class="mt-2 text-[10px] text-slate-300 leading-relaxed bg-slate-900/40 border border-slate-800/60 rounded p-2">
+        <div class="text-[9px] uppercase tracking-wider text-slate-500 mb-1">Traduction</div>
+        Vent : <span class="text-slate-100 mono">270° à 15 kt, rafales 25 kt</span><br>
+        Visibilité : <span class="text-slate-100 mono">8 km</span><br>
+        Phénomène : <span class="text-amber-200">faible averses pluie</span><br>
+        Nuages : 3-4 octas à 2500 ft, <span class="text-amber-200">5-7 octas à 4000 ft (Cb)</span><br>
+        T/Td : <span class="text-slate-100 mono">12°C / 8°C</span> · QNH <span class="text-slate-100 mono">1015 hPa</span><br>
+        Tendance : <span class="text-emerald-200">NOSIG</span>
+      </div>
+    </div>
+
+    <!-- Vent par piste -->
+    <div class="px-4 py-3 border-b border-slate-800/50">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-[9px] uppercase tracking-wider text-slate-500">Vent par piste</span>
+        <span class="text-[9px] text-cyan-300 mono">2 favorables</span>
+      </div>
+      <div class="space-y-1 text-[11px]">
+        <div class="flex items-center gap-3 py-1 px-2 rounded bg-emerald-950/30 border border-emerald-900/40">
+          <span class="mono text-emerald-300 w-10">27L</span>
+          <span class="text-[9px] text-slate-400 flex-1">Face <span class="text-emerald-300 mono">14 kt</span> · Cross <span class="mono">5 kt</span></span>
+          <span class="text-[9px] text-emerald-300">FAVO</span>
+        </div>
+        <div class="flex items-center gap-3 py-1 px-2 rounded bg-emerald-950/30 border border-emerald-900/40">
+          <span class="mono text-emerald-300 w-10">27R</span>
+          <span class="text-[9px] text-slate-400 flex-1">Face <span class="text-emerald-300 mono">14 kt</span> · Cross <span class="mono">5 kt</span></span>
+          <span class="text-[9px] text-emerald-300">FAVO</span>
+        </div>
+        <div class="flex items-center gap-3 py-1 px-2 rounded bg-red-950/30 border border-red-900/40">
+          <span class="mono text-red-300 w-10">09L</span>
+          <span class="text-[9px] text-slate-400 flex-1">Tail <span class="text-red-300 mono">14 kt</span> · Cross <span class="mono">5 kt</span></span>
+          <span class="text-[9px] text-red-300">VENT ARR</span>
+        </div>
+        <div class="flex items-center gap-3 py-1 px-2 rounded bg-red-950/30 border border-red-900/40">
+          <span class="mono text-red-300 w-10">09R</span>
+          <span class="text-[9px] text-slate-400 flex-1">Tail <span class="text-red-300 mono">14 kt</span> · Cross <span class="mono">5 kt</span></span>
+          <span class="text-[9px] text-red-300">VENT ARR</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- KPI grille -->
+    <div class="px-4 py-3 border-b border-slate-800/50">
+      <div class="text-[9px] uppercase tracking-wider text-slate-500 mb-2">Statut opérationnel</div>
+      <div class="grid grid-cols-5 gap-2">
+        <div class="flex flex-col items-center gap-0.5 py-2 rounded bg-emerald-950/30 border border-emerald-900/40">
+          <span class="text-[9px] text-slate-500 uppercase tracking-wider">Vent</span>
+          <span class="text-[12px] mono text-emerald-300">15G25</span>
+          <span class="text-[8px] text-emerald-400">OK</span>
+        </div>
+        <div class="flex flex-col items-center gap-0.5 py-2 rounded bg-amber-950/30 border border-amber-900/40">
+          <span class="text-[9px] text-slate-500 uppercase tracking-wider">Visi</span>
+          <span class="text-[12px] mono text-amber-300">8 km</span>
+          <span class="text-[8px] text-amber-400">MARG</span>
+        </div>
+        <div class="flex flex-col items-center gap-0.5 py-2 rounded bg-amber-950/30 border border-amber-900/40">
+          <span class="text-[9px] text-slate-500 uppercase tracking-wider">Plaf</span>
+          <span class="text-[12px] mono text-amber-300">4000</span>
+          <span class="text-[8px] text-amber-400">MARG</span>
+        </div>
+        <div class="flex flex-col items-center gap-0.5 py-2 rounded bg-red-950/30 border border-red-900/40">
+          <span class="text-[9px] text-slate-500 uppercase tracking-wider">Cb</span>
+          <span class="text-[12px] mono text-red-300">FL420</span>
+          <span class="text-[8px] text-red-400">DGR</span>
+        </div>
+        <div class="flex flex-col items-center gap-0.5 py-2 rounded bg-slate-900/40 border border-slate-800/60">
+          <span class="text-[9px] text-slate-500 uppercase tracking-wider">QNH</span>
+          <span class="text-[12px] mono text-slate-200">1015 ↘</span>
+          <span class="text-[8px] text-slate-500">-1/h</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- TAF synthèse -->
+    <div class="px-4 py-3 border-b border-slate-800/50">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-[9px] uppercase tracking-wider text-slate-500">TAF · prochaines 24h</span>
+        <span class="text-[9px] text-slate-500 mono">émis 11:00Z</span>
+      </div>
+      <div class="text-[10px] text-slate-300 space-y-1.5 leading-relaxed">
+        <div class="flex gap-2">
+          <span class="mono text-slate-500 w-12 shrink-0">14-18Z</span>
+          <span><span class="text-amber-200">TEMPO</span> 4000 SHRA BKN015CB · cellules orageuses sur trajectoire</span>
+        </div>
+        <div class="flex gap-2">
+          <span class="mono text-slate-500 w-12 shrink-0">18-23Z</span>
+          <span><span class="text-emerald-200">BECMG</span> 30010KT 9999 SCT040 · amélioration</span>
+        </div>
+        <div class="flex gap-2">
+          <span class="mono text-slate-500 w-12 shrink-0">FM02</span>
+          <span><span class="text-emerald-200">CAVOK</span> 32008KT</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Trafic ADS-B local -->
+    <div class="px-4 py-3 border-b border-slate-800/50">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-[9px] uppercase tracking-wider text-slate-500">Trafic local · 50 NM</span>
+        <span class="text-[9px] text-cyan-300 mono">12 ADS-B</span>
+      </div>
+      <div class="space-y-1 text-[10px]">
+        <div class="flex items-center gap-2 py-1 px-2 rounded hover:bg-slate-900/60 cursor-pointer">
+          <span class="mono text-cyan-200 w-16">AFR1234</span>
+          <span class="text-slate-500 w-14">5 NM</span>
+          <span class="text-amber-300 flex-1">Final 27L</span>
+          <span class="text-slate-500 mono">FL030 ↘</span>
+        </div>
+        <div class="flex items-center gap-2 py-1 px-2 rounded hover:bg-slate-900/60 cursor-pointer">
+          <span class="mono text-cyan-200 w-16">DLH8765</span>
+          <span class="text-slate-500 w-14">12 NM</span>
+          <span class="text-cyan-300 flex-1">Downwind</span>
+          <span class="text-slate-500 mono">FL050 ↘</span>
+        </div>
+        <div class="flex items-center gap-2 py-1 px-2 rounded hover:bg-slate-900/60 cursor-pointer">
+          <span class="mono text-cyan-200 w-16">EWG431</span>
+          <span class="text-slate-500 w-14">35 NM</span>
+          <span class="text-emerald-300 flex-1">Cruise</span>
+          <span class="text-slate-500 mono">FL370 →</span>
+        </div>
+        <div class="flex items-center gap-2 py-1 px-2 rounded hover:bg-slate-900/60 cursor-pointer">
+          <span class="mono text-cyan-200 w-16">BAW902</span>
+          <span class="text-slate-500 w-14">42 NM</span>
+          <span class="text-violet-300 flex-1">Climb</span>
+          <span class="text-slate-500 mono">FL180 ↗</span>
+        </div>
+        <div class="flex items-center gap-2 py-1 px-2 rounded hover:bg-slate-900/60 cursor-pointer">
+          <span class="mono text-cyan-200 w-16">RYR4527</span>
+          <span class="text-slate-500 w-14">48 NM</span>
+          <span class="text-emerald-300 flex-1">Cruise</span>
+          <span class="text-slate-500 mono">FL340 →</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer disclaimers -->
+    <div class="px-4 py-3 text-[9px] text-slate-500 leading-snug">
+      <div class="flex items-center gap-2 mb-1">
+        <span class="size-1 rounded-full bg-emerald-400"></span>
+        <span class="uppercase tracking-wider">Sources</span>
+      </div>
+      <div>METAR/TAF/SIGMET : Météo-France MetGate (OPMET officiel)</div>
+      <div>CTH / Foudre / RGB : EUMETSAT MTG-FCI/LI · <span class="text-amber-300">situationnel non OPMET</span></div>
+      <div>Trafic : OpenSky Network ADS-B</div>
+    </div>
+
+  </aside>
+</main>
+
+</body>
+</html>

@@ -14,9 +14,14 @@ import (
 	"time"
 
 	"github.com/bmarty/metgate/internal/aircraft"
+	"github.com/bmarty/metgate/internal/airports"
 	"github.com/bmarty/metgate/internal/catalog"
 	httpapi "github.com/bmarty/metgate/internal/http"
+	"github.com/bmarty/metgate/internal/cloudtop"
+	"github.com/bmarty/metgate/internal/eumetsat"
+	"github.com/bmarty/metgate/internal/lightning"
 	"github.com/bmarty/metgate/internal/metgate"
+	"github.com/bmarty/metgate/internal/satellite"
 )
 
 func main() {
@@ -56,7 +61,28 @@ func main() {
 		log.Print("opensky: anonymous (~100 req/jour). Voir .env pour OPENSKY_CLIENT_ID/SECRET.")
 	}
 
-	api := httpapi.NewAPI(cat, acService)
+	euKey := os.Getenv("EUMETSAT_CONSUMER_KEY")
+	euSecret := os.Getenv("EUMETSAT_CONSUMER_SECRET")
+	euClient := eumetsat.New(euKey, euSecret)
+	ltClient := lightning.NewFromEUMETSAT(euClient)
+	ltService := lightning.NewService(ltClient)
+	ctService := cloudtop.NewService(euClient)
+	if euClient.Authenticated() {
+		log.Printf("eumetsat MTG: OAuth2 actif (key=%s…) — LI / CTTH disponibles", euKey[:min(8, len(euKey))])
+	} else {
+		log.Print("eumetsat MTG: désactivé (clés absentes — voir .env EUMETSAT_CONSUMER_KEY/SECRET)")
+	}
+
+	satProxy := satellite.NewProxy()
+	log.Print("eumetview WMS proxy : actif (FCI IR / RGB Convection — situationnel non OPMET)")
+
+	apStore, err := airports.New()
+	if err != nil {
+		log.Fatalf("airports store: %v", err)
+	}
+	apStore.LogStats()
+
+	api := httpapi.NewAPI(cat, acService, ltService, satProxy, ctService, apStore)
 	log.Printf("cache TTL: %s", cacheTTL)
 
 	srv := &http.Server{

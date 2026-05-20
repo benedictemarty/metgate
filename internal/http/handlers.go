@@ -2,24 +2,31 @@ package httpapi
 
 import (
 	"encoding/json"
-	"fmt"
 	"math"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/bmarty/metgate/internal/aircraft"
+	"github.com/bmarty/metgate/internal/airports"
 	"github.com/bmarty/metgate/internal/catalog"
+	"github.com/bmarty/metgate/internal/cloudtop"
+	"github.com/bmarty/metgate/internal/lightning"
+	"github.com/bmarty/metgate/internal/satellite"
 	"github.com/bmarty/metgate/internal/web"
 )
 
 type API struct {
-	catalog  *catalog.Service
-	aircraft *aircraft.Service
+	catalog   *catalog.Service
+	aircraft  *aircraft.Service
+	lightning *lightning.Service
+	satellite *satellite.Proxy
+	cloudtop  *cloudtop.Service
+	airports  *airports.Store
 }
 
-func NewAPI(c *catalog.Service, ac *aircraft.Service) *API {
-	return &API{catalog: c, aircraft: ac}
+func NewAPI(c *catalog.Service, ac *aircraft.Service, lt *lightning.Service, sp *satellite.Proxy, ct *cloudtop.Service, ap *airports.Store) *API {
+	return &API{catalog: c, aircraft: ac, lightning: lt, satellite: sp, cloudtop: ct, airports: ap}
 }
 
 func (a *API) Routes() *http.ServeMux {
@@ -38,6 +45,11 @@ func (a *API) Routes() *http.ServeMux {
 	m.HandleFunc("GET /api/aircraft/search", a.handleAircraftSearch)
 	m.HandleFunc("GET /api/aircraft/{icao24}", a.handleAircraftState)
 	m.HandleFunc("GET /api/aircraft/{icao24}/route", a.handleAircraftRoute)
+	m.HandleFunc("GET /api/lightning", a.handleLightning)
+	m.HandleFunc("GET /api/satellite/tile", a.satellite.HandleTile)
+	m.HandleFunc("GET /api/cloudtop", a.handleCloudtop)
+	m.HandleFunc("GET /api/airport/{icao}", a.handleAirport)
+	m.HandleFunc("GET /api/airports/search", a.handleAirportsSearch)
 	m.Handle("GET /", web.Handler())
 	return m
 }
@@ -91,18 +103,13 @@ func (a *API) handleCatalog(w http.ResponseWriter, r *http.Request) {
 // et renvoie la grille u/v décodée en JSON.
 // Usage: /api/wind?bbox=-15,35,30,65&level=85000
 func (a *API) handleWind(w http.ResponseWriter, r *http.Request) {
-	bboxStr := r.URL.Query().Get("bbox")
-	if bboxStr == "" {
-		bboxStr = "-15,35,30,65"
-	}
-	var bbox [4]float64
-	if _, err := fmt.Sscanf(bboxStr, "%f,%f,%f,%f", &bbox[0], &bbox[1], &bbox[2], &bbox[3]); err != nil {
-		http.Error(w, "bbox doit être lonMin,latMin,lonMax,latMax", http.StatusBadRequest)
+	bbox, ok := parseBBoxParam(w, r, "bbox", [4]float64{-15, 35, 30, 65})
+	if !ok {
 		return
 	}
-	level := 85000.0
-	if v := r.URL.Query().Get("level"); v != "" {
-		fmt.Sscanf(v, "%f", &level)
+	level, ok := parseFloatParam(w, r, "level", 85000)
+	if !ok {
+		return
 	}
 	dataset := strings.ToUpper(r.URL.Query().Get("dataset"))
 	if dataset == "" {
@@ -121,13 +128,8 @@ func (a *API) handleWind(w http.ResponseWriter, r *http.Request) {
 // grille d'altitude tropopause sur tous les timesteps.
 // Usage: /api/tropo?bbox=-15,35,30,65
 func (a *API) handleTropo(w http.ResponseWriter, r *http.Request) {
-	bboxStr := r.URL.Query().Get("bbox")
-	if bboxStr == "" {
-		bboxStr = "-15,35,30,65"
-	}
-	var bbox [4]float64
-	if _, err := fmt.Sscanf(bboxStr, "%f,%f,%f,%f", &bbox[0], &bbox[1], &bbox[2], &bbox[3]); err != nil {
-		http.Error(w, "bbox invalide", http.StatusBadRequest)
+	bbox, ok := parseBBoxParam(w, r, "bbox", [4]float64{-15, 35, 30, 65})
+	if !ok {
 		return
 	}
 	grid, err := a.catalog.TropoGrid(r.Context(), bbox)
@@ -139,22 +141,36 @@ func (a *API) handleTropo(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAircraftSearch : /api/aircraft/search?cs=AFR1234&bbox=lonMin,latMin,lonMax,latMax
-// Recherche un avion par sous-chaîne de callsign. bbox réduit la zone interrogée
-// (par défaut Europe pour limiter le volume).
+// Recherche par sous-chaîne de callsign + bbox optionnelle. Si `cs` est
+// absent, retourne tous les avions de la bbox (utile pour les vues locales
+// type Tour 3D : trafic dans un rayon autour de l'aérodrome).
 func (a *API) handleAircraftSearch(w http.ResponseWriter, r *http.Request) {
 	cs := strings.TrimSpace(r.URL.Query().Get("cs"))
-	if cs == "" {
-		http.Error(w, "param 'cs' (callsign) requis", http.StatusBadRequest)
+	bboxParam := strings.TrimSpace(r.URL.Query().Get("bbox"))
+	if cs == "" && bboxParam == "" {
+		http.Error(w, "param 'cs' (callsign) ou 'bbox' requis", http.StatusBadRequest)
 		return
 	}
 	// Bbox par défaut Europe + Méditerranée + Maghreb pour ne pas saturer.
-	bbox := [4]float64{-15, 30, 35, 70}
-	if bs := r.URL.Query().Get("bbox"); bs != "" {
-		fmt.Sscanf(bs, "%f,%f,%f,%f", &bbox[0], &bbox[1], &bbox[2], &bbox[3])
+	bbox, ok := parseBBoxParam(w, r, "bbox", [4]float64{-15, 30, 35, 70})
+	if !ok {
+		return
 	}
 	states, err := a.aircraft.Search(r.Context(), &bbox, cs)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		// On *ne* remonte plus 502 : OpenSky renvoie fréquemment des
+		// 429 (compte gratuit rate-limité) et le frontend interprétait
+		// chaque échec comme une vraie panne, ce qui faisait spammer
+		// la console côté navigateur. On répond 200 avec une liste
+		// vide + le motif, le client garde son back-off et la scène
+		// reste affichable.
+		writeJSON(w, http.StatusOK, map[string]any{
+			"query":         cs,
+			"authenticated": a.aircraft.Authenticated(),
+			"count":         0,
+			"states":        []any{},
+			"error":         err.Error(),
+		})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -206,9 +222,9 @@ func (a *API) handleAircraftRoute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := r.URL.Query()
-	dur := 60
-	if v := q.Get("dur"); v != "" {
-		fmt.Sscanf(v, "%d", &dur)
+	dur, ok := parseIntParam(w, r, "dur", 60, 1, 720)
+	if !ok {
+		return
 	}
 	dest := strings.ToUpper(strings.TrimSpace(q.Get("dest")))
 	autoDest := ""
@@ -274,6 +290,9 @@ func (a *API) handleAircraftRoute(w http.ResponseWriter, r *http.Request) {
 
 	// Réponse enrichie avec l'index du waypoint "maintenant" (= 1er point
 	// projeté après le passé). Le frontend pose le cursor dessus par défaut.
+	if pf := plan.PartialFailures(); len(pf) > 0 {
+		w.Header().Set("X-Partial-Errors", strings.Join(pf, ","))
+	}
 	writeJSON(w, http.StatusOK, struct {
 		*catalog.RoutePlan
 		CurrentIdx int `json:"current_idx"`
@@ -347,22 +366,17 @@ func gcDistanceNM(lat1, lon1, lat2, lon2 float64) float64 {
 
 // handleQvacis : /api/qvacis?dataset=DETERMINISTIC|PROBABILISTIC&fl=325&bbox=...
 func (a *API) handleQvacis(w http.ResponseWriter, r *http.Request) {
-	bboxStr := r.URL.Query().Get("bbox")
-	if bboxStr == "" {
-		bboxStr = "-30,22,30,33" // bbox utile par défaut (Atlantique/Sahara)
-	}
-	var bbox [4]float64
-	if _, err := fmt.Sscanf(bboxStr, "%f,%f,%f,%f", &bbox[0], &bbox[1], &bbox[2], &bbox[3]); err != nil {
-		http.Error(w, "bbox invalide", http.StatusBadRequest)
+	bbox, ok := parseBBoxParam(w, r, "bbox", [4]float64{-30, 22, 30, 33})
+	if !ok {
 		return
 	}
 	dataset := strings.ToUpper(r.URL.Query().Get("dataset"))
 	if dataset == "" {
 		dataset = "DETERMINISTIC"
 	}
-	fl := 325 // FL325 par défaut (~10 km, croisière moyens-courriers)
-	if v := r.URL.Query().Get("fl"); v != "" {
-		fmt.Sscanf(v, "%d", &fl)
+	fl, ok := parseIntParam(w, r, "fl", 325, 0, 700)
+	if !ok {
+		return
 	}
 	grid, err := a.catalog.QvacisGrid(r.Context(), dataset, fl, bbox)
 	if err != nil {
@@ -382,19 +396,22 @@ func (a *API) handleRoute(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "params 'dep' et 'arr' (ICAO) requis", http.StatusBadRequest)
 		return
 	}
-	fl := 350
-	if v := q.Get("fl"); v != "" {
-		fmt.Sscanf(v, "%d", &fl)
+	fl, ok := parseIntParam(w, r, "fl", 350, 0, 600)
+	if !ok {
+		return
 	}
-	gs := 450.0
-	if v := q.Get("gs"); v != "" {
-		fmt.Sscanf(v, "%f", &gs)
+	gs, ok := parseFloatParam(w, r, "gs", 450)
+	if !ok {
+		return
 	}
 	depTime := time.Now().UTC()
 	if v := q.Get("dep_time"); v != "" {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			depTime = t
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			http.Error(w, "dep_time: format ISO RFC3339 attendu", http.StatusBadRequest)
+			return
 		}
+		depTime = t
 	}
 	plan, err := a.catalog.PlanRoute(r.Context(), dep, arr, fl, gs, depTime, 80)
 	if err != nil {
@@ -413,6 +430,13 @@ func (a *API) handleRoute(w http.ResponseWriter, r *http.Request) {
 			plan.WindProfile = wp
 		}
 	}
+	if q.Get("tropo") == "1" || q.Get("tropo") == "true" {
+		// Best-effort : si MetGate refuse / timeout, on garde le plan sans tropo.
+		_ = a.catalog.EnrichRouteWithTropo(r.Context(), plan)
+	}
+	if pf := plan.PartialFailures(); len(pf) > 0 {
+		w.Header().Set("X-Partial-Errors", strings.Join(pf, ","))
+	}
 	writeJSON(w, http.StatusOK, plan)
 }
 
@@ -424,9 +448,9 @@ func (a *API) handleFeature(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "param 'type' requis (ex: METAR_last)", http.StatusBadRequest)
 		return
 	}
-	count := 0
-	if c := r.URL.Query().Get("count"); c != "" {
-		fmt.Sscanf(c, "%d", &count)
+	count, ok := parseIntParam(w, r, "count", 0, 0, 100000)
+	if !ok {
+		return
 	}
 	geo, fromCache, err := a.catalog.FeatureGeoJSON(r.Context(), typeName, count)
 	if err != nil {
@@ -451,6 +475,9 @@ func (a *API) handleProducts(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
+	}
+	if len(agg.PartialFailures) > 0 {
+		w.Header().Set("X-Partial-Errors", strings.Join(agg.PartialFailures, ","))
 	}
 	writeJSON(w, http.StatusOK, agg)
 }
@@ -480,4 +507,161 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// handleAirportsSearch : /api/airports/search?q=...&limit=N
+// Recherche dans OurAirports par ICAO, IATA, nom ou ville. Tri par
+// pertinence (exact match d'abord), filtre heliports/closed.
+func (a *API) handleAirportsSearch(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" {
+		http.Error(w, "param 'q' requis", http.StatusBadRequest)
+		return
+	}
+	limit, ok := parseIntParam(w, r, "limit", 12, 1, 50)
+	if !ok {
+		return
+	}
+	results := a.airports.Search(q, limit)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"query":   q,
+		"count":   len(results),
+		"results": results,
+	})
+}
+
+// handleAirport : /api/airport/{icao} → fiche aéroport + pistes (OurAirports).
+func (a *API) handleAirport(w http.ResponseWriter, r *http.Request) {
+	icao := strings.ToUpper(strings.TrimSpace(r.PathValue("icao")))
+	if len(icao) != 4 {
+		http.Error(w, "icao 4-letter requis", http.StatusBadRequest)
+		return
+	}
+	ap := a.airports.Airport(icao)
+	if ap == nil {
+		http.Error(w, "aérodrome inconnu", http.StatusNotFound)
+		return
+	}
+	rwys := a.airports.Runways(icao)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"airport":  ap,
+		"runways":  rwys,
+		"has_geometry": len(rwys) > 0,
+	})
+}
+
+// handleCloudtop : /api/cloudtop?bbox=lonMin,latMin,lonMax,latMax&minfl=NN&w=PX&h=PX
+// Renvoie un PNG colorisé : sommets nuageux (CTH) au-dessus de minFL.
+// Source : EUMETSAT MTG-FCI CTTH (situationnel, non OPMET).
+func (a *API) handleCloudtop(w http.ResponseWriter, r *http.Request) {
+	if !a.cloudtop.Authenticated() {
+		http.Error(w, "cloudtop indisponible (EUMETSAT_CONSUMER_KEY/SECRET non configurés)", http.StatusServiceUnavailable)
+		return
+	}
+	bbox, ok := parseBBoxParam(w, r, "bbox", [4]float64{-30, 30, 50, 65})
+	if !ok {
+		return
+	}
+	minFL, ok := parseIntParam(w, r, "minfl", 0, 0, 600)
+	if !ok {
+		return
+	}
+	width, ok := parseIntParam(w, r, "w", 1024, 64, 4096)
+	if !ok {
+		return
+	}
+	height, ok := parseIntParam(w, r, "h", 768, 64, 4096)
+	if !ok {
+		return
+	}
+
+	// Cache du snapshot 5 min (cadence MTG-CTTH = 10 min, donc on rafraîchit
+	// largement au-delà avec une marge).
+	snap, err := a.cloudtop.Latest(r.Context(), 5*time.Minute)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("X-Source", "EUMETSAT MTG-FCI CTTH (situationnel non OPMET)")
+	w.Header().Set("X-Fetched-At", snap.FetchedAt.UTC().Format(time.RFC3339))
+	_, _ = w.Write(snap.PNG(bbox, width, height, minFL))
+}
+
+// handleLightning : /api/lightning?bbox=lonMin,latMin,lonMax,latMax&since=ISO
+// Retourne les flashes du dernier produit MTG-LI (10 min) en GeoJSON Points.
+// Source EUMETSAT — situationnel, non-OPMET (cf. bandeau UI).
+func (a *API) handleLightning(w http.ResponseWriter, r *http.Request) {
+	if !a.lightning.Authenticated() {
+		http.Error(w, "lightning indisponible (EUMETSAT_CONSUMER_KEY/SECRET non configurés)", http.StatusServiceUnavailable)
+		return
+	}
+	q := r.URL.Query()
+	var bbox *[4]float64
+	if q.Get("bbox") != "" {
+		bb, ok := parseBBoxParam(w, r, "bbox", [4]float64{})
+		if !ok {
+			return
+		}
+		bbox = &bb
+	}
+	var since time.Time
+	if s := q.Get("since"); s != "" {
+		t, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			http.Error(w, "since: format ISO RFC3339 attendu", http.StatusBadRequest)
+			return
+		}
+		since = t
+	}
+
+	flashes, fetchedAt, err := a.lightning.Latest(r.Context(), 60*time.Second)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	type feat struct {
+		Type     string         `json:"type"`
+		Geometry map[string]any `json:"geometry"`
+		Props    map[string]any `json:"properties"`
+	}
+	features := make([]feat, 0, len(flashes))
+	for _, f := range flashes {
+		if bbox != nil {
+			if f.Lon < bbox[0] || f.Lon > bbox[2] || f.Lat < bbox[1] || f.Lat > bbox[3] {
+				continue
+			}
+		}
+		if !since.IsZero() && f.Time.Before(since) {
+			continue
+		}
+		props := map[string]any{
+			"time": f.Time.UTC().Format(time.RFC3339),
+		}
+		if !math.IsNaN(f.Radiance) && !math.IsInf(f.Radiance, 0) {
+			props["radiance"] = f.Radiance
+		}
+		if !math.IsNaN(f.Duration) && !math.IsInf(f.Duration, 0) {
+			props["duration"] = f.Duration
+		}
+		if !math.IsNaN(f.Confidence) && !math.IsInf(f.Confidence, 0) {
+			props["confidence"] = f.Confidence
+		}
+		features = append(features, feat{
+			Type: "Feature",
+			Geometry: map[string]any{
+				"type":        "Point",
+				"coordinates": []float64{f.Lon, f.Lat},
+			},
+			Props: props,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"type":        "FeatureCollection",
+		"features":    features,
+		"fetched_at":  fetchedAt.UTC().Format(time.RFC3339),
+		"source":      "EUMETSAT MTG-LI Lightning Flashes (LFL)",
+		"disclaimer":  "Donnée satellite à titre situationnel — non OPMET (OACI Annexe 3 / 2017/373)",
+	})
 }

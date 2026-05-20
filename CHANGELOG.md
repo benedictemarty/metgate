@@ -3,6 +3,28 @@
 Format : [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/).
 Versionnage : [SemVer](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- `web/src/pages/TowerGlobe.tsx` : suppression de l'extrapolation côté client
+  des positions avions. Le composant `AnimatedPlane` est remplacé par un
+  composant `Plane` simple qui rend l'avion à la position OpenSky reçue,
+  sans `useFrame`, sans interpolation, sans dead-reckoning. Choix produit :
+  l'utilisateur préfère voir la position réelle ADS-B (au prix d'un saut
+  toutes les 30 s) plutôt qu'une animation qui « reboote » ou diverge de la
+  trajectoire réelle.
+- `web/src/pages/TowerGlobe.tsx` (`Plane`) : géométrie d'avion explicite —
+  fuselage cone 12 segments, ailes, empennage horizontal, **dérive
+  verticale** (repère arrière non ambigu). Remplace l'ancienne pyramide à
+  4 segments visuellement symétrique avant/arrière selon l'angle de caméra. Le pattern à 2 groupes
+  (groupRef = ancre absolue, innerRef = offset extrapolé) provoquait un
+  « reboot » visible toutes les 30 s : à l'arrivée du fetch, `groupRef`
+  sautait à la nouvelle ancre tandis que `innerRef` gardait ~30 s
+  d'extrapolation accumulée → l'avion bondissait loin devant puis « reculait »
+  progressivement. Le useEffect ajuste désormais `innerRef.position` du
+  delta inverse pour que la position visuelle reste continue.
+
 ## [0.2.0] — 2026-05-04 — Sprint « Durcissement avant exposition »
 
 ### Added

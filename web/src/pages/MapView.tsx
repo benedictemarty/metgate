@@ -14,7 +14,9 @@ import {
   Layers as LayersIcon,
   Loader2,
   Pause,
+  Plane,
   Play,
+  Radio,
   Sparkles,
   Wind as WindIcon,
   X,
@@ -22,10 +24,14 @@ import {
 import WindLayer from '../components/WindLayer'
 import TropoLayer from '../components/TropoLayer'
 import QvacisLayer, { QVACIS_FLS, type QvacisDataset } from '../components/QvacisLayer'
+import LightningLayer from '../components/LightningLayer'
+import SatRasterLayer from '../components/SatRasterLayer'
+import CloudTopLayer from '../components/CloudTopLayer'
 import FlightPlan, { type RoutePlan } from '../components/FlightPlan'
 import AircraftTracker, { type AircraftState } from '../components/AircraftTracker'
-import { CloudFog, Link2, Link2Off, Mountain } from 'lucide-react'
+import { CloudCog, CloudFog, CloudLightning, Link2, Link2Off, Mountain, Satellite, Zap } from 'lucide-react'
 import type { Aggregate, Family } from '../types'
+import { displayFamilyName } from '../familyDisplay'
 
 interface MapViewProps {
   data: Aggregate | null
@@ -88,6 +94,7 @@ const styleFor = (familyName: string): LayerStyle => {
   }
   return { color: '#94a3b8', glow: '#64748b' }
 }
+
 
 const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'
 
@@ -264,8 +271,16 @@ export default function MapView({ data }: MapViewProps) {
   const [windLevelPa, setWindLevelPa] = useState(85000) // 850 hPa par défaut
   const [tropoEnabled, setTropoEnabled] = useState(false)
   const [qvacisEnabled, setQvacisEnabled] = useState(false)
+  const [lightningEnabled, setLightningEnabled] = useState(false)
+  const [satIREnabled, setSatIREnabled] = useState(false)
+  const [satCTHEnabled] = useState(false) // CTH WMS legacy (raster instable, remplacé par CTH NetCDF)
+  const [satConvEnabled, setSatConvEnabled] = useState(false)
+  const [cthEnabled, setCthEnabled] = useState(false) // CTH backend NetCDF + slider FL
+  const [cthMinFL, setCthMinFL] = useState(250)
   const [qvacisDataset, setQvacisDataset] = useState<QvacisDataset>('DETERMINISTIC')
   const [qvacisFL, setQvacisFL] = useState(325)
+  const [showFlightPlan, setShowFlightPlan] = useState(true)
+  const [showTracker, setShowTracker] = useState(true)
 
   // Mode synchronisé : un slider maître pilote toutes les couches WCS actives.
   // Chaque WCS layer remonte ses timestamps via onTimesLoaded ; le master
@@ -411,16 +426,58 @@ export default function MapView({ data }: MapViewProps) {
       if (!typeName || loaded[name] || loading.has(name) || errors[name]) return
       setLoading((prev) => new Set(prev).add(name))
       try {
+        // Produits plats MetGate (format `id` + `tac`) à fusionner avec les IWXXM
+        // correspondants pour couvrir les zones absentes (ED* Allemagne, K* USA, etc.).
+        // Priorité : IWXXM d'abord, plat seulement pour les stations manquantes.
+        const FLAT_FALLBACKS: Record<string, string[]> = {
+          METAR: ['SA_last'],
+          SPECI: ['SP_last'],
+          TAF:   ['FT_last', 'FC_last'],
+        }
+        const flatTypes = FLAT_FALLBACKS[name] ?? []
+
         // On demande large car certaines familles (RDT_MSG) renvoient ~5
         // features de prévision par cellule ; on filtre ensuite T+0 côté front.
-        const r = await fetch(
-          `/api/feature?type=${encodeURIComponent(typeName)}&count=2000`,
-        )
+        const [r, ...flatResponses] = await Promise.all([
+          fetch(`/api/feature?type=${encodeURIComponent(typeName)}&count=2000`),
+          ...flatTypes.map((t) => fetch(`/api/feature?type=${t}&count=2000`)),
+        ])
         if (!r.ok) {
           const detail = await r.text()
           throw new Error(`HTTP ${r.status}: ${detail.slice(0, 80)}`)
         }
         const geo = (await r.json()) as GeoJSON.FeatureCollection
+
+        // Fusion des produits plats : normalise `id` → `locationIndicatorICAO`
+        // et `analysis_time` → `observationTime`, puis ajoute les stations absentes.
+        if (flatTypes.length > 0) {
+          const knownIcao = new Set(
+            (geo.features ?? []).map((f) => f.properties?.locationIndicatorICAO as string),
+          )
+          for (const flatRes of flatResponses) {
+            if (!flatRes?.ok) continue
+            const geoFlat = (await flatRes.json()) as GeoJSON.FeatureCollection
+            const added = (geoFlat.features ?? [])
+              .filter((f) => {
+                const id = f.properties?.id as string | undefined
+                return id && !knownIcao.has(id)
+              })
+              .map((f) => {
+                const id = f.properties?.id as string
+                knownIcao.add(id)
+                return {
+                  ...f,
+                  properties: {
+                    ...f.properties,
+                    locationIndicatorICAO: id,
+                    observationTime: f.properties?.analysis_time,
+                  },
+                }
+              })
+            geo.features = [...(geo.features ?? []), ...added]
+          }
+        }
+
         const filtered = filterBySlot(geo, selectedSlot, showTrails)
         setLoaded((prev) => ({
           ...prev,
@@ -662,26 +719,75 @@ export default function MapView({ data }: MapViewProps) {
           linkedInstant={linkedInstantForLayers}
           onTimesLoaded={setQvacisTimes}
         />
-
-        <FlightPlan
-          plan={routePlan}
-          // En mode live (avion suivi), on n'autorise pas le user à effacer
-          // ni changer le plan — il est piloté par AircraftTracker.
-          onPlan={isLivePlan ? () => {} : setManualPlan}
-          cursorIdx={routePlan ? routeCursor : -1}
-          playing={routePlaying}
-          onTogglePlay={() => setRoutePlaying((p) => !p)}
-          onCursorChange={(i) => {
-            setRouteCursor(i)
-            setRoutePlaying(false)
-          }}
+        <LightningLayer enabled={lightningEnabled} />
+        <SatRasterLayer
+          enabled={satIREnabled}
+          id="ir105"
+          wmsLayer="mtg_fd:ir105_hrfi"
+          wmsStyle="mtg_fd:mtg_fd_ir105_hrfi_grayscale"
+          opacity={0.65}
+        />
+        <SatRasterLayer
+          enabled={satCTHEnabled}
+          id="cth"
+          wmsLayer="msg_fes:cth"
+          wmsStyle="msg_cth"
+          opacity={0.6}
+        />
+        <SatRasterLayer
+          enabled={satConvEnabled}
+          id="conv"
+          wmsLayer="msg_fes:rgb_convection"
+          opacity={0.7}
+        />
+        <CloudTopLayer
+          enabled={cthEnabled}
+          minFL={cthMinFL}
+          onMinFLChange={setCthMinFL}
+          opacity={0.65}
         />
 
-        <AircraftTracker
-          selected={trackedAircraft}
-          onSelect={setTrackedAircraft}
-          onLivePlan={setLivePlan}
-        />
+        {showFlightPlan ? (
+          <FlightPlan
+            plan={routePlan}
+            onPlan={isLivePlan ? () => {} : setManualPlan}
+            cursorIdx={routePlan ? routeCursor : -1}
+            playing={routePlaying}
+            onTogglePlay={() => setRoutePlaying((p) => !p)}
+            onCursorChange={(i) => {
+              setRouteCursor(i)
+              setRoutePlaying(false)
+            }}
+            onClose={() => setShowFlightPlan(false)}
+          />
+        ) : (
+          <button
+            onClick={() => setShowFlightPlan(true)}
+            title="Afficher le plan de vol"
+            className="absolute top-4 left-[19rem] z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-950/85 border border-emerald-400/40 text-emerald-300 text-xs font-medium backdrop-blur-md shadow-lg hover:bg-slate-900/90 transition"
+          >
+            <Plane className="size-3.5" />
+            Plan de vol
+          </button>
+        )}
+
+        {showTracker ? (
+          <AircraftTracker
+            selected={trackedAircraft}
+            onSelect={setTrackedAircraft}
+            onLivePlan={setLivePlan}
+            onClose={() => setShowTracker(false)}
+          />
+        ) : (
+          <button
+            onClick={() => setShowTracker(true)}
+            title="Afficher le suivi ADS-B"
+            className="absolute bottom-4 left-[19rem] z-10 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-950/85 border border-rose-400/30 text-rose-300 text-xs font-medium backdrop-blur-md shadow-lg hover:bg-slate-900/90 transition"
+          >
+            <Radio className="size-3.5" />
+            Suivi avion
+          </button>
+        )}
 
         {popup && (
           <Popup
@@ -755,6 +861,54 @@ export default function MapView({ data }: MapViewProps) {
           >
             <Mountain className="size-4" />
             Tropopause
+          </button>
+          <button
+            onClick={() => setLightningEnabled((v) => !v)}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
+              lightningEnabled
+                ? 'border-yellow-400/50 bg-yellow-500/20 text-yellow-100 shadow-[0_0_15px_rgba(250,204,21,0.3)]'
+                : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
+            }`}
+            title="Impacts foudre — EUMETSAT MTG-LI (situationnel, non OPMET)"
+          >
+            <Zap className="size-4" />
+            Foudre
+          </button>
+          <button
+            onClick={() => setSatIREnabled((v) => !v)}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
+              satIREnabled
+                ? 'border-sky-400/50 bg-sky-500/20 text-sky-100 shadow-[0_0_15px_rgba(56,189,248,0.25)]'
+                : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
+            }`}
+            title="Imagerie satellite IR 10.5 µm — EUMETSAT MTG-FCI (situationnel)"
+          >
+            <Satellite className="size-4" />
+            Sat IR
+          </button>
+          <button
+            onClick={() => setCthEnabled((v) => !v)}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
+              cthEnabled
+                ? 'border-violet-400/50 bg-violet-500/20 text-violet-100 shadow-[0_0_15px_rgba(167,139,250,0.25)]'
+                : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
+            }`}
+            title="Cloud Top Height — EUMETSAT MTG-FCI CTTH avec filtre FL (situationnel)"
+          >
+            <CloudCog className="size-4" />
+            CTH
+          </button>
+          <button
+            onClick={() => setSatConvEnabled((v) => !v)}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
+              satConvEnabled
+                ? 'border-pink-400/50 bg-pink-500/20 text-pink-100 shadow-[0_0_15px_rgba(244,114,182,0.25)]'
+                : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
+            }`}
+            title="Convection RGB — EUMETSAT MSG (cellules convectives, situationnel)"
+          >
+            <CloudLightning className="size-4" />
+            Conv
           </button>
           <button
             onClick={() => setWindEnabled((v) => !v)}
@@ -908,7 +1062,7 @@ function TimeSlider({
       )}
 
       <div className="flex flex-col gap-1.5 min-w-0">
-        <div className="flex items-center gap-1.5 text-[11px] text-slate-300">
+        <div className="flex items-center gap-1.5 text-[0.6875rem] text-slate-300">
           <Clock className="size-3 text-slate-500" />
           <span className="font-medium tabular-nums">{label}</span>
           <span className="text-slate-600">·</span>
@@ -924,7 +1078,7 @@ function TimeSlider({
               <button
                 key={s}
                 onClick={() => onChange(s)}
-                className={`shrink-0 min-w-12 h-9 px-2 rounded-md text-[11px] font-mono tabular-nums transition border flex flex-col items-center justify-center leading-tight ${
+                className={`shrink-0 min-w-12 h-9 px-2 rounded-md text-[0.6875rem] font-mono tabular-nums transition border flex flex-col items-center justify-center leading-tight ${
                   active
                     ? 'bg-sky-500/25 text-sky-100 border-sky-400/50 shadow-[0_0_10px_rgba(56,189,248,0.25)]'
                     : 'bg-slate-900/60 text-slate-400 border-slate-800/60 hover:bg-slate-800/60 hover:text-slate-200'
@@ -933,7 +1087,7 @@ function TimeSlider({
               >
                 <span>{lab.primary}</span>
                 {lab.secondary && (
-                  <span className="text-[9px] opacity-60">{lab.secondary.slice(5)}</span>
+                  <span className="text-[0.5625rem] opacity-60">{lab.secondary.slice(5)}</span>
                 )}
               </button>
             )
@@ -995,6 +1149,7 @@ function FeaturePopup({
   const icao = props.locationIndicatorICAO as string | undefined
   const obsTime = props.observationTime as string | undefined
   const tac = props.tac as string | undefined
+  const decoded = props.decoded as string | undefined
   const status = props.status as string | undefined
   const cavok = props.cavok === true
 
@@ -1039,7 +1194,7 @@ function FeaturePopup({
           >
             {headerTitle}
           </div>
-          <div className="text-[10px] uppercase tracking-wider text-slate-400 truncate">
+          <div className="text-[0.625rem] uppercase tracking-wider text-slate-400 truncate">
             {family.replace(/_last$/, '')}
             {headerTime && ' · ' + fmtVal(headerTime, '_t', props)}
           </div>
@@ -1054,13 +1209,20 @@ function FeaturePopup({
       </div>
 
       {tac && (
-        <pre className="text-[11px] font-mono text-slate-200 bg-slate-950/60 border border-slate-800/60 rounded-md p-2 whitespace-pre-wrap break-words">
+        <pre className="text-[0.6875rem] font-mono text-slate-200 bg-slate-950/60 border border-slate-800/60 rounded-md p-2 whitespace-pre-wrap break-words">
           {tac}
         </pre>
       )}
 
+      {decoded && (
+        <div className="mt-2 text-[0.6875rem] text-slate-200 bg-slate-950/40 border border-slate-800/50 rounded-md p-2 whitespace-pre-wrap leading-relaxed">
+          <div className="text-[0.5625rem] uppercase tracking-wider text-slate-500 mb-1">Traduction</div>
+          {decoded}
+        </div>
+      )}
+
       {metarFields.length > 0 && (
-        <dl className="grid grid-cols-2 gap-x-3 gap-y-1 mt-2 text-[11px]">
+        <dl className="grid grid-cols-2 gap-x-3 gap-y-1 mt-2 text-[0.6875rem]">
           {metarFields.map(([k, v]) => (
             <div key={k} className="flex justify-between">
               <dt className="text-slate-500">{k}</dt>
@@ -1071,7 +1233,7 @@ function FeaturePopup({
       )}
 
       {otherFields.length > 0 && (
-        <dl className="mt-2 text-[10px] max-h-56 overflow-y-auto pr-1">
+        <dl className="mt-2 text-[0.625rem] max-h-56 overflow-y-auto pr-1">
           {otherFields.map(([k, v]) => (
             <div key={k} className="flex justify-between gap-3 py-0.5 border-b border-slate-800/40 last:border-0">
               <dt className="text-slate-500 shrink-0">{k}</dt>
@@ -1083,7 +1245,7 @@ function FeaturePopup({
         </dl>
       )}
 
-      <div className="mt-2 flex items-center gap-2 text-[10px] text-slate-500">
+      <div className="mt-2 flex items-center gap-2 text-[0.625rem] text-slate-500">
         {cavok && (
           <span className="px-1.5 py-0.5 rounded bg-emerald-900/40 text-emerald-300 border border-emerald-800/60">
             CAVOK
@@ -1179,11 +1341,13 @@ function Sidebar({
                         boxShadow: isActive ? `0 0 10px ${s.glow}` : 'none',
                       }}
                     />
-                    <span className="text-sm flex-1 truncate">{f.name}</span>
+                    <span className="text-sm flex-1 truncate" title={f.name}>
+                      {displayFamilyName(f.name)}
+                    </span>
                     {isLoading && <Loader2 className="size-3 animate-spin text-slate-500" />}
                     {!isLoading && layer && isActive && (
                       <span
-                        className="text-[11px] tabular-nums text-slate-500"
+                        className="text-[0.6875rem] tabular-nums text-slate-500"
                         title={
                           layer.total !== layer.count
                             ? `${layer.count} affichés (analyse T+0) sur ${layer.total} reçus (incl. prévisions)`
@@ -1198,7 +1362,7 @@ function Sidebar({
                     )}
                   </div>
                   {err && (
-                    <div className="mt-1 text-[10px] text-red-400 truncate" title={err}>
+                    <div className="mt-1 text-[0.625rem] text-red-400 truncate" title={err}>
                       {err}
                     </div>
                   )}
@@ -1209,7 +1373,7 @@ function Sidebar({
         </ul>
       </div>
 
-      <div className="px-4 py-3 border-t border-slate-800/70 text-[10px] text-slate-500 leading-snug">
+      <div className="px-4 py-3 border-t border-slate-800/70 text-[0.625rem] text-slate-500 leading-snug">
         Fond de carte ·{' '}
         <a
           href="https://carto.com/attributions"
@@ -1300,10 +1464,10 @@ function WindLevelSelector({
   const cur = WIND_PRESSURE_LEVELS[findIdx(value)]
   return (
     <div className="flex flex-col gap-2 px-3 py-2 rounded-lg border border-slate-800/70 bg-slate-950/85 backdrop-blur-md shadow-xl min-w-[220px]">
-      <div className="text-[9px] uppercase tracking-wider text-slate-500">Source</div>
+      <div className="text-[0.5625rem] uppercase tracking-wider text-slate-500">Source</div>
       <button
         onClick={() => onSelect('JET', 0)}
-        className={`flex items-center justify-between gap-3 px-2 py-1 rounded text-[11px] font-mono tabular-nums transition border ${
+        className={`flex items-center justify-between gap-3 px-2 py-1 rounded text-[0.6875rem] font-mono tabular-nums transition border ${
           dataset === 'JET'
             ? 'border-cyan-400/50 bg-cyan-500/15 text-cyan-100 shadow-[0_0_8px_rgba(34,211,238,0.2)]'
             : 'border-transparent text-slate-400 hover:bg-slate-800/40 hover:text-slate-200'
@@ -1311,12 +1475,12 @@ function WindLevelSelector({
         title="Jet stream pré-isolé (single-level)"
       >
         <span>JET</span>
-        <span className="text-[9px] text-slate-500">jet stream</span>
+        <span className="text-[0.5625rem] text-slate-500">jet stream</span>
       </button>
 
       <div className="h-px bg-slate-800/60" />
 
-      <div className="flex items-baseline justify-between text-[10px]">
+      <div className="flex items-baseline justify-between text-[0.625rem]">
         <span className="text-slate-500 uppercase tracking-wider">Niveau</span>
         {dataset === 'WIND' && (
           <span className="font-mono tabular-nums text-cyan-200">
@@ -1337,13 +1501,13 @@ function WindLevelSelector({
         }}
         className="accent-cyan-400 h-1"
       />
-      <div className="flex justify-between text-[9px] text-slate-600 font-mono tabular-nums px-0.5">
+      <div className="flex justify-between text-[0.5625rem] text-slate-600 font-mono tabular-nums px-0.5">
         <span>sol</span>
         <span>{Math.round(N / 2)}/29</span>
         <span>FL1020</span>
       </div>
 
-      <div className="text-[9px] uppercase tracking-wider text-slate-500 mt-1">
+      <div className="text-[0.5625rem] uppercase tracking-wider text-slate-500 mt-1">
         Raccourcis
       </div>
       <div className="grid grid-cols-4 gap-1">
@@ -1353,7 +1517,7 @@ function WindLevelSelector({
             <button
               key={p.pa}
               onClick={() => onSelect('WIND', p.pa)}
-              className={`px-1 py-0.5 rounded text-[10px] font-mono tabular-nums transition border ${
+              className={`px-1 py-0.5 rounded text-[0.625rem] font-mono tabular-nums transition border ${
                 active
                   ? 'border-cyan-400/50 bg-cyan-500/15 text-cyan-100'
                   : 'border-transparent text-slate-400 hover:bg-slate-800/40 hover:text-slate-200'
@@ -1381,13 +1545,13 @@ function QvacisSelector({
 }) {
   return (
     <div className="flex flex-col gap-2 px-2 py-2 rounded-lg border border-orange-900/40 bg-slate-950/85 backdrop-blur-md shadow-xl">
-      <div className="text-[9px] uppercase tracking-wider text-slate-500 px-1">
+      <div className="text-[0.5625rem] uppercase tracking-wider text-slate-500 px-1">
         Cendres
       </div>
       <div className="flex gap-1">
         <button
           onClick={() => onDataset('DETERMINISTIC')}
-          className={`flex-1 px-2 py-1 rounded text-[10px] transition border ${
+          className={`flex-1 px-2 py-1 rounded text-[0.625rem] transition border ${
             dataset === 'DETERMINISTIC'
               ? 'border-orange-400/50 bg-orange-500/15 text-orange-100'
               : 'border-transparent text-slate-400 hover:bg-slate-800/40'
@@ -1397,7 +1561,7 @@ function QvacisSelector({
         </button>
         <button
           onClick={() => onDataset('PROBABILISTIC')}
-          className={`flex-1 px-2 py-1 rounded text-[10px] transition border ${
+          className={`flex-1 px-2 py-1 rounded text-[0.625rem] transition border ${
             dataset === 'PROBABILISTIC'
               ? 'border-orange-400/50 bg-orange-500/15 text-orange-100'
               : 'border-transparent text-slate-400 hover:bg-slate-800/40'
@@ -1406,7 +1570,7 @@ function QvacisSelector({
           Probab.
         </button>
       </div>
-      <div className="text-[9px] uppercase tracking-wider text-slate-500 px-1">
+      <div className="text-[0.5625rem] uppercase tracking-wider text-slate-500 px-1">
         FL
       </div>
       <div className="grid grid-cols-3 gap-1">
@@ -1414,7 +1578,7 @@ function QvacisSelector({
           <button
             key={v}
             onClick={() => onFL(v)}
-            className={`px-1.5 py-1 rounded text-[10px] font-mono tabular-nums transition border ${
+            className={`px-1.5 py-1 rounded text-[0.625rem] font-mono tabular-nums transition border ${
               fl === v
                 ? 'border-orange-400/50 bg-orange-500/15 text-orange-100'
                 : 'border-transparent text-slate-400 hover:bg-slate-800/40 hover:text-slate-200'
@@ -1463,7 +1627,7 @@ function WcsMasterSlider({
         )}
       </button>
       <div className="flex flex-col gap-1.5 min-w-[280px]">
-        <div className="flex items-center gap-1.5 text-[11px] text-slate-300">
+        <div className="flex items-center gap-1.5 text-[0.6875rem] text-slate-300">
           <Link2 className="size-3 text-violet-300" />
           <span className="font-mono tabular-nums">{label}</span>
           <span className="text-slate-600">·</span>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useMap, Marker } from 'react-map-gl/maplibre'
-import { Plane, Radio, X, Search } from 'lucide-react'
+import { ChevronDown, Plane, Radio, X, Search } from 'lucide-react'
 import type { RoutePlan } from './FlightPlan'
 
 export interface AircraftState {
@@ -37,12 +37,14 @@ interface AircraftTrackerProps {
   selected: AircraftState | null
   onSelect: (s: AircraftState | null) => void
   onLivePlan: (plan: RoutePlan | null) => void
+  onClose?: () => void
 }
 
 export default function AircraftTracker({
   selected,
   onSelect,
   onLivePlan,
+  onClose,
 }: AircraftTrackerProps) {
   const { current: mapRef } = useMap()
   const map = mapRef?.getMap()
@@ -162,6 +164,15 @@ export default function AircraftTracker({
               <X className="size-4" />
             </button>
           )}
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="text-slate-600 hover:text-slate-300 transition"
+              title="Réduire"
+            >
+              <ChevronDown className="size-4" />
+            </button>
+          )}
         </div>
 
         {!selected && (
@@ -172,7 +183,7 @@ export default function AircraftTracker({
                 onChange={(e) => setQuery(e.target.value.toUpperCase())}
                 onKeyDown={(e) => e.key === 'Enter' && search(query)}
                 placeholder="Callsign (ex: AFR1234)"
-                className="flex-1 px-2 py-1 rounded bg-slate-900/60 border border-slate-800 text-slate-200 font-mono text-[11px] focus:outline-none focus:border-rose-500/50"
+                className="flex-1 px-2 py-1 rounded bg-slate-900/60 border border-slate-800 text-slate-200 font-mono text-[0.6875rem] focus:outline-none focus:border-rose-500/50"
               />
               <button
                 onClick={() => search(query)}
@@ -184,7 +195,7 @@ export default function AircraftTracker({
               </button>
             </div>
             {error && (
-              <div className="mt-2 text-[10px] text-amber-400 leading-snug">{error}</div>
+              <div className="mt-2 text-[0.625rem] text-amber-400 leading-snug">{error}</div>
             )}
             {results.length > 0 && (
               <ul className="mt-2 max-h-48 overflow-y-auto space-y-0.5">
@@ -192,13 +203,13 @@ export default function AircraftTracker({
                   <li key={s.icao24}>
                     <button
                       onClick={() => onSelect(s)}
-                      className="w-full text-left px-2 py-1 rounded hover:bg-slate-800/60 text-[11px] font-mono"
+                      className="w-full text-left px-2 py-1 rounded hover:bg-slate-800/60 text-[0.6875rem] font-mono"
                     >
                       <div className="flex justify-between">
                         <span className="text-rose-200">{s.callsign || '—'}</span>
                         <span className="text-slate-500">{s.icao24}</span>
                       </div>
-                      <div className="flex justify-between text-[10px] text-slate-500">
+                      <div className="flex justify-between text-[0.625rem] text-slate-500">
                         <span>{s.origin_country}</span>
                         <span>
                           FL{s.fl.toString().padStart(3, '0')} · {s.gs_kt.toFixed(0)} kt
@@ -213,17 +224,17 @@ export default function AircraftTracker({
         )}
 
         {selected && (
-          <div className="text-[11px] font-mono">
+          <div className="text-[0.6875rem] font-mono">
             <div className="flex justify-between mb-1">
               <span className="text-rose-200 text-base font-semibold">
                 {selected.callsign || '—'}
               </span>
-              <span className="text-slate-500 text-[10px] mt-1">
+              <span className="text-slate-500 text-[0.625rem] mt-1">
                 {selected.icao24}
               </span>
             </div>
-            <div className="text-[10px] text-slate-400 mb-2">{selected.origin_country}</div>
-            <dl className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px]">
+            <div className="text-[0.625rem] text-slate-400 mb-2">{selected.origin_country}</div>
+            <dl className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[0.625rem]">
               <div className="flex justify-between">
                 <dt className="text-slate-500">FL</dt>
                 <dd className="text-slate-200">
@@ -267,7 +278,7 @@ export default function AircraftTracker({
                 </div>
               )}
             </dl>
-            <div className="mt-1 text-[9px] text-slate-500">
+            <div className="mt-1 text-[0.5625rem] text-slate-500">
               màj {selected.time_iso?.replace('T', ' ').replace('Z', ' UTC')}
             </div>
             <div className="mt-2 pt-2 border-t border-slate-800/60 flex items-center gap-1">
@@ -277,18 +288,18 @@ export default function AircraftTracker({
                 onKeyDown={(e) => e.key === 'Enter' && buildLivePlan()}
                 placeholder="Dest ICAO (auto si vide)"
                 maxLength={4}
-                className="flex-1 px-2 py-1 rounded bg-slate-900/60 border border-slate-800 text-slate-200 font-mono text-[10px] focus:outline-none focus:border-rose-500/50"
+                className="flex-1 px-2 py-1 rounded bg-slate-900/60 border border-slate-800 text-slate-200 font-mono text-[0.625rem] focus:outline-none focus:border-rose-500/50"
               />
               <button
                 onClick={buildLivePlan}
                 disabled={planLoading}
-                className="px-2 py-1 rounded bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/40 text-rose-100 text-[10px] disabled:opacity-40"
+                className="px-2 py-1 rounded bg-rose-500/20 hover:bg-rose-500/30 border border-rose-400/40 text-rose-100 text-[0.625rem] disabled:opacity-40"
                 title="Régénérer le plan synthétique"
               >
                 {planLoading ? '…' : '↻'}
               </button>
             </div>
-            <div className="mt-1 text-[9px] text-slate-500 leading-snug">
+            <div className="mt-1 text-[0.5625rem] text-slate-500 leading-snug">
               Plan synthétique : projection +60 min au cap, ou grand cercle vers
               dest si renseignée. Les produits / WCS s'allument autour de l'avion.
             </div>

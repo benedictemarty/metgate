@@ -17,6 +17,9 @@ import {
   Zap,
 } from 'lucide-react'
 import type { Aggregate, Family, ServiceCatalog } from '../types'
+import { displayFamilyName, familyInfo, EXTERNAL_PRODUCTS } from '../familyDisplay'
+import type { ExternalProduct } from '../familyDisplay'
+import { Satellite, Radio } from 'lucide-react'
 
 const familyIcon = (name: string) => {
   const n = name.toLowerCase()
@@ -100,6 +103,7 @@ export default function Catalog({ data, loading, error, onRefresh }: CatalogProp
             accent="from-violet-400/40 to-violet-600/0"
             data={data.wcs}
           />
+          <ExternalSection />
         </div>
       )}
 
@@ -140,34 +144,117 @@ function Section({ title, subtitle, icon: Icon, accent, data }: SectionProps) {
   )
 }
 
+function ExternalSection() {
+  const eumetsat = EXTERNAL_PRODUCTS.filter((p) => p.provider === 'EUMETSAT')
+  const opensky = EXTERNAL_PRODUCTS.filter((p) => p.provider === 'OpenSky')
+  return (
+    <section>
+      <div className="flex items-baseline gap-3 mb-5">
+        <Satellite className="size-5 text-amber-300" />
+        <h2 className="text-2xl font-semibold tracking-tight">Sources externes</h2>
+        <span className="text-sm text-slate-500">
+          satellite & ADS-B · situationnel, non OPMET
+        </span>
+        <span className="ml-auto text-xs text-slate-500 tabular-nums">
+          {EXTERNAL_PRODUCTS.length} produits
+        </span>
+      </div>
+
+      <h3 className="text-[0.625rem] uppercase tracking-widest text-amber-300/70 mb-2 flex items-center gap-2">
+        <Satellite className="size-3" /> EUMETSAT
+      </h3>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 mb-6">
+        {eumetsat.map((p) => (
+          <ExternalCard key={p.name} product={p} accent="from-amber-400/40 to-amber-600/0" />
+        ))}
+      </div>
+
+      <h3 className="text-[0.625rem] uppercase tracking-widest text-rose-300/70 mb-2 flex items-center gap-2">
+        <Radio className="size-3" /> OpenSky Network
+      </h3>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+        {opensky.map((p) => (
+          <ExternalCard key={p.name} product={p} accent="from-rose-400/40 to-rose-600/0" />
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function ExternalCard({ product, accent }: { product: ExternalProduct; accent: string }) {
+  const Icon = product.provider === 'OpenSky' ? Radio : Satellite
+  return (
+    <div className="group relative overflow-hidden rounded-xl border border-slate-800/60 bg-slate-900/40 p-4 transition hover:border-slate-700 hover:bg-slate-900/70">
+      <div className={`absolute inset-x-0 top-0 h-px bg-gradient-to-r ${accent}`} />
+      <div className="flex items-start justify-between gap-3 min-w-0">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 mb-1">
+            <Icon className="size-4 text-slate-400 shrink-0" />
+            <div className="font-medium text-sm truncate" title={product.name}>
+              {product.name}
+            </div>
+          </div>
+          <div className="text-[0.6875rem] text-slate-300 leading-snug mb-1.5">
+            {product.description}
+          </div>
+          <div className="text-[0.5625rem] uppercase tracking-wider text-amber-300/70 mb-1">
+            {product.source}
+          </div>
+          <div className="text-[0.625rem] font-mono text-slate-500 truncate">
+            {product.cadence}
+          </div>
+          <div className="text-[0.5625rem] font-mono text-cyan-400/70 truncate mt-1">
+            {product.endpoint}
+          </div>
+          <div className="text-[0.5625rem] italic text-amber-200/70 mt-2 leading-snug">
+            ⚠ {product.disclaimer}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function FamilyCard({ family, accent }: { family: Family; accent: string }) {
   const Icon = familyIcon(family.name)
+  const info = familyInfo(family.name)
   return (
     <div className="group relative overflow-hidden rounded-xl border border-slate-800/60 bg-slate-900/40 p-4 transition hover:border-slate-700 hover:bg-slate-900/70">
       <div className={`absolute inset-x-0 top-0 h-px bg-gradient-to-r ${accent}`} />
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 mb-2">
+          <div className="flex items-center gap-2 mb-1">
             <Icon className="size-4 text-slate-400 shrink-0" />
             <div className="font-medium text-sm truncate" title={family.name}>
-              {family.name}
+              {displayFamilyName(family.name)}
             </div>
           </div>
+          {info?.description && (
+            <div className="text-[0.6875rem] text-slate-300 leading-snug mb-1.5 line-clamp-2">
+              {info.description}
+            </div>
+          )}
+          {info?.source && (
+            <div className="text-[0.5625rem] uppercase tracking-wider text-cyan-400/70 mb-1.5">
+              {info.source}
+            </div>
+          )}
           {family.latest && (
-            <div className="text-[11px] font-mono text-slate-500 truncate">
+            <div className="text-[0.6875rem] font-mono text-slate-500 truncate">
               {fmtDate(family.latest)}
             </div>
           )}
         </div>
-        <div className="text-right shrink-0">
+        <div
+          className="text-right shrink-0 cursor-help"
+          title={`${family.count} instances disponibles dans le catalogue\n(échéances / runs historiques pour cette famille)\n\nLatest : ${family.latest ?? '—'}`}
+        >
           <div className="text-2xl font-semibold tabular-nums leading-none">
             {family.count}
           </div>
-          {family.format && (
-            <div className="mt-1 text-[10px] uppercase tracking-wider text-slate-500">
-              .{family.format}
-            </div>
-          )}
+          <div className="mt-1 text-[0.625rem] uppercase tracking-wider text-slate-500">
+            {family.format ? `.${family.format}` : 'instances'}
+          </div>
         </div>
       </div>
     </div>

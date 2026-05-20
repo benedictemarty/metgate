@@ -1,13 +1,15 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
-import { Cloud, FileText, Loader2, Map as MapIcon } from 'lucide-react'
+import { Cloud, FileText, Globe, Loader2, Map as MapIcon, TrendingUp } from 'lucide-react'
 import Catalog from './pages/Catalog'
 import type { Aggregate } from './types'
 
-// La page Carte embarque MapLibre (~1 MB de JS) ; on la lazy-load pour ne
-// payer le coût qu'au premier passage sur l'onglet Carte.
+// La page Carte embarque MapLibre (~1 MB de JS), Tour 3D embarque Three.js
+// (~600 KB) ; on les lazy-load pour ne payer le coût qu'au premier passage.
 const MapView = lazy(() => import('./pages/MapView'))
+const TowerGlobe = lazy(() => import('./pages/TowerGlobe'))
+const RouteProfile = lazy(() => import('./pages/RouteProfile'))
 
-type View = 'catalog' | 'map'
+type View = 'catalog' | 'map' | 'tower' | 'profile'
 
 export default function App() {
   const [view, setView] = useState<View>('catalog')
@@ -60,13 +62,26 @@ export default function App() {
               icon={MapIcon}
               label="Carte"
             />
+            <NavButton
+              active={view === 'tower'}
+              onClick={() => setView('tower')}
+              icon={Globe}
+              label="Tour 3D"
+            />
+            <NavButton
+              active={view === 'profile'}
+              onClick={() => setView('profile')}
+              icon={TrendingUp}
+              label="Profil"
+            />
           </nav>
         </div>
       </header>
 
-      {view === 'catalog' ? (
+      {view === 'catalog' && (
         <Catalog data={data} loading={loading} error={error} onRefresh={load} />
-      ) : (
+      )}
+      {view === 'map' && (
         <Suspense
           fallback={
             <div className="flex items-center justify-center py-32 text-slate-500">
@@ -75,6 +90,28 @@ export default function App() {
           }
         >
           <MapView data={data} />
+        </Suspense>
+      )}
+      {view === 'tower' && (
+        <Suspense
+          fallback={
+            <div className="flex items-center justify-center py-32 text-slate-500">
+              <Loader2 className="size-7 animate-spin" />
+            </div>
+          }
+        >
+          <TowerGlobe />
+        </Suspense>
+      )}
+      {view === 'profile' && (
+        <Suspense
+          fallback={
+            <div className="flex items-center justify-center py-32 text-slate-500">
+              <Loader2 className="size-7 animate-spin" />
+            </div>
+          }
+        >
+          <RouteProfile />
         </Suspense>
       )}
     </div>

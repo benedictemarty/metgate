@@ -121,7 +121,7 @@ func (s *Service) FeatureGeoJSON(ctx context.Context, typeName string, count int
 		return nil, false, fmt.Errorf("metgate WFS GetFeature %s: status %d (body=%q)",
 			typeName, resp.Status, truncate(resp.Body, 200))
 	}
-	geo, err := GMLToGeoJSON(resp.Body)
+	geo, err := GMLToGeoJSON(resp.Body, typeName)
 	if err != nil {
 		return nil, false, err
 	}

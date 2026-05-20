@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"sort"
 	"strings"
@@ -20,11 +21,12 @@ type Aerodrome struct {
 
 // RouteWaypoint est un point de la trajectoire grand cercle.
 type RouteWaypoint struct {
-	Lon     float64 `json:"lon"`
-	Lat     float64 `json:"lat"`
-	FL      int     `json:"fl"`
-	TimeISO string  `json:"time"`
-	DistNM  float64 `json:"dist_nm"`
+	Lon       float64  `json:"lon"`
+	Lat       float64  `json:"lat"`
+	FL        int      `json:"fl"`
+	TimeISO   string   `json:"time"`
+	DistNM    float64  `json:"dist_nm"`
+	TropoAltM *float64 `json:"tropo_alt_m,omitempty"` // altitude tropopause au point (m)
 }
 
 // RoutePlan est le résultat d'un plan de vol simple : trajectoire grand
@@ -41,6 +43,11 @@ type RoutePlan struct {
 	Waypoints   []RouteWaypoint `json:"waypoints"`
 	Events      []RouteEvent    `json:"events,omitempty"`
 	WindProfile *WindProfile    `json:"wind_profile,omitempty"`
+
+	// partialFailures liste les familles WFS qui ont échoué pendant
+	// RouteEvents. Non sérialisé en JSON : exposé via PartialFailures()
+	// et propagé en header HTTP (X-Partial-Errors).
+	partialFailures []string
 }
 
 // RouteEvent est un événement météo rencontré le long de la route.
@@ -249,10 +256,11 @@ func (s *Service) RouteEvents(
 	}
 
 	var (
-		mu     sync.Mutex
-		events []RouteEvent
-		errs   []error
-		wg     sync.WaitGroup
+		mu        sync.Mutex
+		events    []RouteEvent
+		failed    []string // familles WFS ayant échoué (pour log + header HTTP)
+		wg        sync.WaitGroup
+		routeDesc = fmt.Sprintf("%s→%s FL%d", plan.Dep.ICAO, plan.Arr.ICAO, plan.FL)
 	)
 
 	process := func(family string, geomKind string) {
@@ -266,8 +274,9 @@ func (s *Service) RouteEvents(
 		}
 		geo, _, err := s.FeatureGeoJSON(ctx, family, count)
 		if err != nil {
+			log.Printf("RouteEvents %s: WFS %s a échoué: %v", routeDesc, family, err)
 			mu.Lock()
-			errs = append(errs, fmt.Errorf("%s: %w", family, err))
+			failed = append(failed, family)
 			mu.Unlock()
 			return
 		}
@@ -307,7 +316,23 @@ func (s *Service) RouteEvents(
 	sort.Slice(events, func(i, j int) bool {
 		return events[i].WaypointTime < events[j].WaypointTime
 	})
+	if len(failed) > 0 {
+		// On stocke les familles ayant échoué dans le plan pour que le
+		// handler HTTP puisse en informer le client via X-Partial-Errors.
+		// L'erreur n'est pas remontée : un échec partiel reste exploitable.
+		plan.partialFailures = failed
+	}
 	return events, nil
+}
+
+// PartialFailures retourne les familles WFS pour lesquelles RouteEvents a
+// échoué silencieusement (timeout, 4xx MetGate). Vide si la collecte est
+// complète. Pratique pour le header HTTP X-Partial-Errors.
+func (p *RoutePlan) PartialFailures() []string {
+	if p == nil {
+		return nil
+	}
+	return p.partialFailures
 }
 
 // geoJSONFeatureCollection : décodage minimal pour parcourir features.
@@ -338,6 +363,9 @@ func matchFeature(
 	ev.Family = family
 	ev.Kind = familyKind(family)
 	ev.Properties = compactProps(f.Properties)
+	// Enrichissement : pour les SIGMET / AIRMET qui ont un champ `decoded`
+	// texte FR, on parse les FL, le phénomène, le mouvement.
+	enrichSIGMETLikeProps(ev.Properties)
 	if fir, ok := f.Properties["issuingAirTrafficServicesRegion"].(string); ok {
 		ev.FIR = strings.TrimSpace(fir)
 	}
@@ -548,6 +576,19 @@ func compactProps(p map[string]interface{}) map[string]interface{} {
 		"observationTime", "issueTime",
 		// Champs spécifiques aux Aerodrome Warnings (WL)
 		"analysis_time", "cnl", "message_number",
+		// Champs spécifiques RDT_MSG (cellules orageuses satellite) :
+		// limites verticales en m, vitesse/direction de déplacement,
+		// indicateurs de sévérité et tendance.
+		"areaname", "confidencelevel", "hail", "iceicingrisk", "layer",
+		"lowerboundary", "lowerboundary_uom",
+		"maxforecastupperboundary", "maxforecastupperboundary_uom",
+		"unbiasedforecastupperboundary", "unbiasedforecastupperboundary_uom",
+		"movingdirection", "movingdirection_uom",
+		"movingspeed", "movingspeed_uom",
+		"trendarea", "trenddepth", "originatingcentre",
+		// Texte décodé MetGate (SIGMET/AIRMET en clair, multi-lignes) :
+		// utile pour le tooltip ET parsé par enrichSIGMETLikeProps.
+		"decoded",
 	} {
 		if v, ok := p[k]; ok && v != nil && v != "" {
 			out[k] = v

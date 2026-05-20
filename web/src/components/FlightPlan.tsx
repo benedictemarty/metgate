@@ -4,6 +4,7 @@ import {
   Activity,
   AlertOctagon,
   AlertTriangle,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Cloud,
@@ -92,6 +93,7 @@ interface FlightPlanProps {
   playing: boolean
   onTogglePlay: () => void
   onCursorChange: (idx: number) => void
+  onClose?: () => void
 }
 
 export default function FlightPlan({
@@ -101,6 +103,7 @@ export default function FlightPlan({
   playing,
   onTogglePlay,
   onCursorChange,
+  onClose,
 }: FlightPlanProps) {
   const { current: mapRef } = useMap()
   const map = mapRef?.getMap()
@@ -212,21 +215,32 @@ export default function FlightPlan({
         <div className="flex items-center gap-2 mb-2">
           <Plane className="size-4 text-emerald-300" />
           <div className="text-sm font-medium">Plan de vol</div>
-          {plan && (
-            <button
-              onClick={clear}
-              className="ml-auto text-slate-500 hover:text-slate-200 transition"
-              title="Effacer"
-            >
-              <X className="size-4" />
-            </button>
-          )}
+          <div className="ml-auto flex items-center gap-1">
+            {plan && (
+              <button
+                onClick={clear}
+                className="text-slate-500 hover:text-slate-200 transition"
+                title="Effacer le plan"
+              >
+                <X className="size-4" />
+              </button>
+            )}
+            {onClose && (
+              <button
+                onClick={onClose}
+                className="text-slate-600 hover:text-slate-300 transition"
+                title="Réduire"
+              >
+                <ChevronDown className="size-4" />
+              </button>
+            )}
+          </div>
         </div>
         {!plan && (
-          <div className="flex flex-col gap-2 text-[11px]">
+          <div className="flex flex-col gap-2 text-[0.6875rem]">
             <div className="grid grid-cols-2 gap-2">
               <label className="flex flex-col gap-0.5">
-                <span className="text-slate-500 uppercase tracking-wider text-[9px]">Départ</span>
+                <span className="text-slate-500 uppercase tracking-wider text-[0.5625rem]">Départ</span>
                 <input
                   value={dep}
                   onChange={(e) => setDep(e.target.value.toUpperCase())}
@@ -236,7 +250,7 @@ export default function FlightPlan({
                 />
               </label>
               <label className="flex flex-col gap-0.5">
-                <span className="text-slate-500 uppercase tracking-wider text-[9px]">Arrivée</span>
+                <span className="text-slate-500 uppercase tracking-wider text-[0.5625rem]">Arrivée</span>
                 <input
                   value={arr}
                   onChange={(e) => setArr(e.target.value.toUpperCase())}
@@ -246,7 +260,7 @@ export default function FlightPlan({
                 />
               </label>
               <label className="flex flex-col gap-0.5">
-                <span className="text-slate-500 uppercase tracking-wider text-[9px]">FL</span>
+                <span className="text-slate-500 uppercase tracking-wider text-[0.5625rem]">FL</span>
                 <input
                   type="number"
                   value={fl}
@@ -255,7 +269,7 @@ export default function FlightPlan({
                 />
               </label>
               <label className="flex flex-col gap-0.5">
-                <span className="text-slate-500 uppercase tracking-wider text-[9px]">GS (kt)</span>
+                <span className="text-slate-500 uppercase tracking-wider text-[0.5625rem]">GS (kt)</span>
                 <input
                   type="number"
                   value={gs}
@@ -267,24 +281,24 @@ export default function FlightPlan({
             <button
               onClick={submit}
               disabled={loading}
-              className="mt-1 px-3 py-1.5 rounded-md bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-100 text-[11px] transition disabled:opacity-50"
+              className="mt-1 px-3 py-1.5 rounded-md bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 text-emerald-100 text-[0.6875rem] transition disabled:opacity-50"
             >
               {loading ? 'Calcul…' : 'Tracer la route'}
             </button>
             {error && (
-              <div className="text-[10px] text-red-400 leading-snug">{error}</div>
+              <div className="text-[0.625rem] text-red-400 leading-snug">{error}</div>
             )}
           </div>
         )}
         {plan && (
           <>
-            <div className="text-[11px] text-slate-200 font-mono space-y-0.5">
+            <div className="text-[0.6875rem] text-slate-200 font-mono space-y-0.5">
               <div className="flex justify-between">
                 <span className="text-emerald-300">{plan.dep.icao}</span>
                 <span className="text-slate-500">→</span>
                 <span className="text-emerald-300">{plan.arr.icao}</span>
               </div>
-              <div className="flex justify-between text-[10px] text-slate-400">
+              <div className="flex justify-between text-[0.625rem] text-slate-400">
                 <span>{plan.distance_nm.toFixed(0)} NM</span>
                 <span>FL{plan.fl.toString().padStart(3, '0')}</span>
                 <span>{plan.gs_kt.toFixed(0)} kt</span>
@@ -297,11 +311,11 @@ export default function FlightPlan({
                   <span className="text-emerald-200 text-base font-semibold tracking-tight tabular-nums">
                     FL{cur.fl.toString().padStart(3, '0')}
                   </span>
-                  <span className="text-[10px] text-slate-400">
+                  <span className="text-[0.625rem] text-slate-400">
                     {cur.time.replace('T', ' ').replace('Z', ' UTC')}
                   </span>
                 </div>
-                <div className="flex justify-between text-[10px] text-slate-500">
+                <div className="flex justify-between text-[0.625rem] text-slate-500">
                   <span>
                     {cur.lat.toFixed(2)}°N {cur.lon.toFixed(2)}°E
                   </span>
@@ -361,7 +375,7 @@ export default function FlightPlan({
                 onChange={(e) => onCursorChange(Number(e.target.value))}
                 className="flex-1 accent-emerald-400 h-1 ml-1"
               />
-              <span className="text-[10px] font-mono tabular-nums w-10 text-right text-slate-400">
+              <span className="text-[0.625rem] font-mono tabular-nums w-10 text-right text-slate-400">
                 {cursorIdx + 1}/{plan.waypoints.length}
               </span>
             </div>
@@ -519,7 +533,7 @@ function EventMarkers({
               }}
             >
               {isPointKind(ev.kind) ? <ProductDot /> : <EventTriangle />}
-              <div className="text-[8px] font-mono text-center -mt-0.5 text-slate-200 leading-none whitespace-nowrap">
+              <div className="text-[0.5rem] font-mono text-center -mt-0.5 text-slate-200 leading-none whitespace-nowrap">
                 {triangleLabel(ev)}
               </div>
             </button>
@@ -592,11 +606,11 @@ function WarningSign({ ev }: { ev: RouteEvent }) {
         </svg>
         <Icon className="absolute left-1/2 top-[58%] -translate-x-1/2 -translate-y-1/2 size-3 text-slate-950" />
       </div>
-      <span className="text-[9px] font-mono font-semibold text-slate-100 bg-slate-950/80 px-1 py-0.5 rounded whitespace-nowrap border border-slate-800/60 flex items-center gap-1">
+      <span className="text-[0.5625rem] font-mono font-semibold text-slate-100 bg-slate-950/80 px-1 py-0.5 rounded whitespace-nowrap border border-slate-800/60 flex items-center gap-1">
         {triangleLabel(ev)}
         {sev && (
           <span
-            className={`px-1 rounded text-[8px] tracking-wide ${sevTone}`}
+            className={`px-1 rounded text-[0.5rem] tracking-wide ${sevTone}`}
           >
             {sev}
           </span>
@@ -772,7 +786,7 @@ function EventsList({
 }) {
   return (
     <div className="mt-2 pt-2 border-t border-slate-800/60">
-      <div className="flex items-center justify-between text-[9px] uppercase tracking-wider text-slate-500 mb-1.5">
+      <div className="flex items-center justify-between text-[0.5625rem] uppercase tracking-wider text-slate-500 mb-1.5">
         <span>Produits rencontrés</span>
         <span className="font-mono">{events.length}</span>
       </div>
@@ -811,7 +825,7 @@ function EventRow({
     <li>
       <button
         onClick={onClick}
-        className={`w-full text-left px-2 py-1 rounded text-[10px] transition border ${
+        className={`w-full text-left px-2 py-1 rounded text-[0.625rem] transition border ${
           active
             ? 'border-emerald-400/40 bg-emerald-500/10'
             : 'border-transparent hover:bg-slate-800/40'
@@ -829,7 +843,7 @@ function EventRow({
           )}
         </div>
         {(intensity || top || bottom) && (
-          <div className="text-[9px] text-slate-500 font-mono pl-4 mt-0.5">
+          <div className="text-[0.5625rem] text-slate-500 font-mono pl-4 mt-0.5">
             {intensity && `int=${intensity}`}{' '}
             {bottom && top && `${(parseInt(bottom) / 0.3048 / 100).toFixed(0)}–${(parseInt(top) / 0.3048 / 100).toFixed(0)} FL`}
           </div>
@@ -917,7 +931,7 @@ function WindProfilePanel({
 
   return (
     <div className="mt-2 pt-2 border-t border-slate-800/60">
-      <div className="flex items-center justify-between text-[9px] uppercase tracking-wider text-slate-500 mb-1.5">
+      <div className="flex items-center justify-between text-[0.5625rem] uppercase tracking-wider text-slate-500 mb-1.5">
         <span className="flex items-center gap-1">
           <WindIcon className="size-3" />
           Vent FL{(Math.round(profile.level_pa / 100)).toString()}hPa
@@ -925,7 +939,7 @@ function WindProfilePanel({
       </div>
 
       {/* Moyenne sur le parcours */}
-      <div className="flex items-center justify-between text-[10px] font-mono">
+      <div className="flex items-center justify-between text-[0.625rem] font-mono">
         <span className={meanColor}>{meanLabel}</span>
         <span className={dtColor}>{dtLabel}</span>
       </div>
@@ -935,7 +949,7 @@ function WindProfilePanel({
 
       {/* Vent au waypoint courant */}
       {cur && (
-        <div className="mt-1.5 grid grid-cols-2 gap-x-2 gap-y-0.5 text-[10px] font-mono">
+        <div className="mt-1.5 grid grid-cols-2 gap-x-2 gap-y-0.5 text-[0.625rem] font-mono">
           <div className="flex justify-between col-span-2">
             <span className="text-slate-500">@ avion</span>
             <span className="text-slate-200">
@@ -1095,7 +1109,7 @@ function BulletinPopup({
           >
             {headerTitle}
           </div>
-          <div className="text-[10px] uppercase tracking-wider text-slate-400">
+          <div className="text-[0.625rem] uppercase tracking-wider text-slate-400">
             {ev.kind.replace('_last', '')}
             {ev.fir && ev.fir !== headerTitle && ` · FIR ${ev.fir}`}
           </div>
@@ -1111,7 +1125,7 @@ function BulletinPopup({
 
       {/* Fenêtre de validité */}
       {(ev.validity_start || ev.validity_end) && (
-        <div className="text-[10px] text-slate-400 font-mono mb-2 flex justify-between gap-2">
+        <div className="text-[0.625rem] text-slate-400 font-mono mb-2 flex justify-between gap-2">
           <span>
             {ev.validity_start
               ? ev.validity_start.replace('T', ' ').replace('Z', '')
@@ -1127,7 +1141,7 @@ function BulletinPopup({
       )}
 
       {/* Distance / position du waypoint le plus proche */}
-      <div className="text-[10px] text-slate-500 font-mono mb-2 flex justify-between">
+      <div className="text-[0.625rem] text-slate-500 font-mono mb-2 flex justify-between">
         <span>
           passage {ev.waypoint_time.replace('T', ' ').replace('Z', ' UTC')}
         </span>
@@ -1136,14 +1150,14 @@ function BulletinPopup({
 
       {/* TAC en mono si dispo */}
       {tac && (
-        <pre className="text-[11px] font-mono text-slate-200 bg-slate-950/70 border border-slate-800/60 rounded-md p-2 whitespace-pre-wrap break-words mb-2">
+        <pre className="text-[0.6875rem] font-mono text-slate-200 bg-slate-950/70 border border-slate-800/60 rounded-md p-2 whitespace-pre-wrap break-words mb-2">
           {tac}
         </pre>
       )}
 
       {/* Tableau des champs scalaires */}
       {fields.length > 0 && (
-        <dl className="text-[10px] max-h-56 overflow-y-auto pr-1 mb-2">
+        <dl className="text-[0.625rem] max-h-56 overflow-y-auto pr-1 mb-2">
           {fields.map(([k, v]) => (
             <div
               key={k}
@@ -1162,7 +1176,7 @@ function BulletinPopup({
       )}
 
       {/* Badges status */}
-      <div className="flex items-center gap-2 text-[10px]">
+      <div className="flex items-center gap-2 text-[0.625rem]">
         {cavok && (
           <span className="px-1.5 py-0.5 rounded bg-emerald-900/40 text-emerald-300 border border-emerald-800/60">
             CAVOK

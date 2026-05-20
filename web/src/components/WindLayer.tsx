@@ -274,17 +274,17 @@ export default function WindLayer({
         style={{ mixBlendMode: 'screen' }}
       />
       {info.status === 'loading' && (
-        <div className="absolute top-4 right-4 z-10 px-2 py-1 rounded bg-slate-950/80 backdrop-blur text-[10px] text-slate-400 border border-slate-800/60">
+        <div className="absolute top-4 right-4 z-10 px-2 py-1 rounded bg-slate-950/80 backdrop-blur text-[0.625rem] text-slate-400 border border-slate-800/60">
           chargement vent…
         </div>
       )}
       {info.status === 'error' && (
-        <div className="absolute top-4 right-4 z-10 px-2 py-1 rounded bg-red-950/60 text-[10px] text-red-300 border border-red-900/60">
+        <div className="absolute top-4 right-4 z-10 px-2 py-1 rounded bg-red-950/60 text-[0.625rem] text-red-300 border border-red-900/60">
           vent: {info.msg}
         </div>
       )}
       {grid && currentStep && (
-        <div className="absolute bottom-24 right-4 z-10 px-3 py-2 rounded-lg bg-slate-950/85 backdrop-blur-md border border-slate-800/70 text-[10px] text-slate-300 shadow-2xl flex flex-col gap-2 min-w-[260px]">
+        <div className="absolute bottom-24 right-4 z-10 px-3 py-2 rounded-lg bg-slate-950/85 backdrop-blur-md border border-slate-800/70 text-[0.625rem] text-slate-300 shadow-2xl flex flex-col gap-2 min-w-[260px]">
           <div className="flex items-center gap-2">
             <span className="text-slate-500">{dataset === 'JET' ? 'Jet stream' : 'Vent'}</span>
             {dataset === 'WIND' && (
@@ -296,14 +296,14 @@ export default function WindLayer({
             </span>
             {linkedInstant && (
               <span
-                className="ml-1 px-1 rounded bg-rose-500/20 text-rose-200 text-[8px] uppercase tracking-wider border border-rose-400/30"
+                className="ml-1 px-1 rounded bg-rose-500/20 text-rose-200 text-[0.5rem] uppercase tracking-wider border border-rose-400/30"
                 title="Niveau et instant calés sur l'avion suivi / le plan de vol"
               >
                 live
               </span>
             )}
           </div>
-          <div className="text-[9px] text-slate-500 font-mono truncate">
+          <div className="text-[0.5625rem] text-slate-500 font-mono truncate">
             {grid.coverage_id} · {fmtStepTime(currentStep.time)}
           </div>
           {grid.steps.length > 1 && !linkedInstant && (
@@ -330,13 +330,13 @@ export default function WindLayer({
                 }}
                 className="flex-1 accent-cyan-400 h-1"
               />
-              <span className="font-mono tabular-nums text-[10px] w-10 text-right">
+              <span className="font-mono tabular-nums text-[0.625rem] w-10 text-right">
                 {stepIdx + 1}/{grid.steps.length}
               </span>
             </div>
           )}
           {linkedInstant && (
-            <div className="text-[9px] text-cyan-300/70 italic flex items-center justify-between gap-2">
+            <div className="text-[0.5625rem] text-cyan-300/70 italic flex items-center justify-between gap-2">
               <span>synchro · step {effectiveStepIdx + 1}/{grid.steps.length}</span>
               <span className="text-cyan-300/60 font-mono normal-case">
                 Δ{deltaMinutes(linkedInstant, currentStep.time)} min
