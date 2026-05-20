@@ -109,24 +109,34 @@ export default function TropoLayer({ enabled, linkedInstant, onTimesLoaded }: Tr
     const cW = canvas.width
     const cH = canvas.height
 
-    const img = ctx.createImageData(cW, cH)
-    const data = img.data
+    // On rend dans un canvas 4× réduit puis on redimensionne avec imageSmoothingEnabled
+    // pour obtenir des transitions douces entre valeurs de grille — évite les
+    // carreaux nets du rendu pixel-par-pixel avec STEP fixe.
+    const SCALE = 4
+    const sW = Math.ceil(cW / SCALE)
+    const sH = Math.ceil(cH / SCALE)
 
-    // Pas de 3 px : réduit le coût 9× sans perte visuelle (grille basse résolution).
-    const STEP = 3
+    const small = document.createElement('canvas')
+    small.width = sW
+    small.height = sH
+    const sCtx = small.getContext('2d')
+    if (!sCtx) return
+    const sImg = sCtx.createImageData(sW, sH)
+    const data = sImg.data
 
-    for (let py = 0; py < cH; py += STEP) {
-      for (let px = 0; px < cW; px += STEP) {
+    for (let sy = 0; sy < sH; sy++) {
+      for (let sx = 0; sx < sW; sx++) {
+        // Centre du bloc correspondant dans le canvas final
+        const px = (sx + 0.5) * SCALE
+        const py = (sy + 0.5) * SCALE
         const lngLat = map.unproject([px / dpr, py / dpr])
         const lon = lngLat.lng
         const lat = lngLat.lat
 
         if (lon < lonMin || lon > lonMax || lat < latMin || lat > latMax) continue
 
-        // Position fractionnaire dans la grille (lat inversée : row 0 = latMax)
         const gx = ((lon - lonMin) / (lonMax - lonMin)) * (gridW - 1)
         const gy = ((latMax - lat) / (latMax - latMin)) * (gridH - 1)
-
         const gxi = Math.min(Math.floor(gx), gridW - 2)
         const gyi = Math.min(Math.floor(gy), gridH - 2)
         const fx = gx - gxi
@@ -138,31 +148,30 @@ export default function TropoLayer({ enabled, linkedInstant, onTimesLoaded }: Tr
         const a11 = step.alt[(gyi + 1) * gridW + gxi + 1]
 
         const v00 = isNaN(a00) ? null : a00
+        if (v00 === null) continue
         const v10 = isNaN(a10) ? v00 : a10
         const v01 = isNaN(a01) ? v00 : a01
         const v11 = isNaN(a11) ? (v10 ?? v01) : a11
 
-        if (v00 === null) continue
-
         const alt =
-          (v00 ?? 0) * (1 - fx) * (1 - fy) +
+          v00 * (1 - fx) * (1 - fy) +
           (v10 ?? 0) * fx * (1 - fy) +
           (v01 ?? 0) * (1 - fx) * fy +
           (v11 ?? 0) * fx * fy
 
         const t = Math.max(0, Math.min(1, (alt - altMin) / span))
         const [r, g, b] = palette(t)
-
-        // Rempli le bloc STEP×STEP
-        for (let dy = 0; dy < STEP && py + dy < cH; dy++) {
-          for (let dx = 0; dx < STEP && px + dx < cW; dx++) {
-            const k = ((py + dy) * cW + (px + dx)) * 4
-            data[k] = r; data[k + 1] = g; data[k + 2] = b; data[k + 3] = 155
-          }
-        }
+        const k = (sy * sW + sx) * 4
+        data[k] = r; data[k + 1] = g; data[k + 2] = b; data[k + 3] = 155
       }
     }
-    ctx.putImageData(img, 0, 0)
+    sCtx.putImageData(sImg, 0, 0)
+
+    // Upscale vers le canvas principal avec interpolation bilinéaire du navigateur.
+    ctx.clearRect(0, 0, cW, cH)
+    ctx.imageSmoothingEnabled = true
+    ctx.imageSmoothingQuality = 'high'
+    ctx.drawImage(small, 0, 0, cW, cH)
   }, [enabled, grid, effectiveStepIdx, map])
 
   // Déclenche le rendu et s'abonne aux événements carte.
