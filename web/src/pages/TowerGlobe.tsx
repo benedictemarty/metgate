@@ -1183,6 +1183,9 @@ export default function TowerGlobe({}: TowerGlobeProps) {
   // Reset des states live à chaque changement d'aéroport ou de rayon scène
   // pour éviter d'afficher temporairement les avions/cellules/foudre du
   // précédent aéroport avec un référentiel devenu obsolète.
+  // Reset des données live à chaque changement d'aéroport OU de rayon.
+  // airportInfo (pistes, coords) ne dépend que de l'ICAO : on le reset uniquement
+  // au changement d'aéroport pour éviter que les pistes disparaissent en changeant de rayon.
   useEffect(() => {
     setLivePlanes([])
     setLiveCells([])
@@ -1191,10 +1194,13 @@ export default function TowerGlobe({}: TowerGlobeProps) {
     setLiveMetar(null)
     setLiveTaf(null)
     setLiveWl(null)
-    setAirportInfo(null)
     setFlashCount({ in: 0, fetched: 0 })
     setCellCount({ in: 0, fetched: 0 })
   }, [icao, sceneRangeNm])
+
+  useEffect(() => {
+    setAirportInfo(null)
+  }, [icao])
 
   // Aérodromes voisins dans le rayon du dôme : on parcourt la table AIRPORTS
   // et on convertit en coords scène ceux à moins de sceneRangeNm. À terme,
@@ -1432,7 +1438,7 @@ export default function TowerGlobe({}: TowerGlobeProps) {
       aborted = true
       window.clearInterval(id)
     }
-  }, [icao, sceneRangeNm, nmToUnits, windLevels])
+  }, [icao, sceneRangeNm, nmToUnits, windLevels, airportInfo])
 
   // Fetch METAR / TAF / WL pour l'aérodrome sélectionné.
   // Pour METAR : essaie d'abord METAR_last (IWXXM, couverture mondiale hors Allemagne),
