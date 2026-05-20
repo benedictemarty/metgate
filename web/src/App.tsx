@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
-import { Cloud, FileText, Globe, Loader2, Map as MapIcon, TrendingUp } from 'lucide-react'
+import { Cloud, FileText, Globe, Loader2, Map as MapIcon, Moon, Sun, TrendingUp } from 'lucide-react'
 import Catalog from './pages/Catalog'
 import type { Aggregate } from './types'
 
@@ -11,11 +11,28 @@ const RouteProfile = lazy(() => import('./pages/RouteProfile'))
 
 type View = 'catalog' | 'map' | 'tower' | 'profile'
 
+export type Theme = 'dark' | 'light'
+
 export default function App() {
   const [view, setView] = useState<View>('catalog')
   const [data, setData] = useState<Aggregate | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [theme, setTheme] = useState<Theme>(() =>
+    (localStorage.getItem('metgate-theme') as Theme | null) ?? 'dark'
+  )
+
+  useEffect(() => {
+    const html = document.documentElement
+    if (theme === 'light') {
+      html.classList.add('light')
+      html.classList.remove('dark')
+    } else {
+      html.classList.remove('light')
+      html.classList.add('dark')
+    }
+    localStorage.setItem('metgate-theme', theme)
+  }, [theme])
 
   const load = async () => {
     setLoading(true)
@@ -49,6 +66,14 @@ export default function App() {
             </div>
           </div>
 
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}
+              title={theme === 'dark' ? 'Passer en mode clair' : 'Passer en mode sombre'}
+              className="size-8 rounded-lg border border-slate-800 bg-slate-900/40 flex items-center justify-center text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition"
+            >
+              {theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
+            </button>
           <nav className="flex items-center gap-1 p-1 rounded-lg border border-slate-800 bg-slate-900/40">
             <NavButton
               active={view === 'catalog'}
@@ -75,6 +100,7 @@ export default function App() {
               label="Profil"
             />
           </nav>
+          </div>
         </div>
       </header>
 
@@ -89,7 +115,7 @@ export default function App() {
             </div>
           }
         >
-          <MapView data={data} />
+          <MapView data={data} theme={theme} />
         </Suspense>
       )}
       {view === 'tower' && (

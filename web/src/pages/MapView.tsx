@@ -35,6 +35,7 @@ import { displayFamilyName } from '../familyDisplay'
 
 interface MapViewProps {
   data: Aggregate | null
+  theme?: 'dark' | 'light'
 }
 
 // Familles WFS qu'on sait afficher sur la carte. Géométries supportées par
@@ -96,7 +97,8 @@ const styleFor = (familyName: string): LayerStyle => {
 }
 
 
-const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'
+const MAP_STYLE_DARK  = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json'
+const MAP_STYLE_LIGHT = 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json'
 
 interface FetchedLayer {
   rawData: GeoJSON.FeatureCollection // brut, contient tous les slots temporels
@@ -256,7 +258,7 @@ interface PopupState {
   props: Record<string, unknown>
 }
 
-export default function MapView({ data }: MapViewProps) {
+export default function MapView({ data, theme = 'dark' }: MapViewProps) {
   const [active, setActive] = useState<Set<string>>(() => new Set(['METAR']))
   const [loaded, setLoaded] = useState<Record<string, FetchedLayer>>({})
   const [loading, setLoading] = useState<Set<string>>(new Set())
@@ -629,7 +631,7 @@ export default function MapView({ data }: MapViewProps) {
       style={{ cursor: isLoading ? 'wait' : undefined }}>
       <MapGL
         initialViewState={{ longitude: 6, latitude: 47, zoom: 4 }}
-        mapStyle={MAP_STYLE}
+        mapStyle={theme === 'light' ? MAP_STYLE_LIGHT : MAP_STYLE_DARK}
         style={{ width: '100%', height: '100%' }}
         attributionControl={{ compact: true }}
         interactiveLayerIds={interactiveLayerIds}
