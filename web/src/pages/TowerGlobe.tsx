@@ -837,9 +837,14 @@ function spawnFilament(
 
 function WindMast({ visible, winds }: { visible: boolean; winds: WindLevel[] }) {
   if (!visible || winds.length === 0) return null
-  const MAST_X = 3.2
+  const MAST_X = 1.5
   const MAST_Z = 0
-  const topY = Math.max(...winds.map((w) => w.y)) + 1.5
+  // Borne y pour que mât + flèche (~2.4) + label (~0.8) restent dans la sphère.
+  // Distance max depuis le centre : sqrt(MAST_X² + y²) + projection label.
+  // On choisit y_max tel que le point le plus éloigné reste < RADIUS.
+  const Y_MAX = Math.sqrt(RADIUS * RADIUS - (MAST_X + 3) * (MAST_X + 3)) - 0.5
+  const clampedWinds = winds.map((w) => ({ ...w, y: Math.min(w.y, Y_MAX) }))
+  const topY = Math.max(...clampedWinds.map((w) => w.y)) + 1.5
   return (
     <group position={[MAST_X, 0, MAST_Z]}>
       {/* Mât vertical fin et discret */}
@@ -847,7 +852,7 @@ function WindMast({ visible, winds }: { visible: boolean; winds: WindLevel[] }) 
         <cylinderGeometry args={[0.05, 0.05, topY, 8]} />
         <meshBasicMaterial color={0x64748b} transparent opacity={0.45} />
       </mesh>
-      {winds.map((w) => {
+      {clampedWinds.map((w) => {
         const towards = (w.dirDeg + 180) % 360
         const dirRad = (towards * Math.PI) / 180
         const dx = Math.sin(dirRad)
