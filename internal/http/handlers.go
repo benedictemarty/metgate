@@ -468,7 +468,8 @@ func (a *API) handleFeature(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	geo, fromCache, err := a.catalog.FeatureGeoJSON(r.Context(), typeName, count)
+	filter := r.URL.Query().Get("filter") // OGC FES 2.0 XML, optionnel
+	geo, fromCache, err := a.catalog.FeatureGeoJSON(r.Context(), typeName, count, filter)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return

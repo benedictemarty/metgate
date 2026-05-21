@@ -103,8 +103,9 @@ func (s *Service) Proxy(ctx context.Context, path string, query url.Values) (*me
 
 // FeatureGeoJSON tape WFS GetFeature en GML 3.2 (via cache) puis convertit
 // en GeoJSON. typeName ex: "METAR_last", count limite le nombre de features.
+// filter est un filtre OGC FES 2.0 XML optionnel (vide = pas de filtre).
 // Renvoie le GeoJSON et indique si la réponse MetGate venait du cache.
-func (s *Service) FeatureGeoJSON(ctx context.Context, typeName string, count int) ([]byte, bool, error) {
+func (s *Service) FeatureGeoJSON(ctx context.Context, typeName string, count int, filter string) ([]byte, bool, error) {
 	q := url.Values{}
 	q.Set("service", "WFS")
 	q.Set("version", "2.0.0")
@@ -112,6 +113,9 @@ func (s *Service) FeatureGeoJSON(ctx context.Context, typeName string, count int
 	q.Set("typeNames", typeName)
 	if count > 0 {
 		q.Set("count", strconv.Itoa(count))
+	}
+	if filter != "" {
+		q.Set("filter", filter)
 	}
 	resp, err := s.fetchCached(ctx, "/broker_service/WFS", q)
 	if err != nil {

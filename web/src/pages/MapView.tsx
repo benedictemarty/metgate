@@ -29,9 +29,10 @@ import SatRasterLayer from '../components/SatRasterLayer'
 import CloudTopLayer from '../components/CloudTopLayer'
 import FlightPlan, { type RoutePlan } from '../components/FlightPlan'
 import AircraftTracker, { type AircraftState } from '../components/AircraftTracker'
-import { CloudCog, CloudFog, CloudLightning, Link2, Link2Off, Mountain, Satellite, Zap } from 'lucide-react'
+import { CloudCog, CloudFog, CloudLightning, Filter, Link2, Link2Off, Mountain, Satellite, Zap } from 'lucide-react'
 import type { Aggregate, Family } from '../types'
 import { displayFamilyName } from '../familyDisplay'
+import OGCFilterPanel from '../components/OGCFilterPanel'
 
 interface MapViewProps {
   data: Aggregate | null
@@ -283,6 +284,8 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
   const [qvacisFL, setQvacisFL] = useState(325)
   const [showFlightPlan, setShowFlightPlan] = useState(true)
   const [showTracker, setShowTracker] = useState(true)
+  const [ogcPanelOpen, setOgcPanelOpen] = useState(false)
+  const [ogcFilterXml, setOgcFilterXml] = useState<string | null>(null)
   const [windLoading, setWindLoading] = useState(false)
   const [tropoLoading, setTropoLoading] = useState(false)
   const [qvacisLoading, setQvacisLoading] = useState(false)
@@ -426,6 +429,12 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
     return m
   }, [candidates])
 
+  // Quand le filtre OGC change, vider les couches chargées pour forcer un re-fetch.
+  useEffect(() => {
+    setLoaded({})
+    setErrors({})
+  }, [ogcFilterXml])
+
   useEffect(() => {
     // Produits plats MetGate (format `id`+`tac`) enrichissant les flux IWXXM.
     // Chargés en arrière-plan pour ne pas retarder l'affichage du produit principal.
@@ -468,7 +477,8 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
       setLoading((prev) => new Set(prev).add(name))
       try {
         // 1. Charge et affiche le produit principal (IWXXM) immédiatement.
-        const r = await fetch(`/api/feature?type=${encodeURIComponent(typeName)}&count=2000`)
+        const filterParam = ogcFilterXml ? `&filter=${encodeURIComponent(ogcFilterXml)}` : ''
+        const r = await fetch(`/api/feature?type=${encodeURIComponent(typeName)}&count=2000${filterParam}`)
         if (!r.ok) {
           const detail = await r.text()
           throw new Error(`HTTP ${r.status}: ${detail.slice(0, 80)}`)
@@ -525,7 +535,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
         })
       }
     })
-  }, [active, typeNameOf])
+  }, [active, typeNameOf, ogcFilterXml])
 
   const toggle = (name: string) => {
     let nowActive = false
@@ -819,6 +829,13 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
             />
           </Popup>
         )}
+
+        {ogcPanelOpen && (
+          <OGCFilterPanel
+            onFilterChange={(xml) => setOgcFilterXml(xml)}
+            onClose={() => setOgcPanelOpen(false)}
+          />
+        )}
       </MapGL>
 
       {/* Boutons flip-flop Plan de vol / Suivi avion — hors MapGL pour éviter l'overflow du canvas */}
@@ -952,6 +969,21 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
           >
             <WindIcon className="size-4" />
             Vent
+          </button>
+          <button
+            onClick={() => setOgcPanelOpen((v) => !v)}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
+              ogcFilterXml
+                ? 'border-indigo-400/50 bg-indigo-500/20 text-indigo-100 shadow-[0_0_15px_rgba(99,102,241,0.25)]'
+                : ogcPanelOpen
+                  ? 'border-indigo-800/60 bg-indigo-900/30 text-indigo-300'
+                  : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
+            }`}
+            title="Filtre OGC sur les flux OPMET"
+          >
+            <Filter className="size-4" />
+            Filtre
+            {ogcFilterXml && <span className="size-1.5 rounded-full bg-indigo-400 ml-0.5" />}
           </button>
         </div>
 

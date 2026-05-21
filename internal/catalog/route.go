@@ -75,7 +75,7 @@ const earthRadiusNM = 3440.065
 func (s *Service) ICAOIndex(ctx context.Context) (map[string][2]float64, error) {
 	idx := make(map[string][2]float64)
 	for _, t := range []string{"METAR_last", "TAF_last", "SPECI_last"} {
-		geo, _, err := s.FeatureGeoJSON(ctx, t, 2000)
+		geo, _, err := s.FeatureGeoJSON(ctx, t, 2000, "")
 		if err != nil {
 			continue
 		}
@@ -272,7 +272,7 @@ func (s *Service) RouteEvents(
 		if geomKind == "Polygon" {
 			count = 12000
 		}
-		geo, _, err := s.FeatureGeoJSON(ctx, family, count)
+		geo, _, err := s.FeatureGeoJSON(ctx, family, count, "")
 		if err != nil {
 			log.Printf("RouteEvents %s: WFS %s a échoué: %v", routeDesc, family, err)
 			mu.Lock()
