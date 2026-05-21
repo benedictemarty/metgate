@@ -5,6 +5,46 @@ Versionnage : [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Couche FIR/UIR mondiales** (`internal/fir/`, `GET /api/fir`) : 160 FIR/UIR
+  embarquées en GeoJSON statique (`go:embed`). Source : jaluebbe/FlightMapEuropeSimple
+  + NFDC North America, licence ouverte. Bouton **FIR** (Globe2) dans la toolbar
+  carte ; contour tiireté violet + code ICAO au centroïde.
+- **Panneau filtre OGC WFS** (`OGCFilterPanel.tsx`) : sélection par code ICAO
+  (wildcard `LF*`, préréglages pays FR/DE/UK/IT/ES/US/CH/BE) et/ou bbox dessinée
+  sur la carte. XML OGC généré visible et copiable (bouton presse-papiers,
+  confirmé par ✓ vert 2 s). Filtre transmis au fetch principal **et** aux flat
+  fallbacks (SA_last, FT_last…).
+- **Carte vierge au démarrage** : aucune couche active par défaut ; l'utilisateur
+  choisit son filtre OGC puis les couches voulues.
+- **Popup multi-features** : quand plusieurs polygones se superposent au clic
+  (ex. SIGMET LFFF + LFMM), navigation ‹ N/total › sans refermer la popup.
+  Déduplication par `message_id`/`gml_id`.
+- **Signe distinctif TEST/EXERCISE** : bannière animée en haut de popup (amber =
+  TEST, sky = EXERCISE) + couleur data-driven sur la carte (polygone amber/tiireté
+  pour TEST, bleu pour EXERCISE).
+- `web/public/favicon.svg` : favicon SVG étoile météo bleue ; `<link rel="icon">`
+  dans `index.html`.
+
+### Fixed
+
+- **Filtre OGC — syntaxe MetGate** : namespace `https://` (pas `http://`),
+  `fes:PropertyName` (pas `fes:ValueReference`), `singleChar="."` `escapeChar="!"`.
+- **Filtre OGC — flat fallbacks** : SA_last / SP_last / FT_last / FC_last utilisent
+  le champ `id` (pas `locationIndicatorICAO`) ; un filtre dédié avec substitution
+  de champ est généré + guard regex client-side (icaoRe) comme filet.
+- **Filtre OGC — familles plates principales** : WL_last, WS_last, WA_last
+  utilisent `id` au lieu de `locationIndicatorICAO` ; ajout de `FLAT_MAIN_FAMILIES`.
+- **Guard stale-filter** : trois gardes distincts (`!typeName`, `!staleFilter &&
+  loaded`, `!staleFilter && errors`) remplacent la condition monolithique qui
+  bloquait le re-fetch quand le filtre changeait.
+- **Slider SIGMET/AIRMET** : `featureValiditySlot`/`featureValidityEnd` lisent
+  `begin_position`/`end_position` en fallback de `validitystarttime`/`validityendtime`.
+  Les SIGMET participent désormais au slider et les expirés disparaissent.
+- Suppression de l'ancien binaire `portal` à la racine (non gitignored) et ajout
+  de `/portal` dans `.gitignore`.
+
 ### Changed
 
 - `web/src/pages/TowerGlobe.tsx` : suppression de l'extrapolation côté client
