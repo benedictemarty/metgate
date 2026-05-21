@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMap } from 'react-map-gl/maplibre'
-import { ChevronDown, ChevronRight, Filter, Pencil, RotateCcw, X } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Clipboard, Filter, Pencil, RotateCcw, X } from 'lucide-react'
 import type * as maplibregl from 'maplibre-gl'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -98,7 +98,8 @@ export default function OGCFilterPanel({ onFilterChange, onClose }: Props) {
   const [icaoPattern, setIcaoPattern] = useState('')
   const [bbox, setBbox] = useState<BBox | null>(null)
   const [drawMode, setDrawMode] = useState<DrawMode>('off')
-  const [xmlOpen, setXmlOpen] = useState(false)
+  const [xmlOpen, setXmlOpen] = useState(true)
+  const [copied, setCopied] = useState(false)
   const [applied, setApplied] = useState(false)
 
   const drawStartRef = useRef<{ lng: number; lat: number } | null>(null)
@@ -339,22 +340,36 @@ export default function OGCFilterPanel({ onFilterChange, onClose }: Props) {
           </div>
         </div>
 
-        {/* ── Filtre OGC XML (pliable) ─────────────────────────────────── */}
+        {/* ── Filtre OGC XML (dépliable + copiable) ───────────────────── */}
         {generatedXml && (
-          <div className="border border-slate-800/60 rounded-lg overflow-hidden">
-            <button
-              onClick={() => setXmlOpen(v => !v)}
-              className="flex items-center gap-1.5 w-full px-2 py-1.5 text-slate-500 hover:text-slate-300 transition"
-            >
-              {xmlOpen ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
-              <span className="text-[0.5625rem] uppercase tracking-wider">Voir le filtre OGC généré</span>
-            </button>
+          <div className="border border-slate-700/50 rounded-lg overflow-hidden">
+            <div className="flex items-center gap-1 px-2 py-1.5 bg-slate-900/40">
+              <button
+                onClick={() => setXmlOpen(v => !v)}
+                className="flex items-center gap-1.5 flex-1 text-slate-400 hover:text-slate-200 transition min-w-0"
+              >
+                {xmlOpen ? <ChevronDown className="size-3 shrink-0" /> : <ChevronRight className="size-3 shrink-0" />}
+                <span className="text-[0.5625rem] uppercase tracking-wider truncate">Filtre OGC (envoyé à MetGate)</span>
+              </button>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(generatedXml).then(() => {
+                    setCopied(true)
+                    setTimeout(() => setCopied(false), 2000)
+                  })
+                }}
+                title="Copier le XML"
+                className="shrink-0 p-1 rounded text-slate-500 hover:text-indigo-300 hover:bg-indigo-500/10 transition"
+              >
+                {copied ? <Check className="size-3 text-emerald-400" /> : <Clipboard className="size-3" />}
+              </button>
+            </div>
             {xmlOpen && (
-              <pre className="px-2 pb-2 text-[0.5rem] font-mono text-slate-400 bg-slate-950/60 whitespace-pre-wrap break-all leading-relaxed">
+              <pre className="px-2 py-2 text-[0.5rem] font-mono text-slate-300 bg-slate-950/70 whitespace-pre-wrap break-all leading-relaxed border-t border-slate-800/60 select-all">
                 {generatedXml
                   .replace(/></g, '>\n')
-                  .replace(/</g, '  <')
-                  .replace(/  <\//g, '</')
+                  .replace(/(<[^/])/g, '  $1')
+                  .replace(/  (<\/)/g, '</')
                   .trim()}
               </pre>
             )}
