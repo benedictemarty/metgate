@@ -663,26 +663,32 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
   }, [active])
 
   const handleMapClick = (e: MapLayerMouseEvent) => {
-    const features = e.features ?? []
-    if (features.length === 0) {
+    // queryRenderedFeatures ±8px : capture toutes les couches actives
+    // (cercles, polygones) même si plusieurs se superposent au même point.
+    const px = e.point
+    const allFeatures = e.target.queryRenderedFeatures(
+      [[ px.x - 8, px.y - 8 ], [ px.x + 8, px.y + 8 ]],
+      { layers: interactiveLayerIds },
+    ) as GeoJSON.Feature[]
+
+    if (allFeatures.length === 0) {
       setPopup(null)
       return
     }
-    // Dédupliquer : un même feature peut apparaître sur plusieurs layers (fill + line).
+
     const seen = new Set<string>()
     const items: PopupItem[] = []
     let lng = e.lngLat.lng
     let lat = e.lngLat.lat
-    for (const f of features) {
-      const layerId = f.layer?.id ?? ''
+
+    for (const f of allFeatures) {
+      const layerId = (f as unknown as { layer?: { id?: string } }).layer?.id ?? ''
       const family = layerId.replace(/-(circle|fill|line)$/, '')
       const props = (f.properties ?? {}) as Record<string, unknown>
-      // Clé de dédup : family + identifiant unique de la feature
       const key = `${family}::${props.message_id ?? props.gml_id ?? props.ogc_fid ?? JSON.stringify(props).slice(0, 80)}`
       if (seen.has(key)) continue
       seen.add(key)
       items.push({ family, props })
-      // Pour les Points, on préfère les coords de la feature
       if (items.length === 1) {
         const geom = f.geometry as GeoJSON.Geometry | undefined
         if (geom?.type === 'Point') {
@@ -690,6 +696,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
         }
       }
     }
+
     setPopup({ lng, lat, items, idx: 0 })
   }
 
@@ -864,29 +871,44 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
           visible={showTracker}
         />
 
-        {popup && (
-          <Popup
-            longitude={popup.lng}
-            latitude={popup.lat}
-            anchor="bottom"
-            offset={14}
-            closeOnClick={false}
-            closeButton={false}
-            onClose={() => setPopup(null)}
-            maxWidth="380px"
-            className="metgate-popup"
-          >
-            <FeaturePopup
-              family={popup.items[popup.idx].family}
-              props={popup.items[popup.idx].props}
-              total={popup.items.length}
-              current={popup.idx + 1}
-              onPrev={popup.items.length > 1 ? () => setPopup(p => p ? { ...p, idx: (p.idx - 1 + p.items.length) % p.items.length } : null) : undefined}
-              onNext={popup.items.length > 1 ? () => setPopup(p => p ? { ...p, idx: (p.idx + 1) % p.items.length } : null) : undefined}
+        {popup && (() => {
+          // Détecte si tous les items partagent le même ICAO → vue aéroport groupée.
+          const icaos = popup.items.map(it =>
+            (it.props.locationIndicatorICAO ?? it.props.id ?? '') as string
+          )
+          const sameAirport = icaos.length > 1 && icaos.every(c => c !== '' && c === icaos[0])
+          return (
+            <Popup
+              longitude={popup.lng}
+              latitude={popup.lat}
+              anchor="bottom"
+              offset={14}
+              closeOnClick={false}
+              closeButton={false}
               onClose={() => setPopup(null)}
-            />
-          </Popup>
-        )}
+              maxWidth="420px"
+              className="metgate-popup"
+            >
+              {sameAirport ? (
+                <AirportPopup
+                  icao={icaos[0]}
+                  items={popup.items}
+                  onClose={() => setPopup(null)}
+                />
+              ) : (
+                <FeaturePopup
+                  family={popup.items[popup.idx].family}
+                  props={popup.items[popup.idx].props}
+                  total={popup.items.length}
+                  current={popup.idx + 1}
+                  onPrev={popup.items.length > 1 ? () => setPopup(p => p ? { ...p, idx: (p.idx - 1 + p.items.length) % p.items.length } : null) : undefined}
+                  onNext={popup.items.length > 1 ? () => setPopup(p => p ? { ...p, idx: (p.idx + 1) % p.items.length } : null) : undefined}
+                  onClose={() => setPopup(null)}
+                />
+              )}
+            </Popup>
+          )
+        })()}
 
         {ogcPanelOpen && (
           <OGCFilterPanel
@@ -1482,6 +1504,124 @@ function FeaturePopup({
           </span>
         )}
       </div>
+    </div>
+  )
+}
+
+// ─── Vue aéroport groupée ─────────────────────────────────────────────────────
+// Affichée quand plusieurs couches (METAR, TAF, WL…) partagent le même ICAO.
+
+function AirportPopup({ icao, items, onClose }: { icao: string; items: PopupItem[]; onClose: () => void }) {
+  const [openIdx, setOpenIdx] = useState<number | null>(0)
+
+  return (
+    <div className="font-sans min-w-[280px]">
+      {/* En-tête aéroport */}
+      <div className="flex items-center justify-between gap-3 mb-2">
+        <div>
+          <div className="text-base font-semibold tracking-tight text-sky-300">{icao}</div>
+          <div className="text-[0.625rem] uppercase tracking-wider text-slate-400">
+            {items.map(it => it.family.replace(/_last$/, '')).join(' · ')}
+          </div>
+        </div>
+        <button onClick={onClose} className="text-slate-500 hover:text-slate-200 transition shrink-0">
+          <X className="size-4" />
+        </button>
+      </div>
+
+      {/* Sections accordéon par couche */}
+      <div className="flex flex-col gap-1">
+        {items.map((item, i) => {
+          const s = styleFor(item.family)
+          const label = item.family.replace(/_last$/, '')
+          const isOpen = openIdx === i
+          return (
+            <div key={i} className="rounded-md border border-slate-800/60 overflow-hidden">
+              <button
+                onClick={() => setOpenIdx(isOpen ? null : i)}
+                className="w-full flex items-center gap-2 px-2 py-1.5 text-left hover:bg-slate-800/40 transition"
+              >
+                <span className="size-2 rounded-full shrink-0" style={{ backgroundColor: s.color, boxShadow: `0 0 6px ${s.color}88` }} />
+                <span className="text-[0.6875rem] font-medium flex-1" style={{ color: s.color }}>{label}</span>
+                <span className="text-slate-600 text-[0.625rem]">{isOpen ? '▲' : '▼'}</span>
+              </button>
+              {isOpen && (
+                <div className="px-2 pb-2 border-t border-slate-800/40">
+                  <FeaturePopupBody props={item.props} family={item.family} />
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// Corps réutilisable de FeaturePopup (sans header ni bouton fermer)
+function FeaturePopupBody({ props }: { props: Record<string, unknown>; family: string }) {
+  const tac = props.tac as string | undefined
+  const decoded = props.decoded as string | undefined
+  const cavok = props.cavok === true || props.cavok === 'true'
+  const status = props.status as string | undefined
+
+  const metarFields: Array<[string, string]> = []
+  const push = (label: string, key: string, suffix = '') => {
+    const v = props[key]
+    if (typeof v === 'string' && v !== '') metarFields.push([label, v + suffix])
+  }
+  push('T', 'airTemperature_C', '°C')
+  push('Td', 'dewpointTemperature_C', '°C')
+  push('QNH', 'qnh_hPa', ' hPa')
+  push('Wind dir', 'windDirection_deg', '°')
+  push('Wind speed', 'windSpeed_kt', ' kt')
+
+  const visiRaw = props.visibility_m as string | undefined
+  const visiText = (() => {
+    if (cavok) return '≥ 10 km (CAVOK)'
+    if (!visiRaw) return undefined
+    const n = parseFloat(visiRaw)
+    if (isNaN(n)) return visiRaw
+    if (n >= 9999) return '≥ 10 km'
+    if (n >= 1000) return `${+(n / 1000).toFixed(1)} km`
+    return `${Math.round(n)} m`
+  })()
+  if (visiText) metarFields.push(['Visi', visiText])
+  const cloudsDecoded = props.clouds as string | undefined
+  if (cloudsDecoded) metarFields.push(['Nuages', cloudsDecoded])
+
+  return (
+    <div className="mt-1.5 text-[0.6875rem]">
+      {status && status !== 'NORMAL' && (
+        <div className={`flex items-center gap-1.5 px-1.5 py-1 rounded mb-1.5 text-[0.625rem] font-bold uppercase ${
+          status === 'TEST' ? 'bg-amber-500/20 text-amber-300' : 'bg-sky-500/20 text-sky-300'
+        }`}>
+          ⚠ {status}
+        </div>
+      )}
+      {tac && (
+        <pre className="font-mono text-slate-200 bg-slate-950/60 border border-slate-800/40 rounded p-1.5 whitespace-pre-wrap break-words text-[0.625rem] mb-1">
+          {tac}
+        </pre>
+      )}
+      {decoded && !tac && (
+        <div className="text-slate-300 bg-slate-950/40 border border-slate-800/30 rounded p-1.5 whitespace-pre-wrap leading-relaxed text-[0.625rem] mb-1">
+          {decoded}
+        </div>
+      )}
+      {metarFields.length > 0 && (
+        <dl className="grid grid-cols-2 gap-x-3 gap-y-0.5 mt-1">
+          {metarFields.map(([k, v]) => (
+            <div key={k} className="flex justify-between">
+              <dt className="text-slate-500">{k}</dt>
+              <dd className="text-slate-200 font-mono">{v}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+      {cavok && (
+        <span className="inline-block mt-1 px-1.5 py-0.5 rounded bg-emerald-900/40 text-emerald-300 border border-emerald-800/60 text-[0.5625rem]">CAVOK</span>
+      )}
     </div>
   )
 }
