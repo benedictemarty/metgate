@@ -440,6 +440,10 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
       TAF:   ['FT_last', 'FC_last'],
     }
 
+    // Familles dont le produit principal WFS est lui-même un produit plat (champ 'id')
+    // et non IWXXM (champ 'locationIndicatorICAO'). Le filtre OGC doit utiliser 'id'.
+    const FLAT_MAIN_FAMILIES = new Set(['WL', 'WS', 'WA'])
+
     // Normalise une feature SA/FT/FC vers le format IWXXM (locationIndicatorICAO).
     // Mappe aussi `pressure` → `qnh_hPa` (MetGate SA_last utilise ce nom de champ).
     const normFlat = (f: GeoJSON.Feature): GeoJSON.Feature => {
@@ -478,7 +482,12 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
       setLoading((prev) => new Set(prev).add(name))
       try {
         // 1. Charge et affiche le produit principal (IWXXM) immédiatement.
-        const filterParam = ogcFilterXml ? `&filter=${encodeURIComponent(ogcFilterXml)}` : ''
+        // Les familles plates (WL, WS, WA) utilisent 'id' au lieu de 'locationIndicatorICAO'.
+        const icaoField = FLAT_MAIN_FAMILIES.has(name) ? 'id' : 'locationIndicatorICAO'
+        const filterXmlForFamily = ogcFilterXml
+          ? ogcFilterXml.replace(/locationIndicatorICAO/g, icaoField)
+          : null
+        const filterParam = filterXmlForFamily ? `&filter=${encodeURIComponent(filterXmlForFamily)}` : ''
         const r = await fetch(`/api/feature?type=${encodeURIComponent(typeName)}&count=2000${filterParam}`)
         if (!r.ok) {
           const detail = await r.text()
