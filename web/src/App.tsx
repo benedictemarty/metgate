@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
-import { Cloud, FileText, Globe, Loader2, Map as MapIcon, Moon, Sun, TrendingUp, BookOpen } from 'lucide-react'
+import { Cloud, CloudLightning, FileText, Globe, Loader2, Map as MapIcon, Moon, Sun, TrendingUp, BookOpen } from 'lucide-react'
 import Catalog from './pages/Catalog'
 import type { Aggregate } from './types'
 
@@ -8,8 +8,9 @@ import type { Aggregate } from './types'
 const MapView = lazy(() => import('./pages/MapView'))
 const TowerGlobe = lazy(() => import('./pages/TowerGlobe'))
 const RouteProfile = lazy(() => import('./pages/RouteProfile'))
+const StormCinema = lazy(() => import('./pages/StormCinema'))
 
-type View = 'catalog' | 'map' | 'tower' | 'profile'
+type View = 'catalog' | 'map' | 'tower' | 'profile' | 'storm'
 
 export type Theme = 'dark' | 'light'
 
@@ -99,6 +100,13 @@ export default function App() {
               icon={TrendingUp}
               label="Profil"
             />
+            <NavButton
+              active={view === 'storm'}
+              onClick={() => setView('storm')}
+              icon={CloudLightning}
+              label="Storm"
+              highlight
+            />
           </nav>
           <a
             href="/api/docs"
@@ -149,6 +157,17 @@ export default function App() {
           <RouteProfile />
         </Suspense>
       )}
+      {view === 'storm' && (
+        <Suspense
+          fallback={
+            <div className="flex items-center justify-center py-32 text-slate-500">
+              <Loader2 className="size-7 animate-spin" />
+            </div>
+          }
+        >
+          <StormCinema />
+        </Suspense>
+      )}
     </div>
   )
 }
@@ -158,16 +177,21 @@ interface NavButtonProps {
   onClick: () => void
   icon: React.ComponentType<{ className?: string }>
   label: string
+  highlight?: boolean
 }
 
-function NavButton({ active, onClick, icon: Icon, label }: NavButtonProps) {
+function NavButton({ active, onClick, icon: Icon, label, highlight }: NavButtonProps) {
   return (
     <button
       onClick={onClick}
       className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition ${
         active
-          ? 'bg-slate-800 text-slate-100 shadow-sm'
-          : 'text-slate-400 hover:text-slate-200'
+          ? highlight
+            ? 'bg-pink-500/20 text-pink-200 shadow-[0_0_12px_rgba(236,72,153,0.3)]'
+            : 'bg-slate-800 text-slate-100 shadow-sm'
+          : highlight
+            ? 'text-pink-400 hover:text-pink-200 hover:bg-pink-500/10'
+            : 'text-slate-400 hover:text-slate-200'
       }`}
     >
       <Icon className="size-4" />
