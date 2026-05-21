@@ -107,14 +107,11 @@ func (c *Client) fetchToken(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
-		max := 200
-		if len(body) < max {
-			max = len(body)
-		}
-		return "", fmt.Errorf("opensky auth %d: %s", resp.StatusCode, body[:max])
+		maxLen := min(200, len(body))
+		return "", fmt.Errorf("opensky auth %d: %s", resp.StatusCode, body[:maxLen])
 	}
 	var tok struct {
 		AccessToken string `json:"access_token"`
@@ -190,14 +187,11 @@ func (c *Client) FlightsByAircraft(
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
-		max := 200
-		if len(body) < max {
-			max = len(body)
-		}
-		return nil, fmt.Errorf("opensky flights %d: %s", resp.StatusCode, body[:max])
+		maxLen := min(200, len(body))
+		return nil, fmt.Errorf("opensky flights %d: %s", resp.StatusCode, body[:maxLen])
 	}
 	// Format brut OpenSky : {icao24, firstSeen, estDepartureAirport, ...}
 	var raw []struct {
@@ -273,17 +267,14 @@ func (c *Client) QueryStates(
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode != 200 {
-		max := 200
-		if len(body) < max {
-			max = len(body)
-		}
-		return nil, fmt.Errorf("opensky %d: %s", resp.StatusCode, body[:max])
+		maxLen := min(200, len(body))
+		return nil, fmt.Errorf("opensky %d: %s", resp.StatusCode, body[:maxLen])
 	}
 
 	var raw struct {

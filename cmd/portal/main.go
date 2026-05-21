@@ -85,7 +85,6 @@ func main() {
 	// Pré-chargement CTH en arrière-plan dès le démarrage pour que le premier
 	// utilisateur ne subisse pas les 20+ s de téléchargement EUMETSAT.
 	ctx, cancelBg := context.WithCancel(context.Background())
-	defer cancelBg()
 	if euClient.Authenticated() {
 		ctService.StartBackground(ctx)
 		log.Print("CTH: pré-chargement EUMETSAT démarré en arrière-plan")
@@ -113,6 +112,7 @@ func main() {
 
 	select {
 	case err := <-errCh:
+		cancelBg()
 		log.Fatalf("listen: %v", err)
 	case <-quit:
 		log.Println("shutdown...")
@@ -156,7 +156,7 @@ func loadDotenv(path string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 
 	s := bufio.NewScanner(f)
 	for s.Scan() {
@@ -172,7 +172,7 @@ func loadDotenv(path string) error {
 		v = strings.TrimSpace(v)
 		v = strings.Trim(v, `"'`)
 		if _, exists := os.LookupEnv(k); !exists {
-			os.Setenv(k, v)
+			os.Setenv(k, v) //nolint:errcheck
 		}
 	}
 	return s.Err()

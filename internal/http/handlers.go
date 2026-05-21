@@ -56,7 +56,7 @@ func (a *API) Routes() *http.ServeMux {
 	return m
 }
 
-func (a *API) healthz(w http.ResponseWriter, r *http.Request) {
+func (a *API) healthz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
@@ -103,7 +103,7 @@ func (a *API) handleCatalog(w http.ResponseWriter, r *http.Request) {
 
 // handleWind récupère le coverage WIND le plus récent (subset niveau + bbox)
 // et renvoie la grille u/v décodée en JSON.
-// Usage: /api/wind?bbox=-15,35,30,65&level=85000
+// Usage: /api/wind?bbox=-15,35,30,65&level=85000.
 func (a *API) handleWind(w http.ResponseWriter, r *http.Request) {
 	bbox, ok := parseBBoxParam(w, r, "bbox", [4]float64{-15, 35, 30, 65})
 	if !ok {
@@ -128,7 +128,7 @@ func (a *API) handleWind(w http.ResponseWriter, r *http.Request) {
 
 // handleTropo récupère le coverage TROPO le plus récent et renvoie la
 // grille d'altitude tropopause sur tous les timesteps.
-// Usage: /api/tropo?bbox=-15,35,30,65
+// Usage: /api/tropo?bbox=-15,35,30,65.
 func (a *API) handleTropo(w http.ResponseWriter, r *http.Request) {
 	bbox, ok := parseBBoxParam(w, r, "bbox", [4]float64{-15, 35, 30, 65})
 	if !ok {
@@ -359,7 +359,7 @@ func prefixPastWaypoints(plan *catalog.RoutePlan, past []aircraft.State) (*catal
 	totalPast := pastWps[len(pastWps)-1].DistNM
 	// Décaler : passé = négatif (-totalPast → 0), futur = positif.
 	for i := range pastWps {
-		pastWps[i].DistNM = pastWps[i].DistNM - totalPast
+		pastWps[i].DistNM -= totalPast
 	}
 	currentIdx := len(pastWps) // index du 1er waypoint futur dans plan.Waypoints
 	plan.Waypoints = append(pastWps, plan.Waypoints...)
@@ -403,7 +403,7 @@ func (a *API) handleQvacis(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRoute calcule un plan de vol grand cercle entre deux ICAO.
-// Usage: /api/route?dep=LFPG&arr=LFBO&fl=350&gs=450&dep_time=2026-04-26T08:00:00Z
+// Usage: /api/route?dep=LFPG&arr=LFBO&fl=350&gs=450&dep_time=2026-04-26T08:00:00Z.
 func (a *API) handleRoute(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	dep := q.Get("dep")
@@ -457,7 +457,7 @@ func (a *API) handleRoute(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleFeature relaie un WFS GetFeature de MetGate (GML) en GeoJSON.
-// Usage: /api/feature?type=METAR_last&count=200
+// Usage: /api/feature?type=METAR_last&count=200.
 func (a *API) handleFeature(w http.ResponseWriter, r *http.Request) {
 	typeName := r.URL.Query().Get("type")
 	if typeName == "" {

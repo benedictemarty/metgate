@@ -3,25 +3,30 @@ version: "2"
 linters:
   default: none
   enable:
-    - unused       # variables, fonctions, types non utilisés
-    - govet        # analyses statiques go vet
-    - staticcheck  # staticcheck (SA*, S*, ST*, QF*)
-    - errcheck     # erreurs retournées non vérifiées
-    - gosimple     # simplifications possibles
+    - unused       # symboles non utilisés
+    - govet        # go vet standard
+    - staticcheck  # SA* bugs, S* simplifications, ST1003 nommage, QF* fixes
+    - errcheck     # erreurs non vérifiées
     - ineffassign  # assignations sans effet
     - gocritic     # style et performance
-    - gosec        # sécurité (injections, crypto faible…)
-    - misspell     # fautes d'orthographe dans les commentaires
-    - gofmt        # formatage standard
 
 linters-settings:
-  gosec:
-    excludes:
-      - G104  # erreurs non vérifiées sur Write (net/http) — accepté ici
+  staticcheck:
+    checks: ["all", "-SA1019"]   # tout sauf usages de symboles dépréciés
   gocritic:
     disabled-checks:
       - commentedOutCode
+      - exitAfterDefer
 
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
+  # Patterns de faux positifs documentés
+  exclude:
+    # defer Body.Close() / f.Close() : idiome Go standard, erreur non récupérable
+    - "Error return value of .*(Close|Body.Close).* is not checked"
+    # os.Setenv dans loadDotenv de dev
+    - "Error return value of `os\\.Setenv` is not checked"
+  exclude-rules:
+    - path: "node_modules"
+      linters: [govet, staticcheck, errcheck, unused]

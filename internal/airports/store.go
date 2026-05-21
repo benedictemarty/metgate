@@ -96,7 +96,7 @@ func (s *Store) loadAirports() error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 	r := csv.NewReader(f)
 	r.FieldsPerRecord = -1
 	headers, err := r.Read()
@@ -161,7 +161,7 @@ func (s *Store) loadRunways() error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck
 	r := csv.NewReader(f)
 	r.FieldsPerRecord = -1
 	headers, err := r.Read()

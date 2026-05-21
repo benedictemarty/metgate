@@ -258,7 +258,7 @@ func asInt64Slice(v any) ([]int64, error) {
 	}
 }
 
-func unixMinutesToISO(min int64) string {
-	t := time.Unix(min*60, 0).UTC()
+func unixMinutesToISO(minutes int64) string {
+	t := time.Unix(minutes*60, 0).UTC()
 	return t.Format("2006-01-02T15:04:05Z")
 }

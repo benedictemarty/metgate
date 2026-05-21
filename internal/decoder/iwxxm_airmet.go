@@ -81,9 +81,10 @@ func DecodeIWXXMAIRMET(opmet string) string {
 	}
 	for i, ac := range a.AnalysisCollections {
 		title := "Analyse"
-		if ac.Collection.TimeIndicator == "FORECAST" {
+		switch ac.Collection.TimeIndicator {
+		case "FORECAST":
 			title = "Prévision"
-		} else if ac.Collection.TimeIndicator == "OBSERVATION" {
+		case "OBSERVATION":
 			title = "Observation"
 		}
 		if len(a.AnalysisCollections) > 1 {

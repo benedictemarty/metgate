@@ -195,9 +195,10 @@ func DecodeIWXXMSIGMET(opmet string) string {
 
 	for i, ac := range s.AnalysisCollections {
 		title := "Analyse"
-		if ac.Collection.TimeIndicator == "FORECAST" {
+		switch ac.Collection.TimeIndicator {
+		case "FORECAST":
 			title = "Prévision"
-		} else if ac.Collection.TimeIndicator == "OBSERVATION" {
+		case "OBSERVATION":
 			title = "Observation"
 		}
 		if len(s.AnalysisCollections) > 1 {

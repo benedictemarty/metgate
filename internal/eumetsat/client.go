@@ -63,7 +63,7 @@ func (c *Client) Token(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("eumetsat token: status %d (%s)", resp.StatusCode, truncate(body, 200))
@@ -102,7 +102,7 @@ func (c *Client) LatestProduct(ctx context.Context, collection string) (id, dlUR
 	if err != nil {
 		return "", "", err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != 200 {
 		return "", "", fmt.Errorf("eumetsat search %s: status %d (%s)", collection, resp.StatusCode, truncate(body, 200))
@@ -158,7 +158,7 @@ func (c *Client) Download(ctx context.Context, dlURL string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
 		return nil, fmt.Errorf("eumetsat download: status %d (%s)", resp.StatusCode, body)

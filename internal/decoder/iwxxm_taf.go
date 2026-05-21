@@ -187,7 +187,7 @@ func decodeIWXXMForecast(f iwxxmForecast) []string {
 		if w.VariableWindDirection == "true" || dir == "" {
 			dir = "variable"
 		} else {
-			dir = dir + "°"
+			dir += "°"
 		}
 		line := fmt.Sprintf("  Vent : %s à %s %s", dir, v, normUOM(w.MeanWindSpeed.UOM))
 		if g := stripTrailingZero(w.WindGustSpeed.Value); g != "" {

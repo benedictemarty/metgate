@@ -545,7 +545,7 @@ func enrichFromIWXXM(props map[string]any, opmet string) {
 }
 
 // formatTAC compose un TAC simplifié dans l'esprit OACI mais lisible :
-// `METAR LFPG 252210Z 240/10KT CAVOK 09/03 Q1018=`
+// `METAR LFPG 252210Z 240/10KT CAVOK 09/03 Q1018=`.
 func formatTAC(icao string, props map[string]any, temp, dew, qnh, wdir, wspd string, cavok bool) string {
 	var sb strings.Builder
 	sb.WriteString("METAR ")

@@ -236,7 +236,7 @@ func parseCTTHZip(zipBytes []byte) (*Snapshot, error) {
 				return nil, err
 			}
 			ncBytes, err = io.ReadAll(r)
-			r.Close()
+			r.Close() //nolint:errcheck
 			if err != nil {
 				return nil, err
 			}

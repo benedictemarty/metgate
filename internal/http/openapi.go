@@ -8,7 +8,7 @@ import (
 //go:embed openapi.yaml
 var openapiYAML []byte
 
-func (a *API) handleOpenAPI(w http.ResponseWriter, r *http.Request) {
+func (a *API) handleOpenAPI(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(http.StatusOK)
@@ -49,7 +49,7 @@ const swaggerHTML = `<!DOCTYPE html>
 </body>
 </html>`
 
-func (a *API) handleDocs(w http.ResponseWriter, r *http.Request) {
+func (a *API) handleDocs(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write([]byte(swaggerHTML))
 }

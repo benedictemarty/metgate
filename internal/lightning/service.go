@@ -93,7 +93,7 @@ func parseLFLZip(zipBytes []byte) ([]Flash, error) {
 				return nil, err
 			}
 			ncBytes, err = io.ReadAll(r)
-			r.Close()
+			r.Close() //nolint:errcheck
 			if err != nil {
 				return nil, err
 			}

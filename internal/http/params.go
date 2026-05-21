@@ -10,7 +10,7 @@ import (
 // parseIntParam lit un entier depuis ?name=. Si la query est vide, retourne
 // def. Si la valeur est non vide mais invalide ou hors [min, max], écrit
 // 400 sur w et retourne ok=false : le caller doit return immédiatement.
-func parseIntParam(w http.ResponseWriter, r *http.Request, name string, def, min, max int) (int, bool) {
+func parseIntParam(w http.ResponseWriter, r *http.Request, name string, def, minVal, maxVal int) (int, bool) {
 	v := r.URL.Query().Get(name)
 	if v == "" {
 		return def, true
@@ -20,8 +20,8 @@ func parseIntParam(w http.ResponseWriter, r *http.Request, name string, def, min
 		http.Error(w, fmt.Sprintf("%s: entier attendu, reçu %q", name, v), http.StatusBadRequest)
 		return 0, false
 	}
-	if n < min || n > max {
-		http.Error(w, fmt.Sprintf("%s=%d hors plage [%d..%d]", name, n, min, max), http.StatusBadRequest)
+	if n < minVal || n > maxVal {
+		http.Error(w, fmt.Sprintf("%s=%d hors plage [%d..%d]", name, n, minVal, maxVal), http.StatusBadRequest)
 		return 0, false
 	}
 	return n, true
