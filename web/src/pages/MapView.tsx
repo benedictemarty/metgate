@@ -29,11 +29,12 @@ import SatRasterLayer from '../components/SatRasterLayer'
 import CloudTopLayer from '../components/CloudTopLayer'
 import FlightPlan, { type RoutePlan } from '../components/FlightPlan'
 import AircraftTracker, { type AircraftState } from '../components/AircraftTracker'
-import { CloudCog, CloudFog, CloudLightning, Filter, Globe2, Link2, Link2Off, Mountain, Satellite, Zap } from 'lucide-react'
+import { AlertTriangle, CloudCog, CloudFog, CloudLightning, Filter, Globe2, Link2, Link2Off, Mountain, Satellite, Zap } from 'lucide-react'
 import type { Aggregate, Family } from '../types'
 import { displayFamilyName } from '../familyDisplay'
 import OGCFilterPanel, { type OGCFilter } from '../components/OGCFilterPanel'
 import FirLayer from '../components/FirLayer'
+import NotamLayer from '../components/NotamLayer'
 
 interface MapViewProps {
   data: Aggregate | null
@@ -299,6 +300,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
   const [ogcFilterXml, setOgcFilterXml] = useState<string | null>(null)
   const [ogcFilter, setOgcFilter] = useState<OGCFilter | null>(null)
   const [firEnabled, setFirEnabled] = useState(false)
+  const [notamEnabled, setNotamEnabled] = useState(false)
   const [windLoading, setWindLoading] = useState(false)
   const [tropoLoading, setTropoLoading] = useState(false)
   const [qvacisLoading, setQvacisLoading] = useState(false)
@@ -820,6 +822,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
           onLoadingChange={setQvacisLoading}
         />
         <FirLayer enabled={firEnabled} />
+        <NotamLayer enabled={notamEnabled} onClose={() => setNotamEnabled(false)} />
         <LightningLayer enabled={lightningEnabled} />
         <SatRasterLayer
           enabled={satIREnabled}
@@ -1061,6 +1064,18 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
           >
             <Globe2 className="size-4" />
             FIR
+          </button>
+          <button
+            onClick={() => setNotamEnabled((v) => !v)}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
+              notamEnabled
+                ? 'border-amber-400/50 bg-amber-500/20 text-amber-100 shadow-[0_0_15px_rgba(251,191,36,0.25)]'
+                : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
+            }`}
+            title="NOTAM (FAA API — nécessite credentials)"
+          >
+            <AlertTriangle className="size-4" />
+            NOTAM
           </button>
           <button
             onClick={() => setOgcPanelOpen((v) => !v)}

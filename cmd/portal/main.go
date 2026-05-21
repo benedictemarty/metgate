@@ -21,6 +21,7 @@ import (
 	"github.com/bmarty/metgate/internal/eumetsat"
 	"github.com/bmarty/metgate/internal/lightning"
 	"github.com/bmarty/metgate/internal/metgate"
+	"github.com/bmarty/metgate/internal/notam"
 	"github.com/bmarty/metgate/internal/satellite"
 )
 
@@ -90,7 +91,17 @@ func main() {
 		log.Print("CTH: pré-chargement EUMETSAT démarré en arrière-plan")
 	}
 
-	api := httpapi.NewAPI(cat, acService, ltService, satProxy, ctService, apStore)
+	faaClientID := os.Getenv("FAA_NOTAM_CLIENT_ID")
+	faaClientSecret := os.Getenv("FAA_NOTAM_CLIENT_SECRET")
+	notamClient := notam.New(faaClientID, faaClientSecret)
+	notamService := notam.NewService(notamClient)
+	if notamClient.Authenticated() {
+		log.Printf("FAA NOTAM: actif (client_id=%s…)", faaClientID[:min(8, len(faaClientID))])
+	} else {
+		log.Print("FAA NOTAM: désactivé (FAA_NOTAM_CLIENT_ID/SECRET absents — voir .env)")
+	}
+
+	api := httpapi.NewAPI(cat, acService, ltService, satProxy, ctService, apStore, notamService)
 	log.Printf("cache TTL: %s", cacheTTL)
 
 	srv := &http.Server{
