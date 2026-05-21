@@ -21,18 +21,29 @@ const swaggerHTML = `<!DOCTYPE html>
   <meta charset="UTF-8"/>
   <title>MetGate Portal — API Docs</title>
   <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css"/>
-  <style>body{margin:0}.swagger-ui .topbar{background:#0f172a}</style>
+  <style>
+    body { margin: 0; }
+    .swagger-ui .topbar { background: #0f172a; }
+    .swagger-ui .topbar .download-url-wrapper { display: none; }
+  </style>
 </head>
 <body>
   <div id="ui"></div>
   <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-standalone-preset.js"></script>
   <script>
     SwaggerUIBundle({
       url: "/api/openapi.yaml",
       dom_id: "#ui",
       deepLinking: true,
-      presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
-      layout: "BaseLayout",
+      tryItOutEnabled: true,
+      persistAuthorization: true,
+      presets: [
+        SwaggerUIBundle.presets.apis,
+        SwaggerUIStandalonePreset,
+      ],
+      plugins: [SwaggerUIBundle.plugins.DownloadUrl],
+      layout: "StandaloneLayout",
     });
   </script>
 </body>

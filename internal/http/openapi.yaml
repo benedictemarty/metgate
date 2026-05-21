@@ -699,7 +699,16 @@ paths:
         "502":
           $ref: "#/components/responses/BadGateway"
 
+security:
+  - basicAuth: []
+
 components:
+
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+      description: Authentification Basic Auth gérée par le reverse proxy nginx
 
   headers:
     XCache:
