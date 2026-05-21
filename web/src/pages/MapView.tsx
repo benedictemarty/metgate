@@ -32,7 +32,7 @@ import AircraftTracker, { type AircraftState } from '../components/AircraftTrack
 import { CloudCog, CloudFog, CloudLightning, Filter, Link2, Link2Off, Mountain, Satellite, Zap } from 'lucide-react'
 import type { Aggregate, Family } from '../types'
 import { displayFamilyName } from '../familyDisplay'
-import OGCFilterPanel from '../components/OGCFilterPanel'
+import OGCFilterPanel, { type OGCFilter } from '../components/OGCFilterPanel'
 
 interface MapViewProps {
   data: Aggregate | null
@@ -287,6 +287,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
   const [showTracker, setShowTracker] = useState(true)
   const [ogcPanelOpen, setOgcPanelOpen] = useState(false)
   const [ogcFilterXml, setOgcFilterXml] = useState<string | null>(null)
+  const [ogcFilter, setOgcFilter] = useState<OGCFilter | null>(null)
   const [windLoading, setWindLoading] = useState(false)
   const [tropoLoading, setTropoLoading] = useState(false)
   const [qvacisLoading, setQvacisLoading] = useState(false)
@@ -492,9 +493,19 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
 
         // 2. Enrichit avec les produits plats en arrière-plan (SA_last, FT_last…).
         //    Ne bloque pas l'affichage initial — ajoute les stations manquantes dès qu'elles arrivent.
+        //    Les produits plats utilisent 'id' comme champ ICAO (≠ locationIndicatorICAO des IWXXM).
+        //    On génère donc un filtre dédié avec 'id' + guard client-side par sécurité.
+        const flatFilterXml = ogcFilterXml
+          ? ogcFilterXml.replace(/locationIndicatorICAO/g, 'id')
+          : null
+        const flatFilterParam = flatFilterXml ? `&filter=${encodeURIComponent(flatFilterXml)}` : ''
+        // Pré-compile le pattern ICAO pour le guard client-side (ex: 'ED*' → /^ED.*$/i)
+        const icaoRe = ogcFilter?.icaoPattern
+          ? new RegExp('^' + ogcFilter.icaoPattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$', 'i')
+          : null
         const flatTypes = FLAT_FALLBACKS[name] ?? []
         for (const flatType of flatTypes) {
-          fetch(`/api/feature?type=${flatType}&count=2000${filterParam}`)
+          fetch(`/api/feature?type=${flatType}&count=2000${flatFilterParam}`)
             .then((res) => (res.ok ? res.json() : null))
             .then((geoFlat: GeoJSON.FeatureCollection | null) => {
               if (!geoFlat) return
@@ -506,7 +517,11 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
                 )
                 const added = (geoFlat.features ?? []).filter((f) => {
                   const id = f.properties?.id as string | undefined
-                  return id && !known.has(id)
+                  if (!id || known.has(id)) return false
+                  // Guard client-side : si un pattern ICAO est actif, vérifier que
+                  // la station correspond (défense si le filtre WFS ne comprend pas 'id').
+                  if (icaoRe && !icaoRe.test(id)) return false
+                  return true
                 }).map(normFlat)
                 if (added.length === 0) return prev
                 const merged: GeoJSON.FeatureCollection = {
@@ -832,7 +847,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
 
         {ogcPanelOpen && (
           <OGCFilterPanel
-            onFilterChange={(xml) => setOgcFilterXml(xml)}
+            onFilterChange={(xml, filter) => { setOgcFilterXml(xml); setOgcFilter(filter) }}
             onClose={() => setOgcPanelOpen(false)}
           />
         )}
