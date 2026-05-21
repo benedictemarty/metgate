@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Source, Layer } from 'react-map-gl/maplibre'
+import { Source, Layer, useMap } from 'react-map-gl/maplibre'
 
 interface Props {
   enabled: boolean
@@ -8,6 +8,7 @@ interface Props {
 
 export default function FirLayer({ enabled, showUIR = false }: Props) {
   const [geo, setGeo] = useState<GeoJSON.FeatureCollection | null>(null)
+  const { current: mapRef } = useMap()
 
   useEffect(() => {
     if (!enabled || geo) return
@@ -17,9 +18,25 @@ export default function FirLayer({ enabled, showUIR = false }: Props) {
       .catch(() => {})
   }, [enabled, geo])
 
-  if (!enabled || !geo) return null
+  // Écoute la perte du contexte WebGL pour désarmer le nettoyage react-map-gl
+  // qui appelle map.getLayer() alors que this.style est déjà undefined.
+  const [contextLost, setContextLost] = useState(false)
+  useEffect(() => {
+    const map = mapRef?.getMap()
+    if (!map) return
+    const canvas = map.getCanvas()
+    const onLost = () => setContextLost(true)
+    const onRestored = () => setContextLost(false)
+    canvas.addEventListener('webglcontextlost', onLost)
+    canvas.addEventListener('webglcontextrestored', onRestored)
+    return () => {
+      canvas.removeEventListener('webglcontextlost', onLost)
+      canvas.removeEventListener('webglcontextrestored', onRestored)
+    }
+  }, [mapRef])
 
-  // Filtrer FIR uniquement (pas UIR) si showUIR=false
+  if (!enabled || !geo || contextLost) return null
+
   const data: GeoJSON.FeatureCollection = showUIR ? geo : {
     ...geo,
     features: geo.features.filter(f => !(f.properties as Record<string, unknown>)?.uir),
@@ -27,13 +44,11 @@ export default function FirLayer({ enabled, showUIR = false }: Props) {
 
   return (
     <Source id="fir-src" type="geojson" data={data}>
-      {/* Remplissage très léger */}
       <Layer
         id="fir-fill"
         type="fill"
         paint={{ 'fill-color': '#818cf8', 'fill-opacity': 0.04 }}
       />
-      {/* Bordure fine */}
       <Layer
         id="fir-line"
         type="line"
@@ -44,7 +59,6 @@ export default function FirLayer({ enabled, showUIR = false }: Props) {
           'line-dasharray': [4, 3],
         }}
       />
-      {/* Label au centroïde — MapLibre symbol layer avec text-field */}
       <Layer
         id="fir-label"
         type="symbol"

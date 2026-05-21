@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Map as MapGL, Source, Layer } from 'react-map-gl/maplibre'
+import { Map as MapGL, Source, Layer, useMap } from 'react-map-gl/maplibre'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import {
   AlertTriangle,
@@ -46,6 +46,21 @@ function filterByForecast(
       return Math.abs(n - stepMin) < 1
     }),
   }
+}
+
+// Composant enfant (dans le contexte MapGL) qui déclenche flyTo sans recréer la carte.
+// Évite la destruction/recréation du WebGL context lors du changement de mode.
+function ViewFlyTo({ mode }: { mode: 'france' | 'europe' }) {
+  const { current: mapRef } = useMap()
+  useEffect(() => {
+    const map = mapRef?.getMap()
+    if (!map) return
+    const v = VIEWS[mode]
+    try {
+      map.flyTo({ center: [v.longitude, v.latitude], zoom: v.zoom, duration: 1200, essential: true })
+    } catch { /* contexte perdu — ignore */ }
+  }, [mode, mapRef])
+  return null
 }
 
 export default function StormCinema() {
@@ -122,14 +137,16 @@ export default function StormCinema() {
     d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) + ' UTC'
 
   return (
+
     <div className="relative h-[calc(100vh-72px)] w-full overflow-hidden bg-slate-950">
       <MapGL
-        key={mode}
-        initialViewState={VIEWS[mode]}
+        id="storm-map"
+        initialViewState={VIEWS.france}
         mapStyle={DARK}
         style={{ width: '100%', height: '100%' }}
         attributionControl={{ compact: true }}
       >
+        <ViewFlyTo mode={mode} />
         {/* ── FIR ── */}
         <FirLayer enabled={showFIR} />
 
