@@ -116,14 +116,18 @@ interface FetchedLayer {
 // instant T, et on affiche les features dont la fenêtre contient T. Les
 // features sans validitystarttime (METAR/TAF/SIGMET/...) sont toujours
 // affichées quel que soit l'instant choisi.
+// Les SIGMET/AIRMET IWXXM utilisent begin_position/end_position ;
+// les autres produits (RDT_MSG, CAT…) utilisent validitystarttime/validityendtime.
 function featureValiditySlot(f: GeoJSON.Feature): string | null {
-  const v = (f.properties as Record<string, unknown> | null)?.validitystarttime
+  const p = f.properties as Record<string, unknown> | null
+  const v = p?.validitystarttime ?? p?.begin_position
   if (typeof v !== 'string' || v === '') return null
   return v
 }
 
 function featureValidityEnd(f: GeoJSON.Feature): string | null {
-  const v = (f.properties as Record<string, unknown> | null)?.validityendtime
+  const p = f.properties as Record<string, unknown> | null
+  const v = p?.validityendtime ?? p?.end_position
   if (typeof v !== 'string' || v === '') return null
   return v
 }
