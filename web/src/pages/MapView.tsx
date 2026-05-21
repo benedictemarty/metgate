@@ -718,32 +718,40 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
 
           return (
             <Source key={name} id={`src-${name}`} type="geojson" data={layer.data}>
-              {/* Polygones / multipolygones : remplissage + bordure */}
+              {/* Polygones / multipolygones : remplissage + bordure.
+                  Les features TEST/EXERCISE reçoivent une couleur distincte. */}
               <Layer
                 id={`${name}-fill`}
                 type="fill"
-                filter={[
-                  'in',
-                  ['geometry-type'],
-                  ['literal', ['Polygon', 'MultiPolygon']],
-                ]}
+                filter={['in', ['geometry-type'], ['literal', ['Polygon', 'MultiPolygon']]]}
                 paint={{
-                  'fill-color': s.color,
+                  'fill-color': ['case',
+                    ['==', ['get', 'status'], 'TEST'],     '#fbbf24',
+                    ['==', ['get', 'status'], 'EXERCISE'], '#38bdf8',
+                    s.color,
+                  ] as unknown as string,
                   'fill-opacity': fillOpacity,
                 }}
               />
               <Layer
                 id={`${name}-line`}
                 type="line"
-                filter={[
-                  'in',
-                  ['geometry-type'],
-                  ['literal', ['Polygon', 'MultiPolygon']],
-                ]}
+                filter={['in', ['geometry-type'], ['literal', ['Polygon', 'MultiPolygon']]]}
                 paint={{
-                  'line-color': s.color,
+                  'line-color': ['case',
+                    ['==', ['get', 'status'], 'TEST'],     '#fbbf24',
+                    ['==', ['get', 'status'], 'EXERCISE'], '#38bdf8',
+                    s.color,
+                  ] as unknown as string,
                   'line-width': lineWidth,
                   'line-opacity': lineOpacity,
+                  'line-dasharray': ['case',
+                    ['any',
+                      ['==', ['get', 'status'], 'TEST'],
+                      ['==', ['get', 'status'], 'EXERCISE'],
+                    ], ['literal', [6, 3]],
+                    ['literal', [1]],
+                  ] as unknown as number[],
                 }}
               />
               {/* Points : halo + cercle */}
@@ -764,7 +772,11 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
                 filter={['==', ['geometry-type'], 'Point']}
                 paint={{
                   'circle-radius': 4.5,
-                  'circle-color': s.color,
+                  'circle-color': ['case',
+                    ['==', ['get', 'status'], 'TEST'],     '#fbbf24',
+                    ['==', ['get', 'status'], 'EXERCISE'], '#38bdf8',
+                    s.color,
+                  ] as unknown as string,
                   'circle-stroke-color': '#0f172a',
                   'circle-stroke-width': 1.5,
                   'circle-opacity': 0.95,
@@ -1357,6 +1369,21 @@ function FeaturePopup({
           >
             ›
           </button>
+        </div>
+      )}
+      {/* Bannière TEST / EXERCISE bien visible */}
+      {status && status !== 'NORMAL' && (
+        <div className={`flex items-center gap-2 px-2 py-1 rounded-md mb-2 text-xs font-bold tracking-widest uppercase ${
+          status === 'TEST'
+            ? 'bg-amber-500/20 border border-amber-400/60 text-amber-300'
+            : status === 'EXERCISE'
+              ? 'bg-sky-500/20 border border-sky-400/60 text-sky-300'
+              : 'bg-red-500/20 border border-red-400/60 text-red-300'
+        }`}>
+          <span className="size-2 rounded-full animate-pulse"
+            style={{ backgroundColor: status === 'TEST' ? '#fbbf24' : status === 'EXERCISE' ? '#38bdf8' : '#f87171' }}
+          />
+          ⚠ {status} — message non opérationnel
         </div>
       )}
       <div className="flex items-start justify-between gap-3 mb-2">
