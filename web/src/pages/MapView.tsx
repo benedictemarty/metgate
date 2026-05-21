@@ -1106,6 +1106,26 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
           onToggleTrails={() => setShowTrails((v) => !v)}
         />
       )}
+
+      <Legend
+        active={active}
+        loaded={loaded}
+        windEnabled={windEnabled}
+        windDataset={windDataset}
+        windLevelPa={windLevelPa}
+        tropoEnabled={tropoEnabled}
+        qvacisEnabled={qvacisEnabled}
+        qvacisDataset={qvacisDataset}
+        qvacisFL={qvacisFL}
+        lightningEnabled={lightningEnabled}
+        satIREnabled={satIREnabled}
+        satConvEnabled={satConvEnabled}
+        cthEnabled={cthEnabled}
+        cthMinFL={cthMinFL}
+        firEnabled={firEnabled}
+        ogcFilterXml={ogcFilterXml}
+        ogcFilter={ogcFilter}
+      />
     </div>
   )
 }
@@ -1849,6 +1869,105 @@ function WcsMasterSlider({
           className="accent-violet-400 h-1"
         />
       </div>
+    </div>
+  )
+}
+
+// ─── Légende ──────────────────────────────────────────────────────────────────
+
+interface LegendProps {
+  active: Set<string>
+  loaded: Record<string, FetchedLayer>
+  windEnabled: boolean
+  windDataset: 'WIND' | 'JET'
+  windLevelPa: number
+  tropoEnabled: boolean
+  qvacisEnabled: boolean
+  qvacisDataset: QvacisDataset
+  qvacisFL: number
+  lightningEnabled: boolean
+  satIREnabled: boolean
+  satConvEnabled: boolean
+  cthEnabled: boolean
+  cthMinFL: number
+  firEnabled: boolean
+  ogcFilterXml: string | null
+  ogcFilter: OGCFilter | null
+}
+
+function Legend({
+  active, loaded,
+  windEnabled, windDataset, windLevelPa,
+  tropoEnabled,
+  qvacisEnabled, qvacisDataset, qvacisFL,
+  lightningEnabled, satIREnabled, satConvEnabled,
+  cthEnabled, cthMinFL,
+  firEnabled,
+  ogcFilterXml, ogcFilter,
+}: LegendProps) {
+  const windFL = (() => {
+    if (!windEnabled) return ''
+    if (windDataset === 'JET') return 'JET'
+    const lvl = WIND_PRESSURE_LEVELS.find(l => l.pa === windLevelPa)
+    return lvl ? `FL${lvl.fl.toString().padStart(3, '0')}` : ''
+  })()
+
+  type Entry = { label: string; color: string; dash?: boolean; count?: number; symbol: 'dot' | 'line' | 'fill' }
+  const entries: Entry[] = []
+
+  active.forEach(name => {
+    const s = styleFor(name)
+    const layer = loaded[name]
+    entries.push({ label: displayFamilyName(name), color: s.color, count: layer?.count, symbol: 'dot' })
+  })
+
+  if (windEnabled)      entries.push({ label: `Vent ${windFL}`, color: '#22d3ee', symbol: 'line' })
+  if (tropoEnabled)     entries.push({ label: 'Tropopause', color: '#fbbf24', symbol: 'fill' })
+  if (qvacisEnabled)    entries.push({ label: `Cendres FL${qvacisFL} (${qvacisDataset === 'DETERMINISTIC' ? 'dét.' : 'prob.'})`, color: '#fb923c', symbol: 'fill' })
+  if (lightningEnabled) entries.push({ label: 'Foudre MTG-LI', color: '#facc15', symbol: 'dot' })
+  if (satIREnabled)     entries.push({ label: 'Sat IR 10.5µm', color: '#7dd3fc', symbol: 'fill' })
+  if (satConvEnabled)   entries.push({ label: 'Convection RGB', color: '#f472b6', symbol: 'fill' })
+  if (cthEnabled)       entries.push({ label: `CTH ≥ FL${cthMinFL}`, color: '#c084fc', symbol: 'fill' })
+  if (firEnabled)       entries.push({ label: 'FIR/UIR', color: '#818cf8', dash: true, symbol: 'line' })
+
+  const filterLabel = ogcFilter?.icaoPattern
+    ? `Filtre : ${ogcFilter.icaoPattern}`
+    : ogcFilterXml ? 'Filtre OGC actif' : null
+
+  if (entries.length === 0 && !filterLabel) return null
+
+  return (
+    <div className="absolute bottom-8 left-4 z-10 flex flex-col gap-1 rounded-lg border border-slate-800/70 bg-slate-950/80 backdrop-blur-md px-3 py-2 shadow-xl text-[0.625rem] text-slate-300 max-w-[210px]">
+      <div className="text-[0.5625rem] uppercase tracking-wider text-slate-500 mb-0.5">Légende</div>
+
+      {filterLabel && (
+        <div className="flex items-center gap-1.5 text-indigo-300 border-b border-slate-800/50 pb-1 mb-0.5">
+          <span className="size-2 rounded-sm bg-indigo-500/40 border border-indigo-400/60 shrink-0" />
+          <span className="truncate">{filterLabel}</span>
+        </div>
+      )}
+
+      {entries.map((e, i) => (
+        <div key={i} className="flex items-center gap-1.5">
+          {e.symbol === 'dot' && (
+            <span className="size-2.5 rounded-full shrink-0" style={{ backgroundColor: e.color, boxShadow: `0 0 6px ${e.color}88` }} />
+          )}
+          {e.symbol === 'line' && (
+            <span className="w-4 h-0.5 shrink-0 rounded" style={{
+              background: e.dash
+                ? `repeating-linear-gradient(90deg,${e.color} 0,${e.color} 3px,transparent 3px,transparent 6px)`
+                : e.color,
+            }} />
+          )}
+          {e.symbol === 'fill' && (
+            <span className="w-4 h-2.5 shrink-0 rounded-sm" style={{ backgroundColor: e.color + '55', border: `1px solid ${e.color}99` }} />
+          )}
+          <span className="flex-1 truncate">{e.label}</span>
+          {e.count !== undefined && (
+            <span className="tabular-nums text-slate-500 shrink-0">{e.count}</span>
+          )}
+        </div>
+      ))}
     </div>
   )
 }
