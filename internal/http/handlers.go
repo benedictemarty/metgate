@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"math"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -14,7 +13,6 @@ import (
 	"github.com/bmarty/metgate/internal/cloudtop"
 	"github.com/bmarty/metgate/internal/fir"
 	"github.com/bmarty/metgate/internal/lightning"
-	"github.com/bmarty/metgate/internal/notam"
 	"github.com/bmarty/metgate/internal/satellite"
 	"github.com/bmarty/metgate/internal/web"
 )
@@ -26,11 +24,10 @@ type API struct {
 	satellite *satellite.Proxy
 	cloudtop  *cloudtop.Service
 	airports  *airports.Store
-	notam     *notam.Service
 }
 
-func NewAPI(c *catalog.Service, ac *aircraft.Service, lt *lightning.Service, sp *satellite.Proxy, ct *cloudtop.Service, ap *airports.Store, nt *notam.Service) *API {
-	return &API{catalog: c, aircraft: ac, lightning: lt, satellite: sp, cloudtop: ct, airports: ap, notam: nt}
+func NewAPI(c *catalog.Service, ac *aircraft.Service, lt *lightning.Service, sp *satellite.Proxy, ct *cloudtop.Service, ap *airports.Store) *API {
+	return &API{catalog: c, aircraft: ac, lightning: lt, satellite: sp, cloudtop: ct, airports: ap}
 }
 
 func (a *API) Routes() *http.ServeMux {
@@ -54,7 +51,6 @@ func (a *API) Routes() *http.ServeMux {
 	m.HandleFunc("GET /api/cloudtop", a.handleCloudtop)
 	m.HandleFunc("GET /api/airport/{icao}", a.handleAirport)
 	m.HandleFunc("GET /api/airports/search", a.handleAirportsSearch)
-	m.HandleFunc("GET /api/notam", a.handleNOTAM)
 	m.HandleFunc("GET /api/fir", a.handleFIR)
 	m.HandleFunc("GET /api/openapi.yaml", a.handleOpenAPI)
 	m.HandleFunc("GET /api/docs", a.handleDocs)
@@ -697,92 +693,3 @@ func (a *API) handleFIR(w http.ResponseWriter, r *http.Request) {
 	w.Write(fir.WorldGeoJSON) //nolint:errcheck
 }
 
-// handleNOTAM : GET /api/notam?icao=LFPG&icao=LFMN[&icao=...]
-// Retourne un GeoJSON FeatureCollection des NOTAM actifs pour les ICAOs demandés.
-// Paramètres : icao (répétable, max 10), ttl (secondes, défaut 300).
-// Renvoie 503 si les credentials FAA ne sont pas configurés.
-func (a *API) handleNOTAM(w http.ResponseWriter, r *http.Request) {
-	if !a.notam.Authenticated() {
-		http.Error(w, "FAA NOTAM non configuré (FAA_NOTAM_CLIENT_ID/SECRET)", http.StatusServiceUnavailable)
-		return
-	}
-
-	icaos := r.URL.Query()["icao"]
-	if len(icaos) == 0 {
-		http.Error(w, "paramètre 'icao' requis (ex: ?icao=LFPG&icao=LFMN)", http.StatusBadRequest)
-		return
-	}
-	if len(icaos) > 10 {
-		icaos = icaos[:10]
-	}
-
-	ttlSec := 300
-	if v := r.URL.Query().Get("ttl"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			ttlSec = n
-		}
-	}
-	ttl := time.Duration(ttlSec) * time.Second
-
-	now := time.Now().UTC()
-	type geoFeature struct {
-		Type       string         `json:"type"`
-		Geometry   any            `json:"geometry"`
-		Properties map[string]any `json:"properties"`
-	}
-
-	features := []geoFeature{}
-	for _, icao := range icaos {
-		icao = strings.ToUpper(strings.TrimSpace(icao))
-		if icao == "" {
-			continue
-		}
-		q := notam.Query{
-			ICAOLocation: icao,
-			EffectStart:  now,
-			EffectEnd:    now.Add(24 * time.Hour),
-			PageSize:     200,
-		}
-		notams, err := a.notam.Search(r.Context(), q, ttl)
-		if err != nil {
-			http.Error(w, "FAA NOTAM: "+err.Error(), http.StatusBadGateway)
-			return
-		}
-		for _, n := range notams {
-			var geom any
-			if n.Lat != 0 || n.Lon != 0 {
-				geom = map[string]any{
-					"type":        "Point",
-					"coordinates": []float64{n.Lon, n.Lat},
-				}
-			}
-			features = append(features, geoFeature{
-				Type:     "Feature",
-				Geometry: geom,
-				Properties: map[string]any{
-					"id":             n.ID,
-					"number":         n.Number,
-					"type":           n.Type,
-					"location":       n.Location,
-					"issued":         n.Issued.Format(time.RFC3339),
-					"effectiveStart": n.EffectStart.Format(time.RFC3339),
-					"effectiveEnd":   n.EffectEnd.Format(time.RFC3339),
-					"text":           n.Text,
-					"plainLang":      n.PlainLang,
-					"icaoMessage":    n.ICAOMessage,
-					"classification": n.Classification,
-					"maximumFL":      n.MaxFL,
-					"minimumFL":      n.MinFL,
-					"radius":         n.Radius,
-				},
-			})
-		}
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"type":       "FeatureCollection",
-		"features":   features,
-		"fetched_at": now.Format(time.RFC3339),
-		"icaos":      icaos,
-	})
-}
