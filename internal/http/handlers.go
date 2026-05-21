@@ -11,6 +11,7 @@ import (
 	"github.com/bmarty/metgate/internal/airports"
 	"github.com/bmarty/metgate/internal/catalog"
 	"github.com/bmarty/metgate/internal/cloudtop"
+	"github.com/bmarty/metgate/internal/fir"
 	"github.com/bmarty/metgate/internal/lightning"
 	"github.com/bmarty/metgate/internal/satellite"
 	"github.com/bmarty/metgate/internal/web"
@@ -50,6 +51,7 @@ func (a *API) Routes() *http.ServeMux {
 	m.HandleFunc("GET /api/cloudtop", a.handleCloudtop)
 	m.HandleFunc("GET /api/airport/{icao}", a.handleAirport)
 	m.HandleFunc("GET /api/airports/search", a.handleAirportsSearch)
+	m.HandleFunc("GET /api/fir", a.handleFIR)
 	m.HandleFunc("GET /api/openapi.yaml", a.handleOpenAPI)
 	m.HandleFunc("GET /api/docs", a.handleDocs)
 	m.Handle("GET /", web.Handler())
@@ -681,4 +683,12 @@ func (a *API) handleLightning(w http.ResponseWriter, r *http.Request) {
 		"source":      "EUMETSAT MTG-LI Lightning Flashes (LFL)",
 		"disclaimer":  "Donnée satellite à titre situationnel — non OPMET (OACI Annexe 3 / 2017/373)",
 	})
+}
+
+// handleFIR sert les limites des FIR/UIR mondiales (GeoJSON statique embarqué).
+// Source : jaluebbe/FlightMapEuropeSimple + NFDC North America, licence ouverte.
+func (a *API) handleFIR(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/geo+json")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Write(fir.WorldGeoJSON) //nolint:errcheck
 }

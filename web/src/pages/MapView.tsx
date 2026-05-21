@@ -29,10 +29,11 @@ import SatRasterLayer from '../components/SatRasterLayer'
 import CloudTopLayer from '../components/CloudTopLayer'
 import FlightPlan, { type RoutePlan } from '../components/FlightPlan'
 import AircraftTracker, { type AircraftState } from '../components/AircraftTracker'
-import { CloudCog, CloudFog, CloudLightning, Filter, Link2, Link2Off, Mountain, Satellite, Zap } from 'lucide-react'
+import { CloudCog, CloudFog, CloudLightning, Filter, Globe2, Link2, Link2Off, Mountain, Satellite, Zap } from 'lucide-react'
 import type { Aggregate, Family } from '../types'
 import { displayFamilyName } from '../familyDisplay'
 import OGCFilterPanel, { type OGCFilter } from '../components/OGCFilterPanel'
+import FirLayer from '../components/FirLayer'
 
 interface MapViewProps {
   data: Aggregate | null
@@ -293,6 +294,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
   const [ogcPanelOpen, setOgcPanelOpen] = useState(false)
   const [ogcFilterXml, setOgcFilterXml] = useState<string | null>(null)
   const [ogcFilter, setOgcFilter] = useState<OGCFilter | null>(null)
+  const [firEnabled, setFirEnabled] = useState(false)
   const [windLoading, setWindLoading] = useState(false)
   const [tropoLoading, setTropoLoading] = useState(false)
   const [qvacisLoading, setQvacisLoading] = useState(false)
@@ -794,6 +796,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
           onTimesLoaded={setQvacisTimes}
           onLoadingChange={setQvacisLoading}
         />
+        <FirLayer enabled={firEnabled} />
         <LightningLayer enabled={lightningEnabled} />
         <SatRasterLayer
           enabled={satIREnabled}
@@ -1008,6 +1011,18 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
           >
             <WindIcon className="size-4" />
             Vent
+          </button>
+          <button
+            onClick={() => setFirEnabled((v) => !v)}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
+              firEnabled
+                ? 'border-indigo-400/50 bg-indigo-500/20 text-indigo-100 shadow-[0_0_15px_rgba(99,102,241,0.25)]'
+                : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
+            }`}
+            title="Limites des FIR/UIR mondiales"
+          >
+            <Globe2 className="size-4" />
+            FIR
           </button>
           <button
             onClick={() => setOgcPanelOpen((v) => !v)}
