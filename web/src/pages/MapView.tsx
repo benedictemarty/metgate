@@ -253,11 +253,16 @@ function fmtSlotLabel(slot: string, isFirst: boolean): { primary: string; second
   return { primary, secondary: `${y}-${mo}-${d}` }
 }
 
+interface PopupItem {
+  family: string
+  props: Record<string, unknown>
+}
+
 interface PopupState {
   lng: number
   lat: number
-  family: string
-  props: Record<string, unknown>
+  items: PopupItem[]
+  idx: number
 }
 
 export default function MapView({ data, theme = 'dark' }: MapViewProps) {
@@ -652,28 +657,34 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
   }, [active])
 
   const handleMapClick = (e: MapLayerMouseEvent) => {
-    const f = e.features?.[0]
-    if (!f) {
+    const features = e.features ?? []
+    if (features.length === 0) {
       setPopup(null)
       return
     }
-    const layerId = f.layer?.id ?? ''
-    const family = layerId.replace(/-(circle|fill)$/, '')
-    // Pour les Points on prend les coords de la feature ; pour les polygones,
-    // on retient le clic (centroïde approximatif suffirait, mais le clic est
-    // déjà l'endroit qui intéresse l'utilisateur).
-    const geom = f.geometry as GeoJSON.Geometry | undefined
+    // Dédupliquer : un même feature peut apparaître sur plusieurs layers (fill + line).
+    const seen = new Set<string>()
+    const items: PopupItem[] = []
     let lng = e.lngLat.lng
     let lat = e.lngLat.lat
-    if (geom?.type === 'Point') {
-      ;[lng, lat] = (geom as GeoJSON.Point).coordinates
+    for (const f of features) {
+      const layerId = f.layer?.id ?? ''
+      const family = layerId.replace(/-(circle|fill|line)$/, '')
+      const props = (f.properties ?? {}) as Record<string, unknown>
+      // Clé de dédup : family + identifiant unique de la feature
+      const key = `${family}::${props.message_id ?? props.gml_id ?? props.ogc_fid ?? JSON.stringify(props).slice(0, 80)}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      items.push({ family, props })
+      // Pour les Points, on préfère les coords de la feature
+      if (items.length === 1) {
+        const geom = f.geometry as GeoJSON.Geometry | undefined
+        if (geom?.type === 'Point') {
+          ;[lng, lat] = (geom as GeoJSON.Point).coordinates
+        }
+      }
     }
-    setPopup({
-      lng,
-      lat,
-      family,
-      props: (f.properties ?? {}) as Record<string, unknown>,
-    })
+    setPopup({ lng, lat, items, idx: 0 })
   }
 
   const isLoading = loading.size > 0 || windLoading || tropoLoading || qvacisLoading || cthLoading
@@ -847,8 +858,12 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
             className="metgate-popup"
           >
             <FeaturePopup
-              family={popup.family}
-              props={popup.props}
+              family={popup.items[popup.idx].family}
+              props={popup.items[popup.idx].props}
+              total={popup.items.length}
+              current={popup.idx + 1}
+              onPrev={popup.items.length > 1 ? () => setPopup(p => p ? { ...p, idx: (p.idx - 1 + p.items.length) % p.items.length } : null) : undefined}
+              onNext={popup.items.length > 1 ? () => setPopup(p => p ? { ...p, idx: (p.idx + 1) % p.items.length } : null) : undefined}
               onClose={() => setPopup(null)}
             />
           </Popup>
@@ -1236,10 +1251,18 @@ function fmtVal(v: unknown, key: string, props: Record<string, unknown>): string
 function FeaturePopup({
   family,
   props,
+  total = 1,
+  current = 1,
+  onPrev,
+  onNext,
   onClose,
 }: {
   family: string
   props: Record<string, unknown>
+  total?: number
+  current?: number
+  onPrev?: () => void
+  onNext?: () => void
   onClose: () => void
 }) {
   const icao = props.locationIndicatorICAO as string | undefined
@@ -1299,6 +1322,28 @@ function FeaturePopup({
 
   return (
     <div className="font-sans">
+      {/* Navigation multi-features (ex: plusieurs SIGMET superposés) */}
+      {total > 1 && (
+        <div className="flex items-center justify-between gap-2 mb-1.5 px-0.5">
+          <button
+            onClick={onPrev}
+            className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-100 transition"
+            aria-label="Précédent"
+          >
+            ‹
+          </button>
+          <span className="text-[0.625rem] text-slate-400 tabular-nums">
+            {current} / {total}
+          </span>
+          <button
+            onClick={onNext}
+            className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-100 transition"
+            aria-label="Suivant"
+          >
+            ›
+          </button>
+        </div>
+      )}
       <div className="flex items-start justify-between gap-3 mb-2">
         <div className="min-w-0">
           <div
