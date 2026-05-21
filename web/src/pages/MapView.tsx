@@ -261,7 +261,7 @@ interface PopupState {
 }
 
 export default function MapView({ data, theme = 'dark' }: MapViewProps) {
-  const [active, setActive] = useState<Set<string>>(() => new Set(['METAR']))
+  const [active, setActive] = useState<Set<string>>(new Set())
   const [loaded, setLoaded] = useState<Record<string, FetchedLayer>>({})
   const [loading, setLoading] = useState<Set<string>>(new Set())
   const [errors, setErrors] = useState<Record<string, string>>({})
@@ -494,7 +494,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
         //    Ne bloque pas l'affichage initial — ajoute les stations manquantes dès qu'elles arrivent.
         const flatTypes = FLAT_FALLBACKS[name] ?? []
         for (const flatType of flatTypes) {
-          fetch(`/api/feature?type=${flatType}&count=2000`)
+          fetch(`/api/feature?type=${flatType}&count=2000${filterParam}`)
             .then((res) => (res.ok ? res.json() : null))
             .then((geoFlat: GeoJSON.FeatureCollection | null) => {
               if (!geoFlat) return
