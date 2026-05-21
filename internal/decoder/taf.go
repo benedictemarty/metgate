@@ -10,8 +10,6 @@ var (
 	rxTAFValidity   = regexp.MustCompile(`^(\d{2})(\d{2})/(\d{2})(\d{2})$`)
 	rxTAFFM         = regexp.MustCompile(`^FM(\d{2})(\d{2})(\d{2})$`)
 	rxTAFProb       = regexp.MustCompile(`^PROB(\d{2})$`)
-	rxTAFCancelled  = regexp.MustCompile(`^CNL$`)
-	rxTAFAmendment  = regexp.MustCompile(`^AMD$`)
 )
 
 // DecodeTAF transforme un TAC TAF en texte FR multi-ligne. Découpe le message

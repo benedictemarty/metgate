@@ -1,0 +1,27 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - unused       # variables, fonctions, types non utilisés
+    - govet        # analyses statiques go vet
+    - staticcheck  # staticcheck (SA*, S*, ST*, QF*)
+    - errcheck     # erreurs retournées non vérifiées
+    - gosimple     # simplifications possibles
+    - ineffassign  # assignations sans effet
+    - gocritic     # style et performance
+    - gosec        # sécurité (injections, crypto faible…)
+    - misspell     # fautes d'orthographe dans les commentaires
+    - gofmt        # formatage standard
+
+linters-settings:
+  gosec:
+    excludes:
+      - G104  # erreurs non vérifiées sur Write (net/http) — accepté ici
+  gocritic:
+    disabled-checks:
+      - commentedOutCode
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

@@ -76,13 +76,6 @@ type loadStats struct {
 	kept       int
 }
 
-func (s loadStats) rejected() int { return s.totalRows - s.kept }
-func (s loadStats) ratio() float64 {
-	if s.totalRows == 0 {
-		return 0
-	}
-	return float64(s.rejected()) / float64(s.totalRows)
-}
 
 func New() (*Store, error) {
 	s := &Store{

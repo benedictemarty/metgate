@@ -1,4 +1,4 @@
-.PHONY: run build test tidy clean web web-dev dev
+.PHONY: run build test lint tidy clean web web-dev dev
 
 # Build complet : frontend puis binaire avec dist embarqué.
 build: web
@@ -25,6 +25,9 @@ dev:
 
 test:
 	go test ./...
+
+lint:
+	golangci-lint run ./...
 
 tidy:
 	go mod tidy
