@@ -41,11 +41,16 @@ const REGION_PRESETS = [
 
 // ─── Générateurs OGC XML ──────────────────────────────────────────────────────
 
+// Namespace et attributs exacts observés sur MetGate INT (cf. interface OGC Filter MetGate).
+const FES = `xmlns:fes="https://www.opengis.net/fes/2.0"`
+const GML = `xmlns:gml="http://www.opengis.net/gml/3.2"`
+const LIKE_ATTRS = `matchCase="false" wildCard="*" singleChar="." escapeChar="!"`
+
 function xmlICAO(pattern: string): string {
   return (
-    `<fes:Filter xmlns:fes="http://www.opengis.net/fes/2.0">` +
-    `<fes:PropertyIsLike wildCard="*" singleChar="?" escapeChar="\\" matchCase="false">` +
-    `<fes:ValueReference>locationIndicatorICAO</fes:ValueReference>` +
+    `<fes:Filter ${FES}>` +
+    `<fes:PropertyIsLike ${LIKE_ATTRS}>` +
+    `<fes:PropertyName>locationIndicatorICAO</fes:PropertyName>` +
     `<fes:Literal>${pattern}</fes:Literal>` +
     `</fes:PropertyIsLike></fes:Filter>`
   )
@@ -53,9 +58,9 @@ function xmlICAO(pattern: string): string {
 
 function xmlBBox(b: BBox): string {
   return (
-    `<fes:Filter xmlns:fes="http://www.opengis.net/fes/2.0">` +
-    `<fes:BBOX><fes:ValueReference>position</fes:ValueReference>` +
-    `<gml:Envelope xmlns:gml="http://www.opengis.net/gml/3.2" srsName="CRS:84">` +
+    `<fes:Filter ${FES}>` +
+    `<fes:BBOX>` +
+    `<gml:Envelope ${GML} srsName="CRS:84">` +
     `<gml:lowerCorner>${b.minLon} ${b.minLat}</gml:lowerCorner>` +
     `<gml:upperCorner>${b.maxLon} ${b.maxLat}</gml:upperCorner>` +
     `</gml:Envelope></fes:BBOX></fes:Filter>`
@@ -64,13 +69,13 @@ function xmlBBox(b: BBox): string {
 
 function xmlCombined(pattern: string, b: BBox): string {
   return (
-    `<fes:Filter xmlns:fes="http://www.opengis.net/fes/2.0"><fes:And>` +
-    `<fes:PropertyIsLike wildCard="*" singleChar="?" escapeChar="\\" matchCase="false">` +
-    `<fes:ValueReference>locationIndicatorICAO</fes:ValueReference>` +
+    `<fes:Filter ${FES}><fes:And>` +
+    `<fes:PropertyIsLike ${LIKE_ATTRS}>` +
+    `<fes:PropertyName>locationIndicatorICAO</fes:PropertyName>` +
     `<fes:Literal>${pattern}</fes:Literal>` +
     `</fes:PropertyIsLike>` +
-    `<fes:BBOX><fes:ValueReference>position</fes:ValueReference>` +
-    `<gml:Envelope xmlns:gml="http://www.opengis.net/gml/3.2" srsName="CRS:84">` +
+    `<fes:BBOX>` +
+    `<gml:Envelope ${GML} srsName="CRS:84">` +
     `<gml:lowerCorner>${b.minLon} ${b.minLat}</gml:lowerCorner>` +
     `<gml:upperCorner>${b.maxLon} ${b.maxLat}</gml:upperCorner>` +
     `</gml:Envelope></fes:BBOX>` +
