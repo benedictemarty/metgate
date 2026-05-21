@@ -5,6 +5,7 @@
 
 # Go
 /bin/
+/portal
 /dist/
 *.test
 *.out
