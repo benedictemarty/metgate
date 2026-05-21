@@ -106,6 +106,7 @@ interface FetchedLayer {
   data: GeoJSON.FeatureCollection // filtré selon le slot courant
   count: number
   total: number
+  filterXml: string | null // filtre OGC utilisé lors du fetch (pour invalider le cache)
 }
 
 // MetGate publie pour beaucoup de produits prévisionnels (RDT_MSG, CAT,
@@ -429,12 +430,6 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
     return m
   }, [candidates])
 
-  // Quand le filtre OGC change, vider les couches chargées pour forcer un re-fetch.
-  useEffect(() => {
-    setLoaded({})
-    setErrors({})
-  }, [ogcFilterXml])
-
   useEffect(() => {
     // Produits plats MetGate (format `id`+`tac`) enrichissant les flux IWXXM.
     // Chargés en arrière-plan pour ne pas retarder l'affichage du produit principal.
@@ -473,7 +468,10 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
 
     active.forEach(async (name) => {
       const typeName = typeNameOf[name]
-      if (!typeName || loaded[name] || loading.has(name) || errors[name]) return
+      // Invalider si le filtre OGC courant diffère de celui utilisé lors du dernier fetch.
+      const staleFilter = loaded[name] && loaded[name].filterXml !== ogcFilterXml
+      if (!typeName || (loaded[name] && !staleFilter) || loading.has(name) || errors[name]) return
+      if (staleFilter) setErrors(prev => { const n = {...prev}; delete n[name]; return n })
       setLoading((prev) => new Set(prev).add(name))
       try {
         // 1. Charge et affiche le produit principal (IWXXM) immédiatement.
@@ -487,7 +485,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
         const filtered = filterBySlot(geo, selectedSlot, showTrails)
         setLoaded((prev) => ({
           ...prev,
-          [name]: { rawData: geo, data: filtered, count: filtered.features.length, total: geo.features?.length ?? 0 },
+          [name]: { rawData: geo, data: filtered, count: filtered.features.length, total: geo.features?.length ?? 0, filterXml: ogcFilterXml },
         }))
 
         // 2. Enrichit avec les produits plats en arrière-plan (SA_last, FT_last…).
@@ -516,7 +514,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
                 const filteredMerged = filterBySlot(merged, selectedSlot, showTrails)
                 return {
                   ...prev,
-                  [name]: { rawData: merged, data: filteredMerged, count: filteredMerged.features.length, total: merged.features.length },
+                  [name]: { rawData: merged, data: filteredMerged, count: filteredMerged.features.length, total: merged.features.length, filterXml: cur.filterXml },
                 }
               })
             })
