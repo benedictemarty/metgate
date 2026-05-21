@@ -469,9 +469,11 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
     active.forEach(async (name) => {
       const typeName = typeNameOf[name]
       // Invalider si le filtre OGC courant diffère de celui utilisé lors du dernier fetch.
-      const staleFilter = loaded[name] && loaded[name].filterXml !== ogcFilterXml
-      if (!typeName || (loaded[name] && !staleFilter) || loading.has(name) || errors[name]) return
-      if (staleFilter) setErrors(prev => { const n = {...prev}; delete n[name]; return n })
+      const staleFilter = !!(loaded[name] && loaded[name].filterXml !== ogcFilterXml)
+      // Si le filtre a changé : ignorer l'erreur et le cache précédent.
+      if (!typeName || loading.has(name)) return
+      if (!staleFilter && loaded[name]) return
+      if (!staleFilter && errors[name]) return
       setLoading((prev) => new Set(prev).add(name))
       try {
         // 1. Charge et affiche le produit principal (IWXXM) immédiatement.
