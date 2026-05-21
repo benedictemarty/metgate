@@ -5,6 +5,10 @@ Versionnage : [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+---
+
+## [0.3.0] — 2026-05-22 — Sprint « Filtrage OGC + FIR »
+
 ### Added
 
 - **Couche FIR/UIR mondiales** (`internal/fir/`, `GET /api/fir`) : 160 FIR/UIR
