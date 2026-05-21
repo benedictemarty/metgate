@@ -164,7 +164,7 @@ paths:
           schema:
             type: number
             default: 85000
-          description: Niveau de pression en Pa (ex: 85000 = 850 hPa)
+          description: "Niveau de pression en Pa (ex: 85000 = 850 hPa)"
         - name: dataset
           in: query
           required: false
@@ -227,7 +227,7 @@ paths:
           schema:
             type: integer
             example: 325
-          description: Flight level (ex: 325 pour FL325)
+          description: "Flight level (ex: 325 pour FL325)"
       responses:
         "200":
           description: Grille concentration cendres (mg/m³)
