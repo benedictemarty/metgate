@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"math"
 	"net/http"
@@ -637,7 +638,12 @@ func (a *API) handleLightning(w http.ResponseWriter, r *http.Request) {
 		since = t
 	}
 
-	flashes, fetchedAt, err := a.lightning.Latest(r.Context(), 60*time.Second)
+	// Découpler du contexte request (proxy nginx peut couper à 30 s).
+	// Le premier téléchargement EUMETSAT peut prendre > 30 s ; le résultat
+	// est mis en cache 60 s, les appels suivants sont instantanés.
+	ltCtx, ltCancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer ltCancel()
+	flashes, fetchedAt, err := a.lightning.Latest(ltCtx, 60*time.Second)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
