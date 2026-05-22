@@ -1,13 +1,14 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
-import { Cloud, FileText, Globe, Loader2, Map as MapIcon, Moon, Sun, TrendingUp, BookOpen } from 'lucide-react'
+import { Cloud, FileText, Globe, Loader2, Map as MapIcon, Moon, Radar, Sun, TrendingUp, BookOpen } from 'lucide-react'
 import Catalog from './pages/Catalog'
 import type { Aggregate } from './types'
 
-const MapView = lazy(() => import('./pages/MapView'))
-const TowerGlobe = lazy(() => import('./pages/TowerGlobe'))
+const MapView     = lazy(() => import('./pages/MapView'))
+const TowerGlobe  = lazy(() => import('./pages/TowerGlobe'))
 const RouteProfile = lazy(() => import('./pages/RouteProfile'))
+const NavDisplay  = lazy(() => import('./pages/NavDisplay'))
 
-type View = 'catalog' | 'map' | 'tower' | 'profile'
+type View = 'catalog' | 'map' | 'tower' | 'profile' | 'nd'
 
 export type Theme = 'dark' | 'light'
 
@@ -75,6 +76,7 @@ export default function App() {
               <NavButton active={view === 'map'}     onClick={() => setView('map')}     icon={MapIcon}    label="Carte" />
               <NavButton active={view === 'tower'}   onClick={() => setView('tower')}   icon={Globe}      label="Tour 3D" />
               <NavButton active={view === 'profile'} onClick={() => setView('profile')} icon={TrendingUp} label="Profil" />
+              <NavButton active={view === 'nd'}      onClick={() => setView('nd')}      icon={Radar}      label="Nav Display" />
             </nav>
             <a
               href="/api/docs"
@@ -105,6 +107,11 @@ export default function App() {
       {view === 'profile' && (
         <Suspense fallback={<Spinner />}>
           <RouteProfile />
+        </Suspense>
+      )}
+      {view === 'nd' && (
+        <Suspense fallback={<Spinner />}>
+          <NavDisplay />
         </Suspense>
       )}
     </div>
