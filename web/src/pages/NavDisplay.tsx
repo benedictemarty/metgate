@@ -62,12 +62,22 @@ function proj(lat: number, lon: number, clat: number, clon: number, scale: numbe
 
 // ─── Rendu Canvas radar ───────────────────────────────────────────────────────
 
+// Pulse : 0..1, pic centré sur la phase donnée, fréquence en Hz
+// Utilise un cosinus² pour une enveloppe douce (0 hors de la fenêtre de ±0.5 cycle)
+function glow(tSec: number, phaseOffset: number, freqHz = 0.6): number {
+  const t = (tSec * freqHz + phaseOffset) % 1  // 0..1 dans le cycle
+  // Enveloppe cos² : pic à t=0, zéro à t=±0.25
+  const rel = ((t + 0.5) % 1) - 0.5  // centrer sur 0
+  return rel > -0.25 && rel < 0.25 ? Math.cos(rel * Math.PI * 2) ** 2 : 0
+}
+
 function drawRadar(
   ctx: CanvasRenderingContext2D, size: number,
   ac: AcState | null,
   rdt: GeoJSON.FeatureCollection | null,
   sigmet: GeoJSON.FeatureCollection | null,
-  rangeNM: number, beamDeg: number,
+  rangeNM: number,
+  tSec: number,             // secondes écoulées depuis t0 (pour le pulsing)
   route: [number, number][] | null,
   rdtStep: number,          // étape RDT calée sur l'ETA de l'avion (0/15/30/45/60)
   etaISO: string,           // heure simulée à la position courante (pour HUD)
@@ -122,42 +132,46 @@ function drawRadar(
   }
   ctx.restore()
 
-  // ── Faisceau scan ──
-  ctx.save(); ctx.translate(cx, cy)
-  const beamRad = (beamDeg - hdg) * Math.PI / 180
-  for (let i = 0; i < 45; i++) {
-    const a0 = beamRad - Math.PI / 2 - i * (3 * Math.PI / 180)
-    const a1 = a0 - 3 * Math.PI / 180
-    ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, R, a0, a1, true); ctx.closePath()
-    ctx.fillStyle = `rgba(0,255,80,${(1 - i / 45) * 0.22})`; ctx.fill()
-  }
-  ctx.beginPath(); ctx.moveTo(0, 0)
-  ctx.lineTo(R * Math.sin(beamRad), -R * Math.cos(beamRad))
-  ctx.strokeStyle = 'rgba(0,255,100,0.7)'; ctx.lineWidth = 1.2; ctx.stroke()
-  ctx.restore()
+  // (faisceau supprimé — les contours des objets brillent alternativement)
 
-  // ── SIGMET ──
-  if (sigmet) {
+  // ── SIGMET — contours pulsants (phase 0, fréquence lente) ──
+  if (sigmet && sigmet.features.length > 0) {
+    // Phase 0 dans le cycle : les SIGMET brillent en premier
+    const g0 = glow(tSec, 0, 0.55)
+    const strokeAlpha = 0.35 + g0 * 0.65
+    const blurAmt     = g0 * 22
     ctx.save(); ctx.translate(cx, cy)
     sigmet.features.forEach(f => {
-      const g = f.geometry as GeoJSON.Geometry
-      if (!g || g.type !== 'Polygon') return
-      ctx.beginPath()
-      ;(g as GeoJSON.Polygon).coordinates[0].forEach(([lon, lat], i) => {
-        const [px, py] = p(lat, lon); i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)
+      const geo = f.geometry as GeoJSON.Geometry
+      if (!geo) return
+      const polys = geo.type === 'Polygon'
+        ? [(geo as GeoJSON.Polygon).coordinates]
+        : geo.type === 'MultiPolygon' ? (geo as GeoJSON.MultiPolygon).coordinates : []
+      polys.forEach(([ring]) => {
+        ctx.beginPath()
+        ring.forEach(([lon, lat], i) => {
+          const [px, py] = p(lat, lon); i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)
+        })
+        ctx.closePath()
+        ctx.fillStyle = `rgba(255,20,20,${0.08 + g0 * 0.08})`; ctx.fill()
+        ctx.shadowBlur = blurAmt; ctx.shadowColor = '#ff4040'
+        ctx.strokeStyle = `rgba(255,32,32,${strokeAlpha})`
+        ctx.lineWidth = 0.7 + g0 * 1.4
+        ctx.setLineDash([6, 4]); ctx.stroke(); ctx.setLineDash([])
+        ctx.shadowBlur = 0
       })
-      ctx.closePath()
-      ctx.fillStyle = 'rgba(255,20,20,0.12)'; ctx.fill()
-      ctx.strokeStyle = '#ff2020'; ctx.lineWidth = 0.8; ctx.setLineDash([5, 4]); ctx.stroke(); ctx.setLineDash([])
     })
     ctx.restore()
   }
 
-  // ── Cellules RDT — calées sur l'ETA de l'avion ──
-  // Affiche l'étape courante (pleine intensité) + l'étape suivante (fantôme).
+  // ── Cellules RDT — contours pulsants, phase décalée par step ──
+  // Cycle à 0.55 Hz : SIGMET (ph 0) → T+0 (ph 0.25) → T+15 (ph 0.5) → T+30 (ph 0.75)
+  // Chaque step a sa "tranche" de lumière ; les autres restent à l'état de base.
   if (rdt) {
     const nextStep = Math.min(60, rdtStep + 15)
-    // Dessiner en deux passes : fantôme d'abord, puis couche courante par-dessus
+    // Phase dans le cycle : T+0=0.25, T+15=0.50, T+30=0.75, T+45=1.0≡0, T+60=0.25
+    const PHASE: Record<number, number> = { 0: 0.25, 15: 0.50, 30: 0.75, 45: 0.125, 60: 0.375 }
+    // Dessiner fantôme d'abord, puis couche courante
     ;([nextStep, rdtStep] as const).forEach((step, pass) => {
       const isCurrent = pass === 1
       const cells = rdt.features.filter(f => {
@@ -167,28 +181,36 @@ function drawRadar(
       })
       if (!cells.length) return
       const wc = WX[step as keyof typeof WX] ?? WX[0]
-      const alphaScale = isCurrent ? 1.0 : 0.28  // fantôme = 28 % d'opacité
+      // Pulse pour ce step (0 si fantôme, sinon déclenché sur sa phase)
+      const g1  = isCurrent ? glow(tSec, PHASE[step] ?? 0.25, 0.55) : 0
+      const blurAmt    = isCurrent ? 4 + g1 * 20 : 0
+      const strokeW    = isCurrent ? 0.6 + g1 * 2.0 : 0
+      const strokeAlpha = isCurrent ? 0.25 + g1 * 0.75 : 0
+      const fillAlpha  = isCurrent ? wc.alpha : wc.alpha * 0.22
       ctx.save(); ctx.translate(cx, cy)
-      if (isCurrent && step === 0) { ctx.shadowBlur = 14; ctx.shadowColor = wc.stroke }
       cells.forEach(f => {
-        const g = f.geometry as GeoJSON.Geometry
-        if (!g) return
-        const polys = g.type === 'Polygon' ? (g as GeoJSON.Polygon).coordinates
-          : g.type === 'MultiPolygon' ? (g as GeoJSON.MultiPolygon).coordinates.flat() : []
+        const geo = f.geometry as GeoJSON.Geometry
+        if (!geo) return
+        const polys = geo.type === 'Polygon' ? (geo as GeoJSON.Polygon).coordinates
+          : geo.type === 'MultiPolygon' ? (geo as GeoJSON.MultiPolygon).coordinates.flat() : []
         polys.forEach(ring => {
           ctx.beginPath()
           ring.forEach(([lon, lat], i) => {
             const [px, py] = p(lat, lon); i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)
           })
           ctx.closePath()
-          ctx.fillStyle = wc.fill + Math.round(wc.alpha * alphaScale * 255).toString(16).padStart(2, '0')
+          ctx.fillStyle = wc.fill + Math.round(fillAlpha * 255).toString(16).padStart(2, '0')
           ctx.fill()
-          if (isCurrent && step <= 15) {
-            ctx.strokeStyle = wc.stroke; ctx.lineWidth = step === 0 ? 1.5 : 0.8; ctx.stroke()
+          if (isCurrent) {
+            ctx.shadowBlur = blurAmt; ctx.shadowColor = wc.stroke
+            ctx.strokeStyle = wc.stroke.slice(0, 7) + Math.round(strokeAlpha * 255).toString(16).padStart(2, '0')
+            ctx.lineWidth = strokeW
+            ctx.stroke()
+            ctx.shadowBlur = 0
           }
         })
       })
-      ctx.shadowBlur = 0; ctx.restore()
+      ctx.restore()
     })
   }
 
@@ -616,7 +638,7 @@ export default function NavDisplay() {
         }
       }
 
-      const beam = ((now - t0Ref.current) / 1000 * 55) % 360
+      const tSec = (now - t0Ref.current) / 1000
 
       // ── Alignement temporel des phénomènes ──
       // ETA de l'avion à la position slider courante (ms epoch)
@@ -650,7 +672,7 @@ export default function NavDisplay() {
       const etaDate = new Date(etaMs)
       const etaISO  = `${String(etaDate.getUTCHours()).padStart(2,'0')}${String(etaDate.getUTCMinutes()).padStart(2,'0')}`
 
-      drawRadar(ctx, sizeRef.current, acRef.current, rdt, sigmetFiltered, rangeNM, beam, routeRef.current, rdtStep, etaISO)
+      drawRadar(ctx, sizeRef.current, acRef.current, rdt, sigmetFiltered, rangeNM, tSec, routeRef.current, rdtStep, etaISO)
       rafRef.current = requestAnimationFrame(animate)
     }
     rafRef.current = requestAnimationFrame(animate)
