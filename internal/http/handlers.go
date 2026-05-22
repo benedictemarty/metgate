@@ -239,8 +239,15 @@ func (a *API) handleAircraftRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if st == nil {
-		http.Error(w, "aucun état pour "+icao, http.StatusNotFound)
-		return
+		// Avion non visible dans OpenSky (atterri ou hors couverture ADS-B).
+		// Fallback : dernier état connu depuis le ring buffer en mémoire.
+		if hist := a.aircraft.History(icao); len(hist) > 0 {
+			last := hist[len(hist)-1]
+			st = &last
+		} else {
+			http.Error(w, "aucun état pour "+icao, http.StatusNotFound)
+			return
+		}
 	}
 
 	q := r.URL.Query()
