@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -90,6 +91,10 @@ func main() {
 		log.Print("CTH: pré-chargement EUMETSAT démarré en arrière-plan")
 	}
 
+	// Nettoyer les fichiers temporaires NetCDF laissés par des crashs antérieurs
+	// (les defer cleanup() ne s'exécutent pas en cas de SIGSEGV/SIGKILL).
+	go cleanupOrphanTempFiles()
+
 	api := httpapi.NewAPI(cat, acService, ltService, satProxy, ctService, apStore)
 	log.Printf("cache TTL: %s", cacheTTL)
 
@@ -149,6 +154,29 @@ func envOr(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// cleanupOrphanTempFiles supprime les fichiers temporaires NetCDF laissés par
+// des crashs antérieurs (SIGSEGV / SIGKILL empêchent les defer de s'exécuter).
+// On ne touche qu'aux fichiers de plus de 5 minutes pour ne pas gêner les
+// décodages en cours au moment d'un redémarrage gracieux.
+func cleanupOrphanTempFiles() {
+	files, _ := filepath.Glob(os.TempDir() + "/metgate-nc-*.nc")
+	removed := 0
+	for _, f := range files {
+		info, err := os.Stat(f)
+		if err != nil {
+			continue
+		}
+		if time.Since(info.ModTime()) > 5*time.Minute {
+			if os.Remove(f) == nil {
+				removed++
+			}
+		}
+	}
+	if removed > 0 {
+		log.Printf("startup: %d fichier(s) temp NetCDF orphelin(s) supprimé(s)", removed)
+	}
 }
 
 func loadDotenv(path string) error {

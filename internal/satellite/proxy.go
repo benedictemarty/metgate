@@ -8,6 +8,7 @@
 package satellite
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -18,6 +19,10 @@ import (
 	"sync"
 	"time"
 )
+
+// tileTimeout : délai max pour obtenir une tuile EUMETView. Doit être
+// inférieur au proxy_read_timeout nginx pour que Go réponde avant nginx.
+const tileTimeout = 4 * time.Second
 
 // transparentPNG est un PNG 1×1 entièrement transparent (RGBA).
 // Servi à la place d'un 502 quand EUMETView renvoie hors-couverture ou erreur
@@ -121,9 +126,22 @@ func (p *Proxy) HandleTile(w http.ResponseWriter, r *http.Request) {
 		wmsQ.Set("time", timeParam)
 	}
 
-	resp, err := p.httpClient.Get(wmsURL + "?" + wmsQ.Encode())
+	// Timeout court (< proxy_read_timeout nginx) : si EUMETView est lent,
+	// on renvoie une tuile transparente plutôt que de laisser nginx couper.
+	tileCtx, tileCancel := context.WithTimeout(context.Background(), tileTimeout)
+	defer tileCancel()
+	req, err := http.NewRequestWithContext(tileCtx, http.MethodGet, wmsURL+"?"+wmsQ.Encode(), nil)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(transparentPNG)
+		return
+	}
+	resp, err := p.httpClient.Do(req)
+	if err != nil {
+		// Timeout ou erreur réseau → tuile transparente (pas de 502 vers nginx)
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("X-Cache", "MISS")
+		_, _ = w.Write(transparentPNG)
 		return
 	}
 	defer resp.Body.Close() //nolint:errcheck
