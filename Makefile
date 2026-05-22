@@ -1,9 +1,10 @@
 .PHONY: run build test lint tidy clean web web-dev dev
 
 # Build complet : frontend puis binaire avec dist embarqué.
+# CGO_ENABLED=0 pour un binaire statique compatible LXC/Docker.
 build: web
 	mkdir -p bin
-	go build -o bin/portal ./cmd/portal
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/portal ./cmd/portal
 
 # Lance le serveur Go (utilise le dist déjà buildé dans internal/web/dist).
 run:
