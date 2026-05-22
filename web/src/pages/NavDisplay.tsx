@@ -301,9 +301,11 @@ function drawMiniMap(
   route: [number, number][] | null,
   ac: AcState | null,
   fir: GeoJSON.FeatureCollection | null,
+  countries: GeoJSON.FeatureCollection | null,
 ) {
   ctx.clearRect(0, 0, W, H)
-  ctx.fillStyle = '#010d1a'; ctx.fillRect(0, 0, W, H)
+  // Fond mer
+  ctx.fillStyle = '#000e1a'; ctx.fillRect(0, 0, W, H)
 
   if (!route || route.length < 2) {
     ctx.fillStyle = '#003311'; ctx.font = '11px monospace'
@@ -312,14 +314,14 @@ function drawMiniMap(
     return
   }
 
-  // Bounding box route + 15% marge
+  // Bounding box route + 20% marge
   let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity
   route.forEach(([lon, lat]) => {
     minLon = Math.min(minLon, lon); maxLon = Math.max(maxLon, lon)
     minLat = Math.min(minLat, lat); maxLat = Math.max(maxLat, lat)
   })
   const dLon = maxLon - minLon || 5; const dLat = maxLat - minLat || 5
-  const margin = 0.2
+  const margin = 0.22
   minLon -= dLon * margin; maxLon += dLon * margin
   minLat -= dLat * margin; maxLat += dLat * margin
   const scX = W / (maxLon - minLon); const scY = H / (maxLat - minLat)
@@ -331,7 +333,31 @@ function drawMiniMap(
     H - offY - (lat - minLat) * sc,
   ]
 
-  // FIR boundaries (fond)
+  // ── Pays — fond terrestre (Natural Earth 110m) ──
+  if (countries) {
+    countries.features.forEach(f => {
+      const g = f.geometry as GeoJSON.Geometry
+      if (!g) return
+      const polys = g.type === 'Polygon' ? [(g as GeoJSON.Polygon).coordinates]
+        : g.type === 'MultiPolygon' ? (g as GeoJSON.MultiPolygon).coordinates : []
+      polys.forEach(rings => {
+        ctx.beginPath()
+        rings.forEach((ring, ri) => {
+          ring.forEach(([lon, lat], i) => {
+            const [x, y] = toS(lon, lat)
+            if (i === 0 && ri === 0) ctx.moveTo(x, y)
+            else if (i === 0) ctx.moveTo(x, y)
+            else ctx.lineTo(x, y)
+          })
+          ctx.closePath()
+        })
+        ctx.fillStyle = '#0c1f10'; ctx.fill()
+        ctx.strokeStyle = '#1a3d1a'; ctx.lineWidth = 0.4; ctx.stroke()
+      })
+    })
+  }
+
+  // ── FIR boundaries (par-dessus les pays) ──
   if (fir) {
     fir.features.forEach(f => {
       const g = f.geometry as GeoJSON.Geometry
@@ -342,7 +368,8 @@ function drawMiniMap(
         ctx.beginPath()
         ring.forEach(([lon, lat], i) => { const [x, y] = toS(lon, lat); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y) })
         ctx.closePath()
-        ctx.strokeStyle = 'rgba(0,80,40,0.6)'; ctx.lineWidth = 0.5; ctx.stroke()
+        ctx.strokeStyle = 'rgba(0,100,50,0.5)'; ctx.lineWidth = 0.5
+        ctx.setLineDash([3, 3]); ctx.stroke(); ctx.setLineDash([])
       })
     })
   }
@@ -424,6 +451,7 @@ export default function NavDisplay() {
   const [sigmet, setSigmet]     = useState<GeoJSON.FeatureCollection | null>(null)
   const [route, setRoute]       = useState<[number, number][] | null>(null)
   const [fir, setFir]           = useState<GeoJSON.FeatureCollection | null>(null)
+  const [countries, setCountries] = useState<GeoJSON.FeatureCollection | null>(null)
   const [dep, setDep]           = useState('LFPG')
   const [arr, setArr]           = useState('LFMN')
   const [fl, setFl]             = useState(350)
@@ -472,9 +500,10 @@ export default function NavDisplay() {
     if (r1) setRdt(r1); if (r2) setSigmet(r2)
   }, [])
 
-  // Fetch FIR (mini-carte)
+  // Fetch FIR + pays (mini-carte) — une seule fois au montage
   useEffect(() => {
     fetch('/api/fir').then(r => r.ok ? r.json() : null).then(d => { if (d) setFir(d) }).catch(() => {})
+    fetch('/api/geo/countries').then(r => r.ok ? r.json() : null).then(d => { if (d) setCountries(d) }).catch(() => {})
   }, [])
 
   useEffect(() => { fetchWx() }, [fetchWx])
@@ -606,8 +635,8 @@ export default function NavDisplay() {
   useEffect(() => {
     const canvas = miniRef.current; if (!canvas) return
     const ctx = canvas.getContext('2d'); if (!ctx) return
-    drawMiniMap(ctx, canvas.width, canvas.height, route, ac, fir)
-  }, [route, ac, fir])
+    drawMiniMap(ctx, canvas.width, canvas.height, route, ac, fir, countries)
+  }, [route, ac, fir, countries])
 
   // Boucle RAF
   useEffect(() => {

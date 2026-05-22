@@ -13,6 +13,7 @@ import (
 	"github.com/bmarty/metgate/internal/catalog"
 	"github.com/bmarty/metgate/internal/cloudtop"
 	"github.com/bmarty/metgate/internal/fir"
+	"github.com/bmarty/metgate/internal/geo"
 	"github.com/bmarty/metgate/internal/lightning"
 	"github.com/bmarty/metgate/internal/satellite"
 	"github.com/bmarty/metgate/internal/web"
@@ -53,6 +54,7 @@ func (a *API) Routes() *http.ServeMux {
 	m.HandleFunc("GET /api/airport/{icao}", a.handleAirport)
 	m.HandleFunc("GET /api/airports/search", a.handleAirportsSearch)
 	m.HandleFunc("GET /api/fir", a.handleFIR)
+	m.HandleFunc("GET /api/geo/countries", a.handleGeoCountries)
 	m.HandleFunc("GET /api/openapi.yaml", a.handleOpenAPI)
 	m.HandleFunc("GET /api/docs", a.handleDocs)
 	m.Handle("GET /", web.Handler())
@@ -709,5 +711,12 @@ func (a *API) handleFIR(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/geo+json")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.Write(fir.WorldGeoJSON) //nolint:errcheck
+}
+
+// handleGeoCountries sert les polygones pays (Natural Earth 110m, GeoJSON embarqué).
+func (a *API) handleGeoCountries(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/geo+json")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.Write(geo.CountriesGeoJSON) //nolint:errcheck
 }
 
