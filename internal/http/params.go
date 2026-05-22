@@ -7,6 +7,24 @@ import (
 	"strings"
 )
 
+// clampBBox réduit la bbox à maxLonSpan × maxLatSpan degrés centrée sur son
+// milieu. Évite des requêtes WCS trop larges → NetCDF gigantesque / timeout.
+func clampBBox(bb [4]float64, maxLonSpan, maxLatSpan float64) [4]float64 {
+	midLon := (bb[0] + bb[2]) / 2
+	midLat := (bb[1] + bb[3]) / 2
+	half := maxLonSpan / 2
+	if bb[2]-bb[0] > maxLonSpan {
+		bb[0] = midLon - half
+		bb[2] = midLon + half
+	}
+	half = maxLatSpan / 2
+	if bb[3]-bb[1] > maxLatSpan {
+		bb[1] = midLat - half
+		bb[3] = midLat + half
+	}
+	return bb
+}
+
 // parseIntParam lit un entier depuis ?name=. Si la query est vide, retourne
 // def. Si la valeur est non vide mais invalide ou hors [min, max], écrit
 // 400 sur w et retourne ok=false : le caller doit return immédiatement.

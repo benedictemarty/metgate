@@ -49,9 +49,10 @@ deploy: build
 	scp -P $(PROXMOX_PORT) -o StrictHostKeyChecking=no bin/portal $(PROXMOX_SSH):/tmp/portal_new
 	@echo "→ Injection via rootfs (évite la corruption pct push)…"
 	ssh -p $(PROXMOX_PORT) -o StrictHostKeyChecking=no $(PROXMOX_SSH) \
-	  "pct mount $(LXC_ID) && \
+	  "pct exec $(LXC_ID) -- systemctl stop metgate ; \
+	   pct mount $(LXC_ID) && \
 	   cp /tmp/portal_new /var/lib/lxc/$(LXC_ID)/rootfs$(LXC_DEST) && \
 	   chmod +x /var/lib/lxc/$(LXC_ID)/rootfs$(LXC_DEST) && \
 	   pct unmount $(LXC_ID) && \
-	   pct exec $(LXC_ID) -- systemctl restart metgate && \
+	   pct exec $(LXC_ID) -- systemctl start metgate && \
 	   sleep 3 && pct exec $(LXC_ID) -- systemctl is-active metgate"

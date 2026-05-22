@@ -85,7 +85,9 @@ func (s *Service) QvacisGrid(
 	q.Add("subset", fmt.Sprintf("longitude(%g,%g)", bbox[0], bbox[2]))
 	q.Add("subset", fmt.Sprintf("latitude(%g,%g)", bbox[1], bbox[3]))
 
-	resp, err := s.fetchCached(ctx, "/broker_service/WCS", q)
+	wcsCtx, wcsCancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer wcsCancel()
+	resp, err := s.fetchCached(wcsCtx, "/broker_service/WCS", q)
 	if err != nil {
 		return nil, err
 	}

@@ -111,6 +111,8 @@ func (a *API) handleWind(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Limiter à 80°×60° max pour éviter des NetCDF trop volumineux.
+	bbox = clampBBox(bbox, 80, 60)
 	level, ok := parseFloatParam(w, r, "level", 85000)
 	if !ok {
 		return
@@ -136,6 +138,7 @@ func (a *API) handleTropo(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	bbox = clampBBox(bbox, 80, 60)
 	grid, err := a.catalog.TropoGrid(r.Context(), bbox)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
