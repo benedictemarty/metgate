@@ -1,16 +1,13 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
-import { Cloud, CloudLightning, FileText, Globe, Loader2, Map as MapIcon, Moon, Sun, TrendingUp, BookOpen } from 'lucide-react'
+import { Cloud, FileText, Globe, Loader2, Map as MapIcon, Moon, Sun, TrendingUp, BookOpen } from 'lucide-react'
 import Catalog from './pages/Catalog'
 import type { Aggregate } from './types'
 
-// La page Carte embarque MapLibre (~1 MB de JS), Tour 3D embarque Three.js
-// (~600 KB) ; on les lazy-load pour ne payer le coût qu'au premier passage.
 const MapView = lazy(() => import('./pages/MapView'))
 const TowerGlobe = lazy(() => import('./pages/TowerGlobe'))
 const RouteProfile = lazy(() => import('./pages/RouteProfile'))
-const StormCinema = lazy(() => import('./pages/StormCinema'))
 
-type View = 'catalog' | 'map' | 'tower' | 'profile' | 'storm'
+type View = 'catalog' | 'map' | 'tower' | 'profile'
 
 export type Theme = 'dark' | 'light'
 
@@ -49,9 +46,7 @@ export default function App() {
     }
   }
 
-  useEffect(() => {
-    load()
-  }, [])
+  useEffect(() => { load() }, [])
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-sky-950 text-slate-100">
@@ -75,48 +70,21 @@ export default function App() {
             >
               {theme === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
             </button>
-          <nav className="flex items-center gap-1 p-1 rounded-lg border border-slate-800 bg-slate-900/40">
-            <NavButton
-              active={view === 'catalog'}
-              onClick={() => setView('catalog')}
-              icon={FileText}
-              label="Catalogue"
-            />
-            <NavButton
-              active={view === 'map'}
-              onClick={() => setView('map')}
-              icon={MapIcon}
-              label="Carte"
-            />
-            <NavButton
-              active={view === 'tower'}
-              onClick={() => setView('tower')}
-              icon={Globe}
-              label="Tour 3D"
-            />
-            <NavButton
-              active={view === 'profile'}
-              onClick={() => setView('profile')}
-              icon={TrendingUp}
-              label="Profil"
-            />
-            <NavButton
-              active={view === 'storm'}
-              onClick={() => setView('storm')}
-              icon={CloudLightning}
-              label="Storm"
-              highlight
-            />
-          </nav>
-          <a
-            href="/api/docs"
-            target="_blank"
-            rel="noopener noreferrer"
-            title="Documentation API (OpenAPI / Swagger)"
-            className="size-8 rounded-lg border border-slate-800 bg-slate-900/40 flex items-center justify-center text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition"
-          >
-            <BookOpen className="size-4" />
-          </a>
+            <nav className="flex items-center gap-1 p-1 rounded-lg border border-slate-800 bg-slate-900/40">
+              <NavButton active={view === 'catalog'} onClick={() => setView('catalog')} icon={FileText}   label="Catalogue" />
+              <NavButton active={view === 'map'}     onClick={() => setView('map')}     icon={MapIcon}    label="Carte" />
+              <NavButton active={view === 'tower'}   onClick={() => setView('tower')}   icon={Globe}      label="Tour 3D" />
+              <NavButton active={view === 'profile'} onClick={() => setView('profile')} icon={TrendingUp} label="Profil" />
+            </nav>
+            <a
+              href="/api/docs"
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Documentation API (OpenAPI / Swagger)"
+              className="size-8 rounded-lg border border-slate-800 bg-slate-900/40 flex items-center justify-center text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition"
+            >
+              <BookOpen className="size-4" />
+            </a>
           </div>
         </div>
       </header>
@@ -125,49 +93,28 @@ export default function App() {
         <Catalog data={data} loading={loading} error={error} onRefresh={load} />
       )}
       {view === 'map' && (
-        <Suspense
-          fallback={
-            <div className="flex items-center justify-center py-32 text-slate-500">
-              <Loader2 className="size-7 animate-spin" />
-            </div>
-          }
-        >
+        <Suspense fallback={<Spinner />}>
           <MapView data={data} theme={theme} />
         </Suspense>
       )}
       {view === 'tower' && (
-        <Suspense
-          fallback={
-            <div className="flex items-center justify-center py-32 text-slate-500">
-              <Loader2 className="size-7 animate-spin" />
-            </div>
-          }
-        >
+        <Suspense fallback={<Spinner />}>
           <TowerGlobe />
         </Suspense>
       )}
       {view === 'profile' && (
-        <Suspense
-          fallback={
-            <div className="flex items-center justify-center py-32 text-slate-500">
-              <Loader2 className="size-7 animate-spin" />
-            </div>
-          }
-        >
+        <Suspense fallback={<Spinner />}>
           <RouteProfile />
         </Suspense>
       )}
-      {view === 'storm' && (
-        <Suspense
-          fallback={
-            <div className="flex items-center justify-center py-32 text-slate-500">
-              <Loader2 className="size-7 animate-spin" />
-            </div>
-          }
-        >
-          <StormCinema />
-        </Suspense>
-      )}
+    </div>
+  )
+}
+
+function Spinner() {
+  return (
+    <div className="flex items-center justify-center py-32 text-slate-500">
+      <Loader2 className="size-7 animate-spin" />
     </div>
   )
 }
@@ -177,21 +124,14 @@ interface NavButtonProps {
   onClick: () => void
   icon: React.ComponentType<{ className?: string }>
   label: string
-  highlight?: boolean
 }
 
-function NavButton({ active, onClick, icon: Icon, label, highlight }: NavButtonProps) {
+function NavButton({ active, onClick, icon: Icon, label }: NavButtonProps) {
   return (
     <button
       onClick={onClick}
       className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm transition ${
-        active
-          ? highlight
-            ? 'bg-pink-500/20 text-pink-200 shadow-[0_0_12px_rgba(236,72,153,0.3)]'
-            : 'bg-slate-800 text-slate-100 shadow-sm'
-          : highlight
-            ? 'text-pink-400 hover:text-pink-200 hover:bg-pink-500/10'
-            : 'text-slate-400 hover:text-slate-200'
+        active ? 'bg-slate-800 text-slate-100 shadow-sm' : 'text-slate-400 hover:text-slate-200'
       }`}
     >
       <Icon className="size-4" />
