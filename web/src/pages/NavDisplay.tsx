@@ -355,9 +355,11 @@ export default function NavDisplay() {
   const canvasRef    = useRef<HTMLCanvasElement>(null)
   const miniRef      = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const miniContRef  = useRef<HTMLDivElement>(null)
   const rafRef       = useRef(0)
   const t0Ref        = useRef(performance.now())
   const sizeRef      = useRef(500)
+  const [radarSize, setRadarSize] = useState(500)
 
   // Refs pour la boucle RAF (évite les re-renders)
   const acRef        = useRef<AcState | null>(null)
@@ -383,6 +385,9 @@ export default function NavDisplay() {
   const [arr, setArr]           = useState('LFMN')
   const [fl, setFl]             = useState(350)
   const [status, setStatus]     = useState('Charger une route ou rechercher un vol')
+  const [suggestions, setSuggestions] = useState<{icao24:string;callsign:string;lat:number;lon:number;alt:number;hdg:number;spd:number}[]>([])
+  const [showSug, setShowSug]   = useState(false)
+  const sugTimerRef             = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [playing, setPlaying]   = useState(false)
   const [speedIdx, setSpeedIdx] = useState(0)
   const [progress, setProgress] = useState(0)  // 0..1 pour le slider UI
@@ -432,32 +437,84 @@ export default function NavDisplay() {
     finally { setLoading(false) }
   }, [dep, arr, fl])
 
-  // Mode REAL
+  // Mode REAL — chargement d'un vol sélectionné
+  const loadFlight = useCallback(async (icao24: string, cs: string) => {
+    setSearching(true); setShowSug(false); setSearchQ(cs); setStatus(`Chargement ${cs}…`)
+    try {
+      const [stateR, planR] = await Promise.all([
+        fetch(`/api/aircraft/${icao24}`).then(r => r.ok ? r.json() : null),
+        fetch(`/api/aircraft/${icao24}/route`).then(r => r.ok ? r.json() : null),
+      ])
+      const st = stateR
+      const wps: [number, number][] = (planR?.waypoints ?? []).map((w: { lon: number; lat: number }) => [w.lon, w.lat])
+      setRoute(wps.length > 0 ? wps : null)
+      if (st) {
+        const a: AcState = { lat: st.lat, lon: st.lon, alt: st.altitude ?? 0, hdg: st.true_track ?? 0, spd: st.velocity ?? 0, callsign: st.callsign?.trim() ?? icao24, icao24 }
+        setAc(a); acRef.current = a
+      }
+      progressRef.current = 0; setProgress(0)
+      setStatus(`${cs}  Live ADS-B`)
+    } catch { setStatus('Erreur réseau') }
+    finally { setSearching(false) }
+  }, [])
+
+  // Recherche pour suggestions (debounce 350 ms)
+  const handleSearchInput = useCallback((v: string) => {
+    setSearchQ(v)
+    if (sugTimerRef.current) clearTimeout(sugTimerRef.current)
+    if (v.trim().length < 2) { setSuggestions([]); setShowSug(false); return }
+    sugTimerRef.current = setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/aircraft/search?cs=${encodeURIComponent(v.trim())}`)
+        const d = await r.json()
+        const states = (d.states ?? []).slice(0, 8).map((s: Record<string, unknown>) => ({
+          icao24: s.icao24 as string,
+          callsign: ((s.callsign as string) ?? '').trim() || (s.icao24 as string),
+          lat: s.lat as number,
+          lon: s.lon as number,
+          alt: (s.altitude as number) ?? 0,
+          hdg: (s.true_track as number) ?? 0,
+          spd: (s.velocity as number) ?? 0,
+        })).filter((s: {callsign:string}) => s.callsign)
+        setSuggestions(states); setShowSug(states.length > 0)
+      } catch { setSuggestions([]); setShowSug(false) }
+    }, 350)
+  }, [])
+
+  // Fallback search (touche Entrée sans sélection)
   const search = useCallback(async () => {
     if (!searchQ.trim()) return
-    setSearching(true); setStatus(`Recherche ${searchQ}…`)
+    setSearching(true); setShowSug(false); setStatus(`Recherche ${searchQ}…`)
     try {
       const r = await fetch(`/api/aircraft/search?cs=${encodeURIComponent(searchQ.trim())}`)
       const d = await r.json()
       const st = d.states?.[0]
       if (!st) { setStatus('Vol non trouvé'); return }
-      const plan = await fetch(`/api/aircraft/${st.icao24}/route`).then(r => r.ok ? r.json() : null)
-      const wps: [number, number][] = (plan?.waypoints ?? []).map((w: { lon: number; lat: number }) => [w.lon, w.lat])
-      setRoute(wps.length > 0 ? wps : null)
-      const a: AcState = { lat: st.lat, lon: st.lon, alt: st.altitude ?? 0, hdg: st.true_track ?? 0, spd: st.velocity ?? 0, callsign: st.callsign?.trim() ?? st.icao24, icao24: st.icao24 }
-      setAc(a); acRef.current = a; progressRef.current = 0; setProgress(0)
-      setStatus(`${a.callsign}  Live ADS-B`)
+      await loadFlight(st.icao24, (st.callsign?.trim() || st.icao24) as string)
     } catch { setStatus('Erreur réseau') }
     finally { setSearching(false) }
-  }, [searchQ])
+  }, [searchQ, loadFlight])
 
-  // Resize canvas radar
+  // Resize canvas radar — utilise un state pour forcer le re-render du wrapper
   useEffect(() => {
     const canvas = canvasRef.current; const cont = containerRef.current
     if (!canvas || !cont) return
     const resize = () => {
       const s = Math.min(cont.clientWidth, cont.clientHeight) - 16
-      if (s > 0) { canvas.width = s; canvas.height = s; sizeRef.current = s }
+      if (s > 60) { canvas.width = s; canvas.height = s; sizeRef.current = s; setRadarSize(s) }
+    }
+    resize(); const ro = new ResizeObserver(resize); ro.observe(cont)
+    return () => ro.disconnect()
+  }, [])
+
+  // Resize mini-map canvas
+  useEffect(() => {
+    const cont = miniContRef.current; if (!cont) return
+    const resize = () => {
+      const w = cont.clientWidth; if (w <= 0) return
+      const h = Math.round(w * 0.68)
+      const canvas = miniRef.current
+      if (canvas) { canvas.width = w; canvas.height = h }
     }
     resize(); const ro = new ResizeObserver(resize); ro.observe(cont)
     return () => ro.disconnect()
@@ -519,12 +576,14 @@ export default function NavDisplay() {
     <div className="flex h-[calc(100vh-72px)] bg-[#020a04] text-slate-200 overflow-hidden">
 
       {/* ─── Panneau de contrôle ─── */}
-      <div className="w-64 shrink-0 border-r border-[#003311]/80 flex flex-col gap-3 p-3 overflow-y-auto bg-[#010801]">
+      <div className="w-56 shrink-0 border-r border-[#003311]/80 flex flex-col gap-3 p-3 overflow-y-auto bg-[#010801]">
 
         {/* Mini-carte */}
         <div>
           <div className="text-[0.5rem] uppercase tracking-widest text-[#006622] mb-1.5 font-mono">POSITION</div>
-          <canvas ref={miniRef} width={220} height={160} className="block w-full rounded" style={{ imageRendering: 'pixelated' }} />
+          <div ref={miniContRef} className="w-full">
+            <canvas ref={miniRef} className="block rounded" style={{ imageRendering: 'pixelated' }} />
+          </div>
         </div>
 
         <div>
@@ -577,14 +636,40 @@ export default function NavDisplay() {
         {mode === 'real' && (
           <div className="flex flex-col gap-1.5">
             <div className="text-[0.5rem] uppercase tracking-widest text-[#006622] font-mono">CALLSIGN</div>
-            <div className="flex gap-1.5">
-              <input value={searchQ} onChange={e=>setSearchQ(e.target.value.toUpperCase())}
-                onKeyDown={e=>e.key==='Enter'&&search()} placeholder="AFR123"
-                className="flex-1 px-2 py-1.5 bg-[#010a03] border border-[#004411] rounded font-mono text-[#00ff88] text-xs focus:outline-none focus:border-[#00aa44] placeholder-[#004411]"/>
-              <button onClick={search} disabled={searching}
-                className="px-2 border border-[#005522] bg-[#011a08] text-[#00ff88] rounded hover:bg-[#003311] transition disabled:opacity-40">
-                {searching ? <Loader2 className="size-4 animate-spin"/> : <Search className="size-4"/>}
-              </button>
+            <div className="relative">
+              <div className="flex gap-1.5">
+                <input
+                  value={searchQ}
+                  onChange={e => handleSearchInput(e.target.value.toUpperCase())}
+                  onKeyDown={e => { if (e.key === 'Enter') search(); if (e.key === 'Escape') setShowSug(false) }}
+                  onFocus={() => suggestions.length > 0 && setShowSug(true)}
+                  onBlur={() => setTimeout(() => setShowSug(false), 150)}
+                  placeholder="AFR123"
+                  className="flex-1 px-2 py-1.5 bg-[#010a03] border border-[#004411] rounded font-mono text-[#00ff88] text-xs focus:outline-none focus:border-[#00aa44] placeholder-[#004411]"
+                />
+                <button onClick={search} disabled={searching}
+                  className="px-2 border border-[#005522] bg-[#011a08] text-[#00ff88] rounded hover:bg-[#003311] transition disabled:opacity-40">
+                  {searching ? <Loader2 className="size-4 animate-spin"/> : <Search className="size-4"/>}
+                </button>
+              </div>
+              {/* Dropdown suggestions */}
+              {showSug && suggestions.length > 0 && (
+                <div className="absolute top-full left-0 right-0 z-50 mt-0.5 rounded border border-[#005522] bg-[#010d04] shadow-lg overflow-hidden">
+                  {suggestions.map(s => (
+                    <button
+                      key={s.icao24}
+                      onMouseDown={() => loadFlight(s.icao24, s.callsign)}
+                      className="w-full text-left px-2 py-1.5 flex items-center gap-2 hover:bg-[#003311] transition"
+                    >
+                      <span className="text-[#00ff88] font-mono font-bold text-xs w-16 truncate">{s.callsign}</span>
+                      <span className="text-[#006622] font-mono text-[0.45rem] leading-tight">
+                        FL{Math.round((s.alt || 0) / 100).toString().padStart(3,'0')}<br/>
+                        {Math.round(s.spd || 0)}kt
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -606,10 +691,10 @@ export default function NavDisplay() {
       </div>
 
       {/* ─── Radar + timeline ─── */}
-      <div className="flex-1 flex flex-col bg-[#020a04]">
-        {/* Radar */}
-        <div ref={containerRef} className="flex-1 flex items-center justify-center p-3">
-          <div className="relative" style={{width: sizeRef.current || 500, height: sizeRef.current || 500}}>
+      <div className="flex-1 flex flex-col bg-[#020a04] min-h-0">
+        {/* Radar — flex-1 min-h-0 pour qu'il cède de la place à la timeline */}
+        <div ref={containerRef} className="flex-1 flex items-center justify-center p-2 min-h-0 overflow-hidden">
+          <div className="relative" style={{width: radarSize, height: radarSize, flexShrink: 0}}>
             <canvas ref={canvasRef} className="block" style={{borderRadius:'50%', boxShadow:'0 0 60px rgba(0,200,60,0.18),0 0 120px rgba(0,80,20,0.12)'}}/>
             {ac && (
               <div className="absolute top-2 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full border border-[#00ff88]/40 bg-[#010a03]/90 text-[#00ff88] text-[0.6rem] font-mono font-bold tracking-widest whitespace-nowrap">
