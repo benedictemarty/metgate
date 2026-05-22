@@ -4,9 +4,11 @@ import { Loader2, Pause, Play, Radar, Search } from 'lucide-react'
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface AcState {
-  lat: number; lon: number; alt: number
-  hdg: number; spd: number
+  lat: number; lon: number; alt: number   // alt en pieds (baro_alt_ft)
+  hdg: number; spd: number                // hdg en °, spd en kt
+  vertRateFpm?: number                    // taux vertical en ft/min
   callsign: string; icao24: string
+  onGround?: boolean
 }
 
 // ─── Couleurs ICAO radar météo ────────────────────────────────────────────────
@@ -543,12 +545,14 @@ export default function NavDisplay() {
         if (!st || st.found === false) return
         const prev = acRef.current
         const a: AcState = {
-          lat: st.lat ?? prev?.lat ?? 0,
-          lon: st.lon ?? prev?.lon ?? 0,
-          alt: st.altitude ?? prev?.alt ?? 0,
-          hdg: st.true_track ?? prev?.hdg ?? 0,
-          spd: st.velocity ?? prev?.spd ?? 0,
-          callsign: prev?.callsign ?? st.icao24,
+          lat:         st.lat             ?? prev?.lat ?? 0,
+          lon:         st.lon             ?? prev?.lon ?? 0,
+          alt:         st.baro_alt_ft     ?? prev?.alt ?? 0,
+          hdg:         st.true_track_deg  ?? prev?.hdg ?? 0,
+          spd:         st.gs_kt           ?? prev?.spd ?? 0,
+          vertRateFpm: st.vertical_rate_ms != null ? Math.round(st.vertical_rate_ms * 196.85) : prev?.vertRateFpm,
+          onGround:    st.on_ground       ?? false,
+          callsign:    prev?.callsign     ?? st.icao24,
           icao24,
         }
         acRef.current = a; setAc(a); setLastUpdate(new Date())
@@ -607,10 +611,10 @@ export default function NavDisplay() {
         let d = 0
         for (let i = 1; i < wps.length; i++) d += distNM(wps[i-1][1], wps[i-1][0], wps[i][1], wps[i][0])
         routeLoadTimeRef.current = Date.now()
-        totalDurationMsRef.current = (d / (st?.velocity ?? 460)) * 3_600_000
+        totalDurationMsRef.current = (d / (st?.gs_kt ?? 460)) * 3_600_000
       }
       if (st) {
-        const a: AcState = { lat: st.lat, lon: st.lon, alt: st.altitude ?? 0, hdg: st.true_track ?? 0, spd: st.velocity ?? 0, callsign: st.callsign?.trim() ?? icao24, icao24 }
+        const a: AcState = { lat: st.lat, lon: st.lon, alt: st.baro_alt_ft ?? 0, hdg: st.true_track_deg ?? 0, spd: st.gs_kt ?? 0, vertRateFpm: st.vertical_rate_ms != null ? Math.round(st.vertical_rate_ms * 196.85) : undefined, onGround: st.on_ground ?? false, callsign: st.callsign?.trim() ?? icao24, icao24 }
         setAc(a); acRef.current = a
       }
       progressRef.current = 0; setProgress(0)
@@ -633,9 +637,9 @@ export default function NavDisplay() {
           callsign: ((s.callsign as string) ?? '').trim() || (s.icao24 as string),
           lat: s.lat as number,
           lon: s.lon as number,
-          alt: (s.altitude as number) ?? 0,
-          hdg: (s.true_track as number) ?? 0,
-          spd: (s.velocity as number) ?? 0,
+          alt: (s.baro_alt_ft as number) ?? 0,
+          hdg: (s.true_track_deg as number) ?? 0,
+          spd: (s.gs_kt as number) ?? 0,
         })).filter((s: {callsign:string}) => s.callsign)
         setSuggestions(states); setShowSug(states.length > 0)
       } catch { setSuggestions([]); setShowSug(false) }
@@ -1004,11 +1008,12 @@ export default function NavDisplay() {
             {ac ? (
               <div className="flex gap-4 flex-wrap">
                 {([
-                  ['FL',  String(Math.round(ac.alt / 100)).padStart(3, '0')],
-                  ['GS',  `${Math.round(ac.spd)} kt`],
-                  ['TRK', `${String(Math.round(ac.hdg % 360)).padStart(3, '0')}°`],
-                  ['LAT', ac.lat.toFixed(4) + '°'],
-                  ['LON', ac.lon.toFixed(4) + '°'],
+                  ['FL',    ac.onGround ? 'SOL' : String(Math.round(ac.alt / 100)).padStart(3, '0')],
+                  ['GS',    ac.spd > 0  ? `${Math.round(ac.spd)} kt` : '---'],
+                  ['TRK',   !ac.onGround && ac.hdg ? `${String(Math.round(ac.hdg % 360)).padStart(3, '0')}°` : '---'],
+                  ['V/S',   ac.vertRateFpm != null && !ac.onGround ? `${ac.vertRateFpm > 0 ? '+' : ''}${ac.vertRateFpm} fpm` : '---'],
+                  ['LAT',   ac.lat.toFixed(4) + '°'],
+                  ['LON',   ac.lon.toFixed(4) + '°'],
                 ] as [string,string][]).map(([lbl, val]) => (
                   <div key={lbl} className="flex flex-col items-center">
                     <span className="text-[0.42rem] font-mono text-[#005522] uppercase tracking-widest">{lbl}</span>
