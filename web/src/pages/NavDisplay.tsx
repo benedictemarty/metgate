@@ -483,6 +483,7 @@ export default function NavDisplay() {
   const [speedIdx, setSpeedIdx] = useState(0)
   const [progress, setProgress] = useState(0)
   const [tooltip, setTooltip]   = useState<{x:number;y:number;lines:string[]} | null>(null)
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
 
   const rangeNM = RANGES[rangeIdx]
 
@@ -528,6 +529,35 @@ export default function NavDisplay() {
 
   useEffect(() => { fetchWx() }, [fetchWx])
   useEffect(() => { const id = setInterval(fetchWx, 5 * 60_000); return () => clearInterval(id) }, [fetchWx])
+
+  // Polling ADS-B en mode LIVE (toutes les 15 s)
+  useEffect(() => {
+    if (mode !== 'real') return
+    const icao24 = acRef.current?.icao24
+    if (!icao24 || icao24 === 'sim') return
+    const poll = async () => {
+      try {
+        const r = await fetch(`/api/aircraft/${icao24}`)
+        if (!r.ok) return
+        const st = await r.json()
+        if (!st || st.found === false) return
+        const prev = acRef.current
+        const a: AcState = {
+          lat: st.lat ?? prev?.lat ?? 0,
+          lon: st.lon ?? prev?.lon ?? 0,
+          alt: st.altitude ?? prev?.alt ?? 0,
+          hdg: st.true_track ?? prev?.hdg ?? 0,
+          spd: st.velocity ?? prev?.spd ?? 0,
+          callsign: prev?.callsign ?? st.icao24,
+          icao24,
+        }
+        acRef.current = a; setAc(a); setLastUpdate(new Date())
+      } catch { /* best-effort */ }
+    }
+    poll() // premier appel immédiat
+    const id = setInterval(poll, 15_000)
+    return () => clearInterval(id)
+  }, [mode, ac?.icao24]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Mode SIM
   const loadSim = useCallback(async () => {
@@ -962,63 +992,97 @@ export default function NavDisplay() {
           </div>
         </div>
 
-        {/* Timeline */}
-        <div className="shrink-0 border-t border-[#003311]/60 bg-[#010a03] px-4 py-2.5 flex items-center gap-3">
-          {/* Play/Pause */}
-          <button
-            onClick={() => { setPlaying(p => !p) }}
-            disabled={!route}
-            className="size-8 rounded border border-[#005522] bg-[#011a08] text-[#00ff88] flex items-center justify-center hover:bg-[#003311] transition disabled:opacity-30"
-          >
-            {playing ? <Pause className="size-4"/> : <Play className="size-4 translate-x-px"/>}
-          </button>
-
-          {/* Vitesse */}
-          <div className="flex gap-1">
-            {SPEEDS.map((s, i) => (
-              <button key={s} onClick={() => setSpeedIdx(i)}
-                className={`px-2 py-1 rounded text-[0.55rem] font-mono font-bold border transition ${speedIdx===i?'border-[#00ff88] text-[#00ff88] bg-[#003311]':'border-[#003311] text-[#005522] hover:text-[#00aa44]'}`}>
-                {s}×
-              </button>
-            ))}
-          </div>
-
-          {/* Slider */}
-          <input type="range" min={0} max={1000} value={Math.round(progress * 1000)}
-            onChange={e => {
-              const v = parseInt(e.target.value) / 1000
-              progressRef.current = v; setProgress(v)
-              if (routeRef.current) {
-                const newAc = interpolateRoute(routeRef.current, v)
-                if (newAc && acRef.current) {
-                  newAc.callsign = acRef.current.callsign; newAc.alt = acRef.current.alt; newAc.spd = acRef.current.spd; newAc.icao24 = acRef.current.icao24
-                  acRef.current = newAc; setAc(newAc)
-                }
-              }
-            }}
-            className="flex-1 accent-[#00cc44] h-1 cursor-pointer"
-            style={{ accentColor: '#00cc44' }}
-          />
-
-          {/* Temps + heure simulée */}
-          <div className="shrink-0 text-[0.55rem] font-mono text-[#006622] text-right">
-            {totalDistNM > 0 ? (() => {
-              const etaMs3 = (routeLoadTimeRef.current || Date.now()) + progress * (totalDurationMsRef.current || 7_200_000)
-              const d = new Date(etaMs3)
-              const hhmm = `${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')}Z`
-              return (
-                <>
-                  <div className="text-[#00ff88] font-bold">{hhmm}</div>
-                  <div>
-                    <span className="text-[#00aa44]">{fmtTime(elapsedNM)}</span>
-                    <span className="text-[#004411]"> / {fmtTime(totalDistNM)}</span>
+        {/* Barre inférieure : données LIVE en mode real, timeline en mode sim */}
+        {mode === 'real' ? (
+          <div className="shrink-0 border-t border-[#003311]/60 bg-[#010a03] px-4 py-2 flex items-center gap-4 flex-wrap">
+            {/* Indicateur LIVE */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className="size-2 rounded-full bg-red-500 animate-pulse block"/>
+              <span className="text-[#00ff88] font-mono font-bold text-[0.6rem] tracking-widest">LIVE ADS-B</span>
+            </div>
+            {/* Données avion */}
+            {ac ? (
+              <div className="flex gap-4 flex-wrap">
+                {([
+                  ['FL',  String(Math.round(ac.alt / 100)).padStart(3, '0')],
+                  ['GS',  `${Math.round(ac.spd)} kt`],
+                  ['TRK', `${String(Math.round(ac.hdg % 360)).padStart(3, '0')}°`],
+                  ['LAT', ac.lat.toFixed(4) + '°'],
+                  ['LON', ac.lon.toFixed(4) + '°'],
+                ] as [string,string][]).map(([lbl, val]) => (
+                  <div key={lbl} className="flex flex-col items-center">
+                    <span className="text-[0.42rem] font-mono text-[#005522] uppercase tracking-widest">{lbl}</span>
+                    <span className="text-[0.65rem] font-mono text-[#00ff88] font-bold tabular-nums">{val}</span>
                   </div>
-                  <div className="text-[#004411]">{Math.round(remainNM)} NM</div>
+                ))}
+              </div>
+            ) : (
+              <span className="text-[#004411] font-mono text-[0.55rem]">Rechercher un callsign →</span>
+            )}
+            {/* Heure dernière mise à jour */}
+            <div className="ml-auto text-right shrink-0">
+              {lastUpdate ? (
+                <>
+                  <div className="text-[0.42rem] font-mono text-[#004411] uppercase">Màj</div>
+                  <div className="text-[0.6rem] font-mono text-[#006622]">
+                    {String(lastUpdate.getUTCHours()).padStart(2,'0')}:{String(lastUpdate.getUTCMinutes()).padStart(2,'0')}:{String(lastUpdate.getUTCSeconds()).padStart(2,'0')}Z
+                  </div>
                 </>
-              )
-            })() : <span>—</span>}
+              ) : null}
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="shrink-0 border-t border-[#003311]/60 bg-[#010a03] px-4 py-2.5 flex items-center gap-3">
+            {/* Play/Pause */}
+            <button
+              onClick={() => { setPlaying(p => !p) }}
+              disabled={!route}
+              className="size-8 rounded border border-[#005522] bg-[#011a08] text-[#00ff88] flex items-center justify-center hover:bg-[#003311] transition disabled:opacity-30"
+            >
+              {playing ? <Pause className="size-4"/> : <Play className="size-4 translate-x-px"/>}
+            </button>
+            {/* Vitesse */}
+            <div className="flex gap-1">
+              {SPEEDS.map((s, i) => (
+                <button key={s} onClick={() => setSpeedIdx(i)}
+                  className={`px-2 py-1 rounded text-[0.55rem] font-mono font-bold border transition ${speedIdx===i?'border-[#00ff88] text-[#00ff88] bg-[#003311]':'border-[#003311] text-[#005522] hover:text-[#00aa44]'}`}>
+                  {s}×
+                </button>
+              ))}
+            </div>
+            {/* Slider */}
+            <input type="range" min={0} max={1000} value={Math.round(progress * 1000)}
+              onChange={e => {
+                const v = parseInt(e.target.value) / 1000
+                progressRef.current = v; setProgress(v)
+                if (routeRef.current) {
+                  const newAc = interpolateRoute(routeRef.current, v)
+                  if (newAc && acRef.current) {
+                    newAc.callsign = acRef.current.callsign; newAc.alt = acRef.current.alt; newAc.spd = acRef.current.spd; newAc.icao24 = acRef.current.icao24
+                    acRef.current = newAc; setAc(newAc)
+                  }
+                }
+              }}
+              className="flex-1 accent-[#00cc44] h-1 cursor-pointer"
+              style={{ accentColor: '#00cc44' }}
+            />
+            {/* Temps + heure simulée */}
+            <div className="shrink-0 text-[0.55rem] font-mono text-[#006622] text-right">
+              {totalDistNM > 0 ? (() => {
+                const etaMs3 = (routeLoadTimeRef.current || Date.now()) + progress * (totalDurationMsRef.current || 7_200_000)
+                const d = new Date(etaMs3)
+                const hhmm = `${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')}Z`
+                return (
+                  <>
+                    <div className="text-[#00ff88] font-bold">{hhmm}</div>
+                    <div><span className="text-[#00aa44]">{fmtTime(elapsedNM)}</span><span className="text-[#004411]"> / {fmtTime(totalDistNM)}</span></div>
+                    <div className="text-[#004411]">{Math.round(remainNM)} NM</div>
+                  </>
+                )
+              })() : <span>—</span>}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ─── Tooltip phénomène météo ─── */}
