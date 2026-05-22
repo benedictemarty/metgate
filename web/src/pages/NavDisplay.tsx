@@ -405,6 +405,10 @@ export default function NavDisplay() {
   const [dep, setDep]           = useState('LFPG')
   const [arr, setArr]           = useState('LFMN')
   const [fl, setFl]             = useState(350)
+  const [depTimeZ, setDepTimeZ] = useState(() => {
+    const n = new Date()
+    return `${String(n.getUTCHours()).padStart(2,'0')}:${String(n.getUTCMinutes()).padStart(2,'0')}`
+  })
   const [status, setStatus]     = useState('Charger une route ou rechercher un vol')
   const [suggestions, setSuggestions] = useState<{icao24:string;callsign:string;lat:number;lon:number;alt:number;hdg:number;spd:number}[]>([])
   const [showSug, setShowSug]   = useState(false)
@@ -464,10 +468,18 @@ export default function NavDisplay() {
       const wps: [number, number][] = (plan.waypoints ?? []).map((w: { lon: number; lat: number }) => [w.lon, w.lat])
       setRoute(wps); progressRef.current = 0; setProgress(0)
       if (wps.length >= 2) {
+        // Heure de départ UTC saisie → ms epoch
+        const [hh, mm] = depTimeZ.split(':').map(Number)
+        const depDate = new Date()
+        depDate.setUTCHours(hh, mm, 0, 0)
+        // Si l'heure est déjà passée de plus de 2h, c'est un départ demain
+        if (depDate.getTime() < Date.now() - 2 * 3_600_000) {
+          depDate.setUTCDate(depDate.getUTCDate() + 1)
+        }
         // Calculer durée totale pour l'alignement temporel des phénomènes
         let d = 0
         for (let i = 1; i < wps.length; i++) d += distNM(wps[i-1][1], wps[i-1][0], wps[i][1], wps[i][0])
-        routeLoadTimeRef.current = Date.now()
+        routeLoadTimeRef.current = depDate.getTime()
         totalDurationMsRef.current = (d / 460) * 3_600_000
         const [lon0, lat0] = wps[0]; const [lon1, lat1] = wps[1]
         const hdg = ((Math.atan2(lon1 - lon0, lat1 - lat0) * 180 / Math.PI) + 360) % 360
@@ -477,7 +489,7 @@ export default function NavDisplay() {
       }
     } catch (e) { setStatus('Erreur : ' + String(e)) }
     finally { setLoading(false) }
-  }, [dep, arr, fl])
+  }, [dep, arr, fl, depTimeZ])
 
   // Mode REAL — chargement d'un vol sélectionné
   const loadFlight = useCallback(async (icao24: string, cs: string) => {
@@ -705,6 +717,16 @@ export default function NavDisplay() {
               <span className="text-[0.5rem] font-mono text-[#006622] w-7">FL</span>
               <input type="number" value={fl} onChange={e=>setFl(parseInt(e.target.value)||350)}
                 className="flex-1 px-2 py-1 bg-[#010a03] border border-[#004411] rounded font-mono text-[#00ff88] text-xs focus:outline-none focus:border-[#00aa44]"/>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[0.5rem] font-mono text-[#006622] w-7">DEP</span>
+              <input
+                type="time"
+                value={depTimeZ}
+                onChange={e => setDepTimeZ(e.target.value)}
+                className="flex-1 px-2 py-1 bg-[#010a03] border border-[#004411] rounded font-mono text-[#00ff88] text-xs focus:outline-none focus:border-[#00aa44] [color-scheme:dark]"
+              />
+              <span className="text-[0.45rem] font-mono text-[#005522]">Z</span>
             </div>
             <button onClick={loadSim} disabled={loading}
               className="py-1.5 border border-[#005522] bg-[#011a08] text-[#00ff88] text-xs font-mono font-bold rounded hover:bg-[#003311] transition disabled:opacity-40 flex items-center justify-center gap-2">
