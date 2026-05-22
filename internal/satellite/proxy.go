@@ -8,6 +8,7 @@
 package satellite
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io"
 	"math"
@@ -17,6 +18,15 @@ import (
 	"sync"
 	"time"
 )
+
+// transparentPNG est un PNG 1×1 entièrement transparent (RGBA).
+// Servi à la place d'un 502 quand EUMETView renvoie hors-couverture ou erreur
+// non-critique, pour que MapLibre n'affiche pas d'AJAXError.
+var transparentPNG = func() []byte {
+	const b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+	b, _ := base64.StdEncoding.DecodeString(b64)
+	return b
+}()
 
 const (
 	wmsURL  = "https://view.eumetsat.int/geoserver/wms"
@@ -53,7 +63,7 @@ type cacheEntry struct {
 
 func NewProxy() *Proxy {
 	return &Proxy{
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: &http.Client{Timeout: 60 * time.Second},
 		cache:      map[string]cacheEntry{},
 	}
 }
@@ -123,7 +133,13 @@ func (p *Proxy) HandleTile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if resp.StatusCode != 200 {
-		http.Error(w, fmt.Sprintf("eumetview status %d", resp.StatusCode), http.StatusBadGateway)
+		// EUMETView renvoie non-200 pour les tuiles hors-couverture (404) ou
+		// en cas d'erreur service (503). On renvoie une tuile transparente
+		// plutôt qu'un 502 qui fait crasher MapLibre avec AJAXError.
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("X-Cache", "MISS")
+		w.Header().Set("X-Eumetview-Status", fmt.Sprintf("%d", resp.StatusCode))
+		_, _ = w.Write(transparentPNG)
 		return
 	}
 	p.toCache(cacheKey, body)

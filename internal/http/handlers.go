@@ -645,7 +645,9 @@ func (a *API) handleLightning(w http.ResponseWriter, r *http.Request) {
 	defer ltCancel()
 	flashes, fetchedAt, err := a.lightning.Latest(ltCtx, 60*time.Second)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		// 503 : service EUMETSAT indisponible (token expiré, produit absent…)
+		// 502 serait trompeur (ce n'est pas un problème de proxy réseau).
+		http.Error(w, "lightning indisponible : "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 
