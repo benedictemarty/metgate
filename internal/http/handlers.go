@@ -484,7 +484,13 @@ func (a *API) handleFeature(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	filter := r.URL.Query().Get("filter") // OGC FES 2.0 XML, optionnel
-	geo, fromCache, err := a.catalog.FeatureGeoJSON(r.Context(), typeName, count, filter)
+	// Contexte découplé du proxy/navigateur : les réponses WFS volumineuses
+	// (RDT_MSG_last count=2000 → ~1.6 MB) peuvent prendre plusieurs secondes.
+	// On utilise un contexte background pour que la réponse soit mise en cache
+	// même si le client s'est déconnecté entre-temps.
+	wfsCtx, wfsCancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer wfsCancel()
+	geo, fromCache, err := a.catalog.FeatureGeoJSON(wfsCtx, typeName, count, filter)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
