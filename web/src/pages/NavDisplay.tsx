@@ -109,10 +109,12 @@ function drawRadar(
   ac: AcState | null,
   rdt: GeoJSON.FeatureCollection | null,
   sigmet: GeoJSON.FeatureCollection | null,
+  lightning: GeoJSON.FeatureCollection | null,
   rangeNM: number,
-  tSec: number,             // secondes écoulées depuis t0 (pour le pulsing)
-  rdtStep: number,          // étape RDT calée sur l'ETA de l'avion (0/15/30/45/60)
-  etaISO: string,           // heure simulée à la position courante (pour HUD)
+  tSec: number,
+  rdtStep: number,
+  etaISO: string,
+  etaMs: number,            // ms epoch — pour filtrer les flashes par âge
 ) {
   const R   = size / 2 - 6
   const cx  = size / 2
@@ -247,6 +249,37 @@ function drawRadar(
   }
 
   // (trajet supprimé — hover sur les phénomènes pour les identifier)
+
+  // ── Flashes de foudre — fade temporel sur 10 min ──
+  if (lightning && lightning.features.length > 0) {
+    const maxAgeMs = 10 * 60_000  // 10 minutes = durée du produit MTG-LI
+    ctx.save(); ctx.translate(cx, cy)
+    lightning.features.forEach(f => {
+      const g = f.geometry as GeoJSON.Geometry
+      if (!g || g.type !== 'Point') return
+      const [lon, lat] = (g as GeoJSON.Point).coordinates
+      const pr = f.properties as Record<string, unknown>
+      const flashMs = pr?.time ? Date.parse(pr.time as string) : 0
+      if (!flashMs) return
+      // Âge par rapport à l'ETA (LIVE ≈ now, SIM ≈ ETA calculée)
+      const ageMs = etaMs - flashMs
+      if (ageMs < 0 || ageMs > maxAgeMs) return
+      const freshness = 1 - ageMs / maxAgeMs  // 1 = tout frais, 0 = vieux
+      const [px, py] = p(lat, lon)
+      const r2 = Math.max(1.5, 3 * freshness)
+      // Couleur : blanc → jaune → orange → rouge selon ancienneté
+      const hue = Math.round(60 * freshness)   // 60=jaune (neuf) → 0=rouge (vieux)
+      const alpha = 0.3 + freshness * 0.7
+      ctx.beginPath(); ctx.arc(px, py, r2, 0, Math.PI * 2)
+      ctx.fillStyle = `hsla(${hue},100%,80%,${alpha})`
+      // Halo lumineux sur les flashes récents (< 2 min)
+      if (ageMs < 120_000) {
+        ctx.shadowBlur = 6 + freshness * 10; ctx.shadowColor = `hsl(${hue},100%,90%)`
+      }
+      ctx.fill(); ctx.shadowBlur = 0
+    })
+    ctx.restore()
+  }
 
   ctx.restore()  // fin clip
 
@@ -454,9 +487,10 @@ export default function NavDisplay() {
   const rdtRefTimeRef      = useRef(0)
   const modeRef            = useRef<'real' | 'sim'>('sim')
   // Refs rdt/sigmet accessibles depuis le handler souris (hors closure RAF)
-  const rdtRef2   = useRef<GeoJSON.FeatureCollection | null>(null)
-  const sigmetRef2 = useRef<GeoJSON.FeatureCollection | null>(null)
-  const rangeNMRef = useRef(80)
+  const rdtRef2      = useRef<GeoJSON.FeatureCollection | null>(null)
+  const sigmetRef2   = useRef<GeoJSON.FeatureCollection | null>(null)
+  const lightningRef = useRef<GeoJSON.FeatureCollection | null>(null)
+  const rangeNMRef   = useRef(80)
 
   // State React (pour UI)
   const [rangeIdx, setRangeIdx] = useState(1)
@@ -467,6 +501,7 @@ export default function NavDisplay() {
   const [ac, setAc]             = useState<AcState | null>(null)
   const [rdt, setRdt]           = useState<GeoJSON.FeatureCollection | null>(null)
   const [sigmet, setSigmet]     = useState<GeoJSON.FeatureCollection | null>(null)
+  const [lightning, setLightning] = useState<GeoJSON.FeatureCollection | null>(null)
   const [route, setRoute]       = useState<[number, number][] | null>(null)
   const [fir, setFir]           = useState<GeoJSON.FeatureCollection | null>(null)
   const [countries, setCountries] = useState<GeoJSON.FeatureCollection | null>(null)
@@ -497,6 +532,7 @@ export default function NavDisplay() {
   useEffect(() => { modeRef.current = mode }, [mode])
   useEffect(() => { rdtRef2.current = rdt }, [rdt])
   useEffect(() => { sigmetRef2.current = sigmet }, [sigmet])
+  useEffect(() => { lightningRef.current = lightning }, [lightning])
   useEffect(() => { rangeNMRef.current = RANGES[rangeIdx] }, [rangeIdx])
 
   // Extraire l'heure de référence T+0 du dernier RDT reçu
@@ -516,11 +552,20 @@ export default function NavDisplay() {
 
   // Fetch météo
   const fetchWx = useCallback(async () => {
-    const [r1, r2] = await Promise.all([
+    const ac = acRef.current
+    // Bbox centrée sur l'avion (ou Europe par défaut) couvrant ~2× la portée max
+    const deg = 12
+    const bbox = ac
+      ? `${(ac.lon - deg).toFixed(1)},${(ac.lat - deg * 0.7).toFixed(1)},${(ac.lon + deg).toFixed(1)},${(ac.lat + deg * 0.7).toFixed(1)}`
+      : '-30,25,50,75'
+    const [r1, r2, r3] = await Promise.all([
       fetch('/api/feature?type=RDT_MSG_last&count=2000').then(r => r.ok ? r.json() : null),
       fetch('/api/feature?type=SIGMET_last&count=200').then(r => r.ok ? r.json() : null),
+      fetch(`/api/lightning?bbox=${bbox}`).then(r => r.ok ? r.json() : null),
     ])
-    if (r1) setRdt(r1); if (r2) setSigmet(r2)
+    if (r1) setRdt(r1)
+    if (r2) setSigmet(r2)
+    if (r3) setLightning(r3)
   }, [])
 
   // Fetch FIR + pays (mini-carte) — une seule fois au montage
@@ -825,12 +870,12 @@ export default function NavDisplay() {
       const etaDate = new Date(etaMs)
       const etaISO  = `${String(etaDate.getUTCHours()).padStart(2,'0')}${String(etaDate.getUTCMinutes()).padStart(2,'0')}`
 
-      drawRadar(ctx, sizeRef.current, acRef.current, rdt, sigmetFiltered, rangeNM, tSec, rdtStep, etaISO)
+      drawRadar(ctx, sizeRef.current, acRef.current, rdt, sigmetFiltered, lightning, rangeNM, tSec, rdtStep, etaISO, etaMs)
       rafRef.current = requestAnimationFrame(animate)
     }
     rafRef.current = requestAnimationFrame(animate)
     return () => cancelAnimationFrame(rafRef.current)
-  }, [rdt, sigmet, rangeNM])
+  }, [rdt, sigmet, lightning, rangeNM])
 
   // Formatage temps estimé
   const totalDistNM = route && route.length > 1
