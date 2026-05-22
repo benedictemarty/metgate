@@ -19,6 +19,37 @@ const WX: Record<number, { fill: string; stroke: string; alpha: number }> = {
   60: { fill: '#005522', stroke: '#007733', alpha: 0.15 },
 }
 
+// ─── Projection inverse : pixel écran → coordonnées géo ──────────────────────
+// Inverse de proj() : résout e et n à partir des coords pixels relatives au centre.
+function unproj(mx: number, my: number, cx: number, cy: number, SC: number, hdgR: number, clat: number, clon: number): [number, number] {
+  const u = (mx - cx) / SC
+  const v = -(my - cy) / SC
+  const e = u * Math.cos(hdgR) + v * Math.sin(hdgR)
+  const n = v * Math.cos(hdgR) - u * Math.sin(hdgR)
+  return [clat + n / 60, clon + e / (60 * Math.cos(clat * Math.PI / 180))]
+}
+
+// ─── Point dans un anneau GeoJSON ([lon,lat][]) — ray casting ────────────────
+function pointInRing(lat: number, lon: number, ring: number[][]): boolean {
+  let inside = false
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0], yi = ring[i][1]
+    const xj = ring[j][0], yj = ring[j][1]
+    if ((yi > lat) !== (yj > lat) && lon < ((xj - xi) * (lat - yi)) / (yj - yi) + xi)
+      inside = !inside
+  }
+  return inside
+}
+
+function pointInPolygon(lat: number, lon: number, coords: number[][][]): boolean {
+  if (!coords.length) return false
+  if (!pointInRing(lat, lon, coords[0])) return false
+  for (let h = 1; h < coords.length; h++) {
+    if (pointInRing(lat, lon, coords[h])) return false  // dans un trou
+  }
+  return true
+}
+
 // ─── Distance grand-cercle (NM) ───────────────────────────────────────────────
 
 function distNM(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -78,7 +109,6 @@ function drawRadar(
   sigmet: GeoJSON.FeatureCollection | null,
   rangeNM: number,
   tSec: number,             // secondes écoulées depuis t0 (pour le pulsing)
-  route: [number, number][] | null,
   rdtStep: number,          // étape RDT calée sur l'ETA de l'avion (0/15/30/45/60)
   etaISO: string,           // heure simulée à la position courante (pour HUD)
 ) {
@@ -214,25 +244,7 @@ function drawRadar(
     })
   }
 
-  // ── Route ──
-  if (route && route.length > 1) {
-    ctx.save(); ctx.translate(cx, cy)
-    ctx.beginPath()
-    route.forEach(([lon, lat], i) => { const [px, py] = p(lat, lon); i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py) })
-    ctx.strokeStyle = 'rgba(255,255,255,0.65)'; ctx.lineWidth = 1.2; ctx.setLineDash([7, 6]); ctx.stroke(); ctx.setLineDash([])
-    route.forEach(([lon, lat], i) => {
-      if (i === 0 || i === route.length - 1) return
-      const [px, py] = p(lat, lon)
-      ctx.beginPath(); ctx.arc(px, py, 2.5, 0, Math.PI * 2); ctx.fillStyle = '#44ddff'; ctx.fill()
-    })
-    ;[route[0], route[route.length - 1]].forEach(([lon, lat], i) => {
-      const [px, py] = p(lat, lon)
-      ctx.beginPath(); ctx.moveTo(px, py - 8); ctx.lineTo(px, py + 8)
-      ctx.moveTo(px - 8, py); ctx.lineTo(px + 8, py)
-      ctx.strokeStyle = i === 0 ? '#88ffcc' : '#ff8844'; ctx.lineWidth = 2; ctx.stroke()
-    })
-    ctx.restore()
-  }
+  // (trajet supprimé — hover sur les phénomènes pour les identifier)
 
   ctx.restore()  // fin clip
 
@@ -435,10 +447,14 @@ export default function NavDisplay() {
   const lastFrameRef    = useRef(0)
   const lastUIRef       = useRef(0)
   // Refs pour l'alignement temporel des phénomènes météo
-  const routeLoadTimeRef   = useRef(0)     // ms epoch, défini au chargement de la route
-  const totalDurationMsRef = useRef(0)     // durée totale du vol en ms
-  const rdtRefTimeRef      = useRef(0)     // T+0 de la dernière donnée RDT (ms epoch)
+  const routeLoadTimeRef   = useRef(0)
+  const totalDurationMsRef = useRef(0)
+  const rdtRefTimeRef      = useRef(0)
   const modeRef            = useRef<'real' | 'sim'>('sim')
+  // Refs rdt/sigmet accessibles depuis le handler souris (hors closure RAF)
+  const rdtRef2   = useRef<GeoJSON.FeatureCollection | null>(null)
+  const sigmetRef2 = useRef<GeoJSON.FeatureCollection | null>(null)
+  const rangeNMRef = useRef(80)
 
   // State React (pour UI)
   const [rangeIdx, setRangeIdx] = useState(1)
@@ -465,7 +481,8 @@ export default function NavDisplay() {
   const sugTimerRef             = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [playing, setPlaying]   = useState(false)
   const [speedIdx, setSpeedIdx] = useState(0)
-  const [progress, setProgress] = useState(0)  // 0..1 pour le slider UI
+  const [progress, setProgress] = useState(0)
+  const [tooltip, setTooltip]   = useState<{x:number;y:number;lines:string[]} | null>(null)
 
   const rangeNM = RANGES[rangeIdx]
 
@@ -475,6 +492,9 @@ export default function NavDisplay() {
   useEffect(() => { playingRef.current = playing }, [playing])
   useEffect(() => { speedIdxRef.current = speedIdx }, [speedIdx])
   useEffect(() => { modeRef.current = mode }, [mode])
+  useEffect(() => { rdtRef2.current = rdt }, [rdt])
+  useEffect(() => { sigmetRef2.current = sigmet }, [sigmet])
+  useEffect(() => { rangeNMRef.current = RANGES[rangeIdx] }, [rangeIdx])
 
   // Extraire l'heure de référence T+0 du dernier RDT reçu
   useEffect(() => {
@@ -606,6 +626,76 @@ export default function NavDisplay() {
     finally { setSearching(false) }
   }, [searchQ, loadFlight])
 
+  // Handler souris : projection inverse + hit-test sur RDT et SIGMET
+  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current; if (!canvas) return
+    const rect = canvas.getBoundingClientRect()
+    const dpr  = window.devicePixelRatio || 1
+    const mx   = (e.clientX - rect.left) * dpr
+    const my   = (e.clientY - rect.top)  * dpr
+    const size = sizeRef.current
+    const cx   = size / 2, cy = size / 2
+    const ac   = acRef.current
+    const clat = ac?.lat ?? 46.5, clon = ac?.lon ?? 2.5
+    const hdgR = (ac?.hdg ?? 0) * Math.PI / 180
+    const R    = size / 2 - 6
+    // Hors du cercle radar ?
+    if (Math.hypot(mx - cx, my - cy) > R) { setTooltip(null); return }
+    const SC = R / rangeNMRef.current
+    const [lat, lon] = unproj(mx, my, cx, cy, SC, hdgR, clat, clon)
+    const lines: string[] = []
+
+    // Hit-test SIGMET
+    sigmetRef2.current?.features.forEach(f => {
+      const g = f.geometry as GeoJSON.Geometry; if (!g) return
+      const pr = f.properties as Record<string, unknown>
+      const polys = g.type === 'Polygon' ? [(g as GeoJSON.Polygon).coordinates]
+        : g.type === 'MultiPolygon' ? (g as GeoJSON.MultiPolygon).coordinates : []
+      for (const coords of polys) {
+        if (pointInPolygon(lat, lon, coords as number[][][])) {
+          lines.push('⚡ SIGMET')
+          if (pr?.phenomenon)       lines.push(`${pr.phenomenon}`)
+          if (pr?.begin_position)   lines.push(`Début : ${String(pr.begin_position).slice(11,16)}Z`)
+          if (pr?.end_position)     lines.push(`Fin   : ${String(pr.end_position).slice(11,16)}Z`)
+          if (pr?.lowerlimit !== undefined) lines.push(`FL${pr.lowerlimit} – FL${pr.upperlimit}`)
+          return
+        }
+      }
+    })
+
+    // Hit-test RDT (step courant seulement)
+    const flightDur = totalDurationMsRef.current || 7_200_000
+    const etaMs = (routeLoadTimeRef.current || Date.now()) + progressRef.current * flightDur
+    const rdtOff = rdtRefTimeRef.current > 0 ? (etaMs - rdtRefTimeRef.current) / 60_000 : 0
+    const rdtStep = [0,15,30,45,60].reduce((b,s) => Math.abs(s-rdtOff)<Math.abs(b-rdtOff)?s:b, 0)
+    rdtRef2.current?.features.forEach(f => {
+      const ft = (f.properties as Record<string, unknown>)?.forecasttime
+      if (ft === undefined || Math.abs(parseFloat(String(ft)) - rdtStep) > 1) return
+      const g = f.geometry as GeoJSON.Geometry; if (!g) return
+      const pr = f.properties as Record<string, unknown>
+      const polys = g.type === 'Polygon' ? [(g as GeoJSON.Polygon).coordinates]
+        : g.type === 'MultiPolygon' ? (g as GeoJSON.MultiPolygon).coordinates : []
+      for (const coords of polys) {
+        if (pointInPolygon(lat, lon, coords as number[][][])) {
+          lines.push(`🌩 RDT T+${rdtStep}`)
+          if (pr?.producttype)       lines.push(`Type : ${pr.producttype}`)
+          if (pr?.severity !== undefined) lines.push(`Sévérité : ${pr.severity}`)
+          if (pr?.movingdirection)   lines.push(`Direction : ${pr.movingdirection}°  ${pr.movingspeed} m/s`)
+          if (pr?.analysistime)      lines.push(`Analyse : ${String(pr.analysistime).slice(11,16)}Z`)
+          return
+        }
+      }
+    })
+
+    if (lines.length > 0) {
+      setTooltip({ x: e.clientX, y: e.clientY, lines })
+    } else {
+      setTooltip(null)
+    }
+  }, [])
+
+  const handleMouseLeave = useCallback(() => setTooltip(null), [])
+
   // Resize canvas radar — utilise un state pour forcer le re-render du wrapper
   useEffect(() => {
     const canvas = canvasRef.current; const cont = containerRef.current
@@ -701,7 +791,7 @@ export default function NavDisplay() {
       const etaDate = new Date(etaMs)
       const etaISO  = `${String(etaDate.getUTCHours()).padStart(2,'0')}${String(etaDate.getUTCMinutes()).padStart(2,'0')}`
 
-      drawRadar(ctx, sizeRef.current, acRef.current, rdt, sigmetFiltered, rangeNM, tSec, routeRef.current, rdtStep, etaISO)
+      drawRadar(ctx, sizeRef.current, acRef.current, rdt, sigmetFiltered, rangeNM, tSec, rdtStep, etaISO)
       rafRef.current = requestAnimationFrame(animate)
     }
     rafRef.current = requestAnimationFrame(animate)
@@ -857,7 +947,13 @@ export default function NavDisplay() {
         {/* Radar — flex-1 min-h-0 pour qu'il cède de la place à la timeline */}
         <div ref={containerRef} className="flex-1 flex items-center justify-center p-2 min-h-0 overflow-hidden">
           <div className="relative" style={{width: radarSize, height: radarSize, flexShrink: 0}}>
-            <canvas ref={canvasRef} className="block" style={{borderRadius:'50%', boxShadow:'0 0 60px rgba(0,200,60,0.18),0 0 120px rgba(0,80,20,0.12)'}}/>
+            <canvas
+              ref={canvasRef}
+              className="block"
+              style={{borderRadius:'50%', boxShadow:'0 0 60px rgba(0,200,60,0.18),0 0 120px rgba(0,80,20,0.12)', cursor: tooltip ? 'crosshair' : 'default'}}
+              onMouseMove={handleMouseMove}
+              onMouseLeave={handleMouseLeave}
+            />
             {ac && (
               <div className="absolute top-2 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full border border-[#00ff88]/40 bg-[#010a03]/90 text-[#00ff88] text-[0.6rem] font-mono font-bold tracking-widest whitespace-nowrap">
                 {mode==='real'?`⬤ LIVE · ${ac.callsign}`:`◎ SIM · ${ac.callsign}`}
@@ -924,6 +1020,19 @@ export default function NavDisplay() {
           </div>
         </div>
       </div>
+
+      {/* ─── Tooltip phénomène météo ─── */}
+      {tooltip && (
+        <div className="fixed z-50 pointer-events-none" style={{ left: tooltip.x + 14, top: tooltip.y - 8 }}>
+          <div className="bg-[#010d04]/95 border border-[#00ff88]/40 rounded px-2.5 py-2 shadow-lg backdrop-blur-sm">
+            {tooltip.lines.map((l, i) => (
+              <div key={i} className={`font-mono whitespace-nowrap ${i === 0 ? 'text-[#00ff88] font-bold text-xs mb-1' : 'text-[#00cc55] text-[0.6rem]'}`}>
+                {l}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
