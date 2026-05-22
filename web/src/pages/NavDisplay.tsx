@@ -69,6 +69,8 @@ function drawRadar(
   sigmet: GeoJSON.FeatureCollection | null,
   rangeNM: number, beamDeg: number,
   route: [number, number][] | null,
+  rdtStep: number,          // étape RDT calée sur l'ETA de l'avion (0/15/30/45/60)
+  etaISO: string,           // heure simulée à la position courante (pour HUD)
 ) {
   const R   = size / 2 - 6
   const cx  = size / 2
@@ -151,18 +153,23 @@ function drawRadar(
     ctx.restore()
   }
 
-  // ── Cellules RDT (T+60 → T+0) ──
+  // ── Cellules RDT — calées sur l'ETA de l'avion ──
+  // Affiche l'étape courante (pleine intensité) + l'étape suivante (fantôme).
   if (rdt) {
-    ;([60, 45, 30, 15, 0] as const).forEach(step => {
+    const nextStep = Math.min(60, rdtStep + 15)
+    // Dessiner en deux passes : fantôme d'abord, puis couche courante par-dessus
+    ;([nextStep, rdtStep] as const).forEach((step, pass) => {
+      const isCurrent = pass === 1
       const cells = rdt.features.filter(f => {
         const ft = (f.properties as Record<string, unknown>)?.forecasttime
         if (ft === undefined || ft === null) return false
         return Math.abs((typeof ft === 'string' ? parseFloat(ft) : ft as number) - step) < 1
       })
       if (!cells.length) return
-      const wc = WX[step]
+      const wc = WX[step as keyof typeof WX] ?? WX[0]
+      const alphaScale = isCurrent ? 1.0 : 0.28  // fantôme = 28 % d'opacité
       ctx.save(); ctx.translate(cx, cy)
-      if (step === 0) { ctx.shadowBlur = 14; ctx.shadowColor = wc.stroke }
+      if (isCurrent && step === 0) { ctx.shadowBlur = 14; ctx.shadowColor = wc.stroke }
       cells.forEach(f => {
         const g = f.geometry as GeoJSON.Geometry
         if (!g) return
@@ -174,8 +181,11 @@ function drawRadar(
             const [px, py] = p(lat, lon); i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)
           })
           ctx.closePath()
-          ctx.fillStyle = wc.fill + Math.round(wc.alpha * 255).toString(16).padStart(2, '0'); ctx.fill()
-          if (step <= 15) { ctx.strokeStyle = wc.stroke; ctx.lineWidth = step === 0 ? 1.5 : 0.8; ctx.stroke() }
+          ctx.fillStyle = wc.fill + Math.round(wc.alpha * alphaScale * 255).toString(16).padStart(2, '0')
+          ctx.fill()
+          if (isCurrent && step <= 15) {
+            ctx.strokeStyle = wc.stroke; ctx.lineWidth = step === 0 ? 1.5 : 0.8; ctx.stroke()
+          }
         })
       })
       ctx.shadowBlur = 0; ctx.restore()
@@ -247,6 +257,12 @@ function drawRadar(
   ctx.textAlign = 'right'
   ctx.fillText('WX', cx + R - 10, cy - R + 10)
   ctx.fillStyle = '#00aa44'; ctx.fillText(`${rangeNM}NM`, cx + R - 10, cy - R + 28)
+  // ETA courant + step RDT actif
+  if (etaISO) {
+    ctx.fillStyle = '#005533'; ctx.font = `${Math.max(9, R * 0.038)}px monospace`
+    ctx.textAlign = 'right'
+    ctx.fillText(`${etaISO}Z  T+${rdtStep}`, cx + R - 10, cy - R + 46)
+  }
   if (ac) {
     const bx = cx - R + 12; const by = cy + R - 72
     ctx.textAlign = 'left'; ctx.textBaseline = 'top'
@@ -362,13 +378,18 @@ export default function NavDisplay() {
   const [radarSize, setRadarSize] = useState(500)
 
   // Refs pour la boucle RAF (évite les re-renders)
-  const acRef        = useRef<AcState | null>(null)
-  const routeRef     = useRef<[number, number][] | null>(null)
-  const progressRef  = useRef(0)
-  const playingRef   = useRef(false)
-  const speedIdxRef  = useRef(0)
-  const lastFrameRef = useRef(0)
-  const lastUIRef    = useRef(0)
+  const acRef           = useRef<AcState | null>(null)
+  const routeRef        = useRef<[number, number][] | null>(null)
+  const progressRef     = useRef(0)
+  const playingRef      = useRef(false)
+  const speedIdxRef     = useRef(0)
+  const lastFrameRef    = useRef(0)
+  const lastUIRef       = useRef(0)
+  // Refs pour l'alignement temporel des phénomènes météo
+  const routeLoadTimeRef   = useRef(0)     // ms epoch, défini au chargement de la route
+  const totalDurationMsRef = useRef(0)     // durée totale du vol en ms
+  const rdtRefTimeRef      = useRef(0)     // T+0 de la dernière donnée RDT (ms epoch)
+  const modeRef            = useRef<'real' | 'sim'>('sim')
 
   // State React (pour UI)
   const [rangeIdx, setRangeIdx] = useState(1)
@@ -399,6 +420,22 @@ export default function NavDisplay() {
   useEffect(() => { routeRef.current = route }, [route])
   useEffect(() => { playingRef.current = playing }, [playing])
   useEffect(() => { speedIdxRef.current = speedIdx }, [speedIdx])
+  useEffect(() => { modeRef.current = mode }, [mode])
+
+  // Extraire l'heure de référence T+0 du dernier RDT reçu
+  useEffect(() => {
+    if (!rdt) return
+    const t0 = rdt.features.find(f => {
+      const ft = (f.properties as Record<string, unknown>)?.forecasttime
+      return ft !== undefined && Math.abs(parseFloat(String(ft))) < 1
+    })
+    const vst = (t0?.properties as Record<string, unknown>)?.validitystarttime as string | undefined
+    if (vst) {
+      const t = Date.parse(vst)
+      if (Number.isFinite(t)) { rdtRefTimeRef.current = t; return }
+    }
+    rdtRefTimeRef.current = Date.now()
+  }, [rdt])
 
   // Fetch météo
   const fetchWx = useCallback(async () => {
@@ -427,6 +464,11 @@ export default function NavDisplay() {
       const wps: [number, number][] = (plan.waypoints ?? []).map((w: { lon: number; lat: number }) => [w.lon, w.lat])
       setRoute(wps); progressRef.current = 0; setProgress(0)
       if (wps.length >= 2) {
+        // Calculer durée totale pour l'alignement temporel des phénomènes
+        let d = 0
+        for (let i = 1; i < wps.length; i++) d += distNM(wps[i-1][1], wps[i-1][0], wps[i][1], wps[i][0])
+        routeLoadTimeRef.current = Date.now()
+        totalDurationMsRef.current = (d / 460) * 3_600_000
         const [lon0, lat0] = wps[0]; const [lon1, lat1] = wps[1]
         const hdg = ((Math.atan2(lon1 - lon0, lat1 - lat0) * 180 / Math.PI) + 360) % 360
         const a = { lat: lat0, lon: lon0, alt: fl * 100, hdg, spd: 460, callsign: `${dep}→${arr}`, icao24: 'sim' }
@@ -448,6 +490,12 @@ export default function NavDisplay() {
       const st = stateR
       const wps: [number, number][] = (planR?.waypoints ?? []).map((w: { lon: number; lat: number }) => [w.lon, w.lat])
       setRoute(wps.length > 0 ? wps : null)
+      if (wps.length >= 2) {
+        let d = 0
+        for (let i = 1; i < wps.length; i++) d += distNM(wps[i-1][1], wps[i-1][0], wps[i][1], wps[i][0])
+        routeLoadTimeRef.current = Date.now()
+        totalDurationMsRef.current = (d / (st?.velocity ?? 460)) * 3_600_000
+      }
       if (st) {
         const a: AcState = { lat: st.lat, lon: st.lon, alt: st.altitude ?? 0, hdg: st.true_track ?? 0, spd: st.velocity ?? 0, callsign: st.callsign?.trim() ?? icao24, icao24 }
         setAc(a); acRef.current = a
@@ -557,7 +605,40 @@ export default function NavDisplay() {
       }
 
       const beam = ((now - t0Ref.current) / 1000 * 55) % 360
-      drawRadar(ctx, sizeRef.current, acRef.current, rdt, sigmet, rangeNM, beam, routeRef.current)
+
+      // ── Alignement temporel des phénomènes ──
+      // ETA de l'avion à la position slider courante (ms epoch)
+      const flightDur = totalDurationMsRef.current || 7_200_000 // défaut 2h
+      const etaMs = (routeLoadTimeRef.current || Date.now()) + progressRef.current * flightDur
+
+      // Sélection de l'étape RDT la plus proche de l'ETA
+      const rdtOffsetMin = rdtRefTimeRef.current > 0
+        ? (etaMs - rdtRefTimeRef.current) / 60_000
+        : 0
+      const RDT_STEPS = [0, 15, 30, 45, 60]
+      const rdtStep = RDT_STEPS.reduce((best, s) =>
+        Math.abs(s - rdtOffsetMin) < Math.abs(best - rdtOffsetMin) ? s : best, 0)
+
+      // Filtrage des SIGMET valides à l'ETA
+      const sigmetFiltered: GeoJSON.FeatureCollection | null = sigmet ? {
+        type: 'FeatureCollection' as const,
+        features: sigmet.features.filter(f => {
+          const pr = f.properties as Record<string, unknown>
+          const begin = String(pr?.begin_position ?? pr?.validitystarttime ?? '')
+          const end   = String(pr?.end_position   ?? pr?.validityendtime   ?? '')
+          if (!begin) return true
+          const b = Date.parse(begin)
+          if (!Number.isFinite(b)) return true
+          const e = end ? Date.parse(end) : Infinity
+          return etaMs >= b && etaMs <= e
+        }),
+      } : null
+
+      // Heure simulée formatée pour le HUD (HHmm)
+      const etaDate = new Date(etaMs)
+      const etaISO  = `${String(etaDate.getUTCHours()).padStart(2,'0')}${String(etaDate.getUTCMinutes()).padStart(2,'0')}`
+
+      drawRadar(ctx, sizeRef.current, acRef.current, rdt, sigmetFiltered, rangeNM, beam, routeRef.current, rdtStep, etaISO)
       rafRef.current = requestAnimationFrame(animate)
     }
     rafRef.current = requestAnimationFrame(animate)
@@ -677,12 +758,20 @@ export default function NavDisplay() {
         {/* Légende */}
         <div>
           <div className="text-[0.5rem] uppercase tracking-widest text-[#006622] mb-1 font-mono">WX LEGEND</div>
-          {([0,15,30,45,60] as const).map(step => (
-            <div key={step} className="flex items-center gap-2 py-0.5">
-              <span className="size-2.5 rounded-sm" style={{backgroundColor:WX[step].fill}}/>
-              <span className="text-[0.5rem] font-mono text-[#008833]">{step===0?'ACTUAL T+0':`FCST  T+${step}`}</span>
-            </div>
-          ))}
+          {([0,15,30,45,60] as const).map(step => {
+            const etaMs2 = (routeLoadTimeRef.current || Date.now()) + progress * (totalDurationMsRef.current || 7_200_000)
+            const rdtOff = rdtRefTimeRef.current > 0 ? (etaMs2 - rdtRefTimeRef.current) / 60_000 : 0
+            const bestStep = [0,15,30,45,60].reduce((b,s) => Math.abs(s-rdtOff)<Math.abs(b-rdtOff)?s:b, 0)
+            const isActive = step === bestStep
+            return (
+              <div key={step} className={`flex items-center gap-2 py-0.5 transition-opacity ${isActive ? 'opacity-100' : 'opacity-35'}`}>
+                <span className="size-2.5 rounded-sm" style={{backgroundColor:WX[step].fill}}/>
+                <span className={`text-[0.5rem] font-mono ${isActive ? 'text-[#00ff88]' : 'text-[#006622]'}`}>
+                  {isActive ? '▶ ' : '  '}{step===0?'T+0  ACTUEL':`T+${step} FCST`}
+                </span>
+              </div>
+            )
+          })}
         </div>
 
         <div className="mt-auto pt-2 border-t border-[#003311]">
@@ -742,16 +831,23 @@ export default function NavDisplay() {
             style={{ accentColor: '#00cc44' }}
           />
 
-          {/* Temps */}
-          <div className="shrink-0 text-[0.55rem] font-mono text-[#006622] w-36 text-right">
-            {totalDistNM > 0 ? (
-              <>
-                <span className="text-[#00aa44]">{fmtTime(elapsedNM)}</span>
-                <span className="text-[#004411]"> / </span>
-                <span className="text-[#006622]">{fmtTime(totalDistNM)}</span>
-                <span className="text-[#004411]">  {Math.round(remainNM)} NM</span>
-              </>
-            ) : <span>—</span>}
+          {/* Temps + heure simulée */}
+          <div className="shrink-0 text-[0.55rem] font-mono text-[#006622] text-right">
+            {totalDistNM > 0 ? (() => {
+              const etaMs3 = (routeLoadTimeRef.current || Date.now()) + progress * (totalDurationMsRef.current || 7_200_000)
+              const d = new Date(etaMs3)
+              const hhmm = `${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')}Z`
+              return (
+                <>
+                  <div className="text-[#00ff88] font-bold">{hhmm}</div>
+                  <div>
+                    <span className="text-[#00aa44]">{fmtTime(elapsedNM)}</span>
+                    <span className="text-[#004411]"> / {fmtTime(totalDistNM)}</span>
+                  </div>
+                  <div className="text-[#004411]">{Math.round(remainNM)} NM</div>
+                </>
+              )
+            })() : <span>—</span>}
           </div>
         </div>
       </div>
