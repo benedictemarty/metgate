@@ -29,12 +29,13 @@ import SatRasterLayer from '../components/SatRasterLayer'
 import CloudTopLayer from '../components/CloudTopLayer'
 import FlightPlan, { type RoutePlan } from '../components/FlightPlan'
 import AircraftTracker, { type AircraftState } from '../components/AircraftTracker'
-import { CloudCog, CloudFog, CloudLightning, Filter, Globe2, Link2, Link2Off, Mountain, Radar, Satellite, Zap } from 'lucide-react'
+import { AlertTriangle, CloudCog, CloudFog, CloudLightning, Filter, Globe2, Link2, Link2Off, Mountain, Radar, Satellite, Zap } from 'lucide-react'
 import type { Aggregate, Family } from '../types'
 import { displayFamilyName } from '../familyDisplay'
 import OGCFilterPanel, { type OGCFilter } from '../components/OGCFilterPanel'
 import FirLayer from '../components/FirLayer'
 import RadarLayer from '../components/RadarLayer'
+import AirportAlertsLayer from '../components/AirportAlertsLayer'
 
 interface MapViewProps {
   data: Aggregate | null
@@ -288,6 +289,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
   const [qvacisEnabled, setQvacisEnabled] = useState(false)
   const [lightningEnabled, setLightningEnabled] = useState(false)
   const [radarEnabled, setRadarEnabled]         = useState(false)
+  const [alertsEnabled, setAlertsEnabled]       = useState(false)
   const [satIREnabled, setSatIREnabled] = useState(false)
   const [satCTHEnabled] = useState(false) // CTH WMS legacy (raster instable, remplacé par CTH NetCDF)
   const [satConvEnabled, setSatConvEnabled] = useState(false)
@@ -827,6 +829,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
           linkedInstant={masterInstant}
         />
         <LightningLayer enabled={lightningEnabled} />
+        <AirportAlertsLayer enabled={alertsEnabled} />
         <SatRasterLayer
           enabled={satIREnabled}
           id="ir105"
@@ -1021,6 +1024,18 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
             Foudre
           </button>
           <button
+            onClick={() => setAlertsEnabled((v) => !v)}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
+              alertsEnabled
+                ? 'border-red-400/50 bg-red-500/20 text-red-100 shadow-[0_0_15px_rgba(239,68,68,0.3)]'
+                : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
+            }`}
+            title="Alertes aérodromes — SPECI, MAA, RDT (pulsant par sévérité)"
+          >
+            <AlertTriangle className="size-4" />
+            Alertes AD
+          </button>
+          <button
             onClick={() => setSatIREnabled((v) => !v)}
             className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
               satIREnabled
@@ -1159,6 +1174,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
         qvacisFL={qvacisFL}
         radarEnabled={radarEnabled}
         lightningEnabled={lightningEnabled}
+        alertsEnabled={alertsEnabled}
         satIREnabled={satIREnabled}
         satConvEnabled={satConvEnabled}
         cthEnabled={cthEnabled}
@@ -2046,6 +2062,7 @@ interface LegendProps {
   qvacisFL: number
   radarEnabled: boolean
   lightningEnabled: boolean
+  alertsEnabled: boolean
   satIREnabled: boolean
   satConvEnabled: boolean
   cthEnabled: boolean
@@ -2060,7 +2077,7 @@ function Legend({
   windEnabled, windDataset, windLevelPa,
   tropoEnabled,
   qvacisEnabled, qvacisDataset, qvacisFL,
-  radarEnabled, lightningEnabled, satIREnabled, satConvEnabled,
+  radarEnabled, lightningEnabled, alertsEnabled, satIREnabled, satConvEnabled,
   cthEnabled, cthMinFL,
   firEnabled,
   ogcFilterXml, ogcFilter,
@@ -2086,6 +2103,7 @@ function Legend({
   if (qvacisEnabled)    entries.push({ label: `Cendres FL${qvacisFL} (${qvacisDataset === 'DETERMINISTIC' ? 'dét.' : 'prob.'})`, color: '#fb923c', symbol: 'fill' })
   if (radarEnabled)     entries.push({ label: 'Radar OPERA', color: '#4ade80', symbol: 'dot' })
   if (lightningEnabled) entries.push({ label: 'Foudre MTG-LI', color: '#facc15', symbol: 'dot' })
+  if (alertsEnabled)    entries.push({ label: 'Alertes AD (🔴🟠🟡🔵)', color: '#ef4444', symbol: 'dot' })
   if (satIREnabled)     entries.push({ label: 'Sat IR 10.5µm', color: '#7dd3fc', symbol: 'fill' })
   if (satConvEnabled)   entries.push({ label: 'Convection RGB', color: '#f472b6', symbol: 'fill' })
   if (cthEnabled)       entries.push({ label: `CTH ≥ FL${cthMinFL}`, color: '#c084fc', symbol: 'fill' })

@@ -244,6 +244,30 @@ func (s *Store) LogStats() {
 		ra.kept, ra.totalRows, ra.noGeometry, ra.closed, ra.badICAO, ra.parseErr)
 }
 
+// InBbox retourne les aérodromes situés dans la bbox [lonMin, latMin, lonMax, latMax].
+// Quand mediumLargeOnly est vrai, les small_airport sont exclus (utile pour les alertes
+// sur grande zone afin de ne pas retourner des milliers d'aérodromes).
+func (s *Store) InBbox(bbox [4]float64, mediumLargeOnly bool) []*Airport {
+	lonMin, latMin, lonMax, latMax := bbox[0], bbox[1], bbox[2], bbox[3]
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []*Airport
+	for _, a := range s.airports {
+		switch a.Type {
+		case "heliport", "balloonport", "closed", "seaplane_base":
+			continue
+		case "small_airport":
+			if mediumLargeOnly {
+				continue
+			}
+		}
+		if a.Lon >= lonMin && a.Lon <= lonMax && a.Lat >= latMin && a.Lat <= latMax {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
 func (s *Store) Airport(icao string) *Airport {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

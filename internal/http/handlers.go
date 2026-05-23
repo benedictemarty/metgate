@@ -55,6 +55,7 @@ func (a *API) Routes() *http.ServeMux {
 	m.HandleFunc("GET /api/airports/search", a.handleAirportsSearch)
 	m.HandleFunc("GET /api/fir", a.handleFIR)
 	m.HandleFunc("GET /api/geo/countries", a.handleGeoCountries)
+	m.HandleFunc("GET /api/alerts", a.handleAlerts)
 	m.HandleFunc("GET /api/openapi.yaml", a.handleOpenAPI)
 	m.HandleFunc("GET /api/docs", a.handleDocs)
 	m.Handle("GET /", web.Handler())
@@ -708,6 +709,40 @@ func (a *API) handleLightning(w http.ResponseWriter, r *http.Request) {
 		"fetched_at":  fetchedAt.UTC().Format(time.RFC3339),
 		"source":      "EUMETSAT MTG-LI Lightning Flashes (LFL)",
 		"disclaimer":  "Donnée satellite à titre situationnel — non OPMET (OACI Annexe 3 / 2017/373)",
+	})
+}
+
+// handleAlerts : /api/alerts?bbox=lonMin,latMin,lonMax,latMax
+// Retourne la liste des aérodromes (medium + large) de la bbox ayant des alertes
+// météo actives, croisées depuis SPECI (SP_last), MAA (WL_last) et RDT (RDT_MSG_last).
+func (a *API) handleAlerts(w http.ResponseWriter, r *http.Request) {
+	bbox, ok := parseBBoxParam(w, r, "bbox", [4]float64{-15, 35, 30, 65})
+	if !ok {
+		return
+	}
+	// On inclut les petits aérodromes si la bbox est petite (< 5° de côté).
+	mediumLargeOnly := (bbox[2]-bbox[0]) > 5 || (bbox[3]-bbox[1]) > 5
+	aps := a.airports.InBbox(bbox, mediumLargeOnly)
+
+	simple := make([]catalog.SimpleAirport, len(aps))
+	for i, ap := range aps {
+		simple[i] = catalog.SimpleAirport{ICAO: ap.ICAO, Lat: ap.Lat, Lon: ap.Lon}
+	}
+
+	alertCtx, alertCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer alertCancel()
+
+	alerts, err := a.catalog.AlertsForAirports(alertCtx, simple)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"alerts":          alerts,
+		"count":           len(alerts),
+		"airports_checked": len(simple),
+		"fetched_at":      time.Now().UTC().Format(time.RFC3339),
 	})
 }
 
