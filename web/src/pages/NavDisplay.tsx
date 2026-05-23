@@ -114,7 +114,10 @@ function drawRadar(
   tSec: number,
   rdtStep: number,
   etaISO: string,
-  etaMs: number,            // ms epoch — pour filtrer les flashes par âge
+  etaMs: number,
+  route: [number, number][] | null,
+  fir: GeoJSON.FeatureCollection | null,
+  countries: GeoJSON.FeatureCollection | null,
 ) {
   const R   = size / 2 - 6
   const cx  = size / 2
@@ -281,6 +284,13 @@ function drawRadar(
     ctx.restore()
   }
 
+  // ── Mini-carte inset (bas-droite du cercle, dans le clip) ──
+  {
+    const IW = R * 0.50; const IH = R * 0.38
+    const IX = cx + R * 0.10; const IY = cy + R * 0.49
+    drawMiniMapInset(ctx, IX, IY, IW, IH, route, ac, fir, countries)
+  }
+
   ctx.restore()  // fin clip
 
   // ── Symbole avion ──
@@ -341,50 +351,51 @@ function drawRadar(
   }
 }
 
-// ─── Rendu mini-carte ─────────────────────────────────────────────────────────
+// ─── Mini-carte inset (dessinée dans le canvas radar principal) ───────────────
 
-function drawMiniMap(
-  ctx: CanvasRenderingContext2D, W: number, H: number,
+function drawMiniMapInset(
+  ctx: CanvasRenderingContext2D,
+  IX: number, IY: number, IW: number, IH: number,
   route: [number, number][] | null,
   ac: AcState | null,
   fir: GeoJSON.FeatureCollection | null,
   countries: GeoJSON.FeatureCollection | null,
 ) {
-  ctx.clearRect(0, 0, W, H)
-  // Fond mer
-  ctx.fillStyle = '#000e1a'; ctx.fillRect(0, 0, W, H)
+  ctx.save()
+  ctx.beginPath(); ctx.rect(IX, IY, IW, IH); ctx.clip()
+  ctx.translate(IX, IY)
+  const W = IW, H = IH
+
+  ctx.fillStyle = 'rgba(0,8,18,0.88)'; ctx.fillRect(0, 0, W, H)
 
   if (!route || route.length < 2) {
-    ctx.fillStyle = '#003311'; ctx.font = '11px monospace'
+    ctx.fillStyle = 'rgba(0,60,30,0.6)'; ctx.font = `${Math.max(7, W * 0.09)}px monospace`
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
-    ctx.fillText('Charger une route', W / 2, H / 2)
-    return
+    ctx.fillText('MAP', W / 2, H / 2)
+    ctx.strokeStyle = 'rgba(0,80,40,0.5)'; ctx.lineWidth = 0.7; ctx.strokeRect(0.5, 0.5, W - 1, H - 1)
+    ctx.restore(); return
   }
 
-  // Bounding box route + 20% marge
   let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity
   route.forEach(([lon, lat]) => {
     minLon = Math.min(minLon, lon); maxLon = Math.max(maxLon, lon)
     minLat = Math.min(minLat, lat); maxLat = Math.max(maxLat, lat)
   })
-  const dLon = maxLon - minLon || 5; const dLat = maxLat - minLat || 5
-  const margin = 0.22
-  minLon -= dLon * margin; maxLon += dLon * margin
-  minLat -= dLat * margin; maxLat += dLat * margin
-  const scX = W / (maxLon - minLon); const scY = H / (maxLat - minLat)
-  const sc  = Math.min(scX, scY)
-  const offX = (W - (maxLon - minLon) * sc) / 2
-  const offY = (H - (maxLat - minLat) * sc) / 2
+  const dLon2 = maxLon - minLon || 5; const dLat2 = maxLat - minLat || 5
+  const mg = 0.22
+  minLon -= dLon2 * mg; maxLon += dLon2 * mg
+  minLat -= dLat2 * mg; maxLat += dLat2 * mg
+  const sc2 = Math.min(W / (maxLon - minLon), H / (maxLat - minLat))
+  const ox = (W - (maxLon - minLon) * sc2) / 2
+  const oy = (H - (maxLat - minLat) * sc2) / 2
   const toS = (lon: number, lat: number): [number, number] => [
-    offX + (lon - minLon) * sc,
-    H - offY - (lat - minLat) * sc,
+    ox + (lon - minLon) * sc2,
+    H - oy - (lat - minLat) * sc2,
   ]
 
-  // ── Pays — fond terrestre (Natural Earth 110m) ──
   if (countries) {
     countries.features.forEach(f => {
-      const g = f.geometry as GeoJSON.Geometry
-      if (!g) return
+      const g = f.geometry as GeoJSON.Geometry; if (!g) return
       const polys = g.type === 'Polygon' ? [(g as GeoJSON.Polygon).coordinates]
         : g.type === 'MultiPolygon' ? (g as GeoJSON.MultiPolygon).coordinates : []
       polys.forEach(rings => {
@@ -392,11 +403,9 @@ function drawMiniMap(
         rings.forEach((ring, ri) => {
           ring.forEach(([lon, lat], i) => {
             const [x, y] = toS(lon, lat)
-            if (i === 0 && ri === 0) ctx.moveTo(x, y)
-            else if (i === 0) ctx.moveTo(x, y)
-            else ctx.lineTo(x, y)
+            i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)
           })
-          ctx.closePath()
+          if (ri === 0) ctx.closePath()
         })
         ctx.fillStyle = '#0c1f10'; ctx.fill()
         ctx.strokeStyle = '#1a3d1a'; ctx.lineWidth = 0.4; ctx.stroke()
@@ -404,58 +413,56 @@ function drawMiniMap(
     })
   }
 
-  // ── FIR boundaries (par-dessus les pays) ──
   if (fir) {
     fir.features.forEach(f => {
-      const g = f.geometry as GeoJSON.Geometry
-      if (!g) return
+      const g = f.geometry as GeoJSON.Geometry; if (!g) return
       const polys = g.type === 'Polygon' ? [(g as GeoJSON.Polygon).coordinates]
         : g.type === 'MultiPolygon' ? (g as GeoJSON.MultiPolygon).coordinates : []
       polys.forEach(([ring]) => {
         ctx.beginPath()
         ring.forEach(([lon, lat], i) => { const [x, y] = toS(lon, lat); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y) })
         ctx.closePath()
-        ctx.strokeStyle = 'rgba(0,100,50,0.5)'; ctx.lineWidth = 0.5
-        ctx.setLineDash([3, 3]); ctx.stroke(); ctx.setLineDash([])
+        ctx.strokeStyle = 'rgba(0,100,50,0.45)'; ctx.lineWidth = 0.5
+        ctx.setLineDash([2, 3]); ctx.stroke(); ctx.setLineDash([])
       })
     })
   }
 
-  // Route
   ctx.beginPath()
   route.forEach(([lon, lat], i) => { const [x, y] = toS(lon, lat); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y) })
-  ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.lineWidth = 1.2; ctx.setLineDash([5, 5]); ctx.stroke(); ctx.setLineDash([])
+  ctx.strokeStyle = 'rgba(255,255,255,0.50)'; ctx.lineWidth = 1
+  ctx.setLineDash([4, 4]); ctx.stroke(); ctx.setLineDash([])
 
-  // DEP / ARR
   const [dLonV, dLatV] = route[0]; const [aLonV, aLatV] = route[route.length - 1]
   const [dx, dy] = toS(dLonV, dLatV); const [ax, ay] = toS(aLonV, aLatV)
-  ctx.strokeStyle = '#88ffcc'; ctx.lineWidth = 1.5
-  ctx.beginPath(); ctx.moveTo(dx - 5, dy); ctx.lineTo(dx + 5, dy); ctx.moveTo(dx, dy - 5); ctx.lineTo(dx, dy + 5); ctx.stroke()
+  const mk = Math.max(3, W * 0.042)
+  ctx.strokeStyle = '#88ffcc'; ctx.lineWidth = 1.2
+  ctx.beginPath(); ctx.moveTo(dx - mk, dy); ctx.lineTo(dx + mk, dy)
+  ctx.moveTo(dx, dy - mk); ctx.lineTo(dx, dy + mk); ctx.stroke()
   ctx.strokeStyle = '#ff8844'
-  ctx.beginPath(); ctx.moveTo(ax - 5, ay); ctx.lineTo(ax + 5, ay); ctx.moveTo(ax, ay - 5); ctx.lineTo(ax, ay + 5); ctx.stroke()
+  ctx.beginPath(); ctx.moveTo(ax - mk, ay); ctx.lineTo(ax + mk, ay)
+  ctx.moveTo(ax, ay - mk); ctx.lineTo(ax, ay + mk); ctx.stroke()
 
-  // Position avion
   if (ac) {
     const [acX, acY] = toS(ac.lon, ac.lat)
+    // Ligne DEP → avion (progression)
+    ctx.strokeStyle = 'rgba(0,255,200,0.25)'; ctx.lineWidth = 0.8
+    ctx.beginPath(); ctx.moveTo(dx, dy); ctx.lineTo(acX, acY); ctx.stroke()
     ctx.save(); ctx.translate(acX, acY); ctx.rotate(ac.hdg * Math.PI / 180)
-    ctx.shadowBlur = 6; ctx.shadowColor = '#00ffcc'
-    ctx.beginPath(); ctx.moveTo(0, -5); ctx.lineTo(-3, 4); ctx.lineTo(3, 4); ctx.closePath()
+    ctx.shadowBlur = 5; ctx.shadowColor = '#00ffcc'
+    ctx.beginPath(); ctx.moveTo(0, -4); ctx.lineTo(-2.5, 3.5); ctx.lineTo(2.5, 3.5); ctx.closePath()
     ctx.fillStyle = '#00ffcc'; ctx.fill()
     ctx.shadowBlur = 0; ctx.restore()
-    // Ligne position → DEP/ARR (progression)
-    ctx.strokeStyle = 'rgba(0,255,200,0.3)'; ctx.lineWidth = 1
-    ctx.beginPath(); ctx.moveTo(dx, dy); ctx.lineTo(acX, acY); ctx.stroke()
-  }
-
-  // Bordure
-  ctx.strokeStyle = '#004411'; ctx.lineWidth = 1; ctx.strokeRect(0.5, 0.5, W - 1, H - 1)
-  // Label NM restant
-  if (ac) {
     const [aLon2, aLat2] = route[route.length - 1]
     const nm = Math.round(distNM(ac.lat, ac.lon, aLat2, aLon2))
-    ctx.fillStyle = '#006622'; ctx.font = '9px monospace'; ctx.textAlign = 'right'; ctx.textBaseline = 'bottom'
-    ctx.fillText(`${nm} NM`, W - 4, H - 4)
+    ctx.fillStyle = '#006622'; ctx.font = `${Math.max(6, W * 0.075)}px monospace`
+    ctx.textAlign = 'right'; ctx.textBaseline = 'bottom'
+    ctx.fillText(`${nm}NM`, W - 3, H - 2)
   }
+
+  ctx.strokeStyle = 'rgba(0,100,50,0.65)'; ctx.lineWidth = 0.8
+  ctx.strokeRect(0.5, 0.5, W - 1, H - 1)
+  ctx.restore()
 }
 
 // ─── Composant principal ──────────────────────────────────────────────────────
@@ -465,9 +472,7 @@ const SPEEDS = [1, 4, 10, 30]
 
 export default function NavDisplay() {
   const canvasRef    = useRef<HTMLCanvasElement>(null)
-  const miniRef      = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
-  const miniContRef  = useRef<HTMLDivElement>(null)
   const rafRef       = useRef(0)
   const t0Ref        = useRef(performance.now())
   const sizeRef      = useRef(500)
@@ -794,26 +799,6 @@ export default function NavDisplay() {
     return () => ro.disconnect()
   }, [])
 
-  // Resize mini-map canvas
-  useEffect(() => {
-    const cont = miniContRef.current; if (!cont) return
-    const resize = () => {
-      const w = cont.clientWidth; if (w <= 0) return
-      const h = Math.round(w * 0.68)
-      const canvas = miniRef.current
-      if (canvas) { canvas.width = w; canvas.height = h }
-    }
-    resize(); const ro = new ResizeObserver(resize); ro.observe(cont)
-    return () => ro.disconnect()
-  }, [])
-
-  // Mini-map render
-  useEffect(() => {
-    const canvas = miniRef.current; if (!canvas) return
-    const ctx = canvas.getContext('2d'); if (!ctx) return
-    drawMiniMap(ctx, canvas.width, canvas.height, route, ac, fir, countries)
-  }, [route, ac, fir, countries])
-
   // Boucle RAF
   useEffect(() => {
     const canvas = canvasRef.current; if (!canvas) return
@@ -877,12 +862,12 @@ export default function NavDisplay() {
       const etaDate = new Date(etaMs)
       const etaISO  = `${String(etaDate.getUTCHours()).padStart(2,'0')}${String(etaDate.getUTCMinutes()).padStart(2,'0')}`
 
-      drawRadar(ctx, sizeRef.current, acRef.current, rdt, sigmetFiltered, lightning, rangeNM, tSec, rdtStep, etaISO, etaMs)
+      drawRadar(ctx, sizeRef.current, acRef.current, rdt, sigmetFiltered, lightning, rangeNM, tSec, rdtStep, etaISO, etaMs, routeRef.current, fir, countries)
       rafRef.current = requestAnimationFrame(animate)
     }
     rafRef.current = requestAnimationFrame(animate)
     return () => cancelAnimationFrame(rafRef.current)
-  }, [rdt, sigmet, lightning, rangeNM])
+  }, [rdt, sigmet, lightning, rangeNM, fir, countries])
 
   // Formatage temps estimé
   const totalDistNM = route && route.length > 1
@@ -897,14 +882,6 @@ export default function NavDisplay() {
 
       {/* ─── Panneau de contrôle ─── */}
       <div className="w-56 shrink-0 border-r border-[#003311]/80 flex flex-col gap-3 p-3 overflow-y-auto bg-[#010801]">
-
-        {/* Mini-carte */}
-        <div>
-          <div className="text-[0.5rem] uppercase tracking-widest text-[#006622] mb-1.5 font-mono">POSITION</div>
-          <div ref={miniContRef} className="w-full">
-            <canvas ref={miniRef} className="block rounded" style={{ imageRendering: 'pixelated' }} />
-          </div>
-        </div>
 
         <div>
           <div className="text-[0.5rem] uppercase tracking-widest text-[#006622] mb-1.5 font-mono">MODE</div>
