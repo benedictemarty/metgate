@@ -136,6 +136,63 @@ function drawRadar(
   ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2)
   ctx.fillStyle = '#000d02'; ctx.fill(); ctx.clip()
 
+  // ── Carte géo (fond plein cercle, heading-up) ──
+  ctx.save(); ctx.translate(cx, cy)
+  if (countries) {
+    countries.features.forEach(f => {
+      const g = f.geometry as GeoJSON.Geometry; if (!g) return
+      const polys = g.type === 'Polygon' ? [(g as GeoJSON.Polygon).coordinates]
+        : g.type === 'MultiPolygon' ? (g as GeoJSON.MultiPolygon).coordinates : []
+      polys.forEach(rings => {
+        ctx.beginPath()
+        rings.forEach(ring => {
+          ring.forEach(([lon, lat], i) => {
+            const [px, py] = p(lat, lon); i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)
+          })
+          ctx.closePath()
+        })
+        ctx.fillStyle = 'rgba(12,31,16,0.72)'; ctx.fill()
+        ctx.strokeStyle = 'rgba(30,60,30,0.55)'; ctx.lineWidth = 0.5; ctx.stroke()
+      })
+    })
+  }
+  if (fir) {
+    fir.features.forEach(f => {
+      const g = f.geometry as GeoJSON.Geometry; if (!g) return
+      const polys = g.type === 'Polygon' ? [(g as GeoJSON.Polygon).coordinates]
+        : g.type === 'MultiPolygon' ? (g as GeoJSON.MultiPolygon).coordinates : []
+      polys.forEach(([ring]) => {
+        ctx.beginPath()
+        ring.forEach(([lon, lat], i) => {
+          const [px, py] = p(lat, lon); i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)
+        })
+        ctx.closePath()
+        ctx.strokeStyle = 'rgba(0,110,55,0.45)'; ctx.lineWidth = 0.6
+        ctx.setLineDash([3, 4]); ctx.stroke(); ctx.setLineDash([])
+      })
+    })
+  }
+  if (route && route.length >= 2) {
+    ctx.beginPath()
+    route.forEach(([lon, lat], i) => {
+      const [px, py] = p(lat, lon); i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)
+    })
+    ctx.strokeStyle = 'rgba(255,255,255,0.38)'; ctx.lineWidth = 1.2
+    ctx.setLineDash([6, 6]); ctx.stroke(); ctx.setLineDash([])
+    const [depLon, depLat] = route[0]
+    const [arrLon, arrLat] = route[route.length - 1]
+    const [dpx, dpy] = p(depLat, depLon)
+    const [apx, apy] = p(arrLat, arrLon)
+    const mk = Math.max(4, R * 0.04)
+    ctx.strokeStyle = '#88ffcc'; ctx.lineWidth = 1.4
+    ctx.beginPath(); ctx.moveTo(dpx - mk, dpy); ctx.lineTo(dpx + mk, dpy)
+    ctx.moveTo(dpx, dpy - mk); ctx.lineTo(dpx, dpy + mk); ctx.stroke()
+    ctx.strokeStyle = '#ff8844'
+    ctx.beginPath(); ctx.moveTo(apx - mk, apy); ctx.lineTo(apx + mk, apy)
+    ctx.moveTo(apx, apy - mk); ctx.lineTo(apx, apy + mk); ctx.stroke()
+  }
+  ctx.restore()
+
   // ── Anneaux de portée ──
   for (let i = 1; i <= 4; i++) {
     const r = (i / 4) * R
@@ -284,13 +341,6 @@ function drawRadar(
     ctx.restore()
   }
 
-  // ── Mini-carte inset (bas-droite du cercle, dans le clip) ──
-  {
-    const IW = R * 0.50; const IH = R * 0.38
-    const IX = cx + R * 0.10; const IY = cy + R * 0.49
-    drawMiniMapInset(ctx, IX, IY, IW, IH, route, ac, fir, countries)
-  }
-
   ctx.restore()  // fin clip
 
   // ── Symbole avion ──
@@ -349,120 +399,6 @@ function drawRadar(
     ctx.fillStyle = '#00ff88'; ctx.fillText(`GS  ${Math.round(ac.spd)} kt`, bx, by + 18)
     ctx.fillStyle = '#aaffcc'; ctx.fillText(`FL  ${String(Math.round(ac.alt / 100)).padStart(3, '0')}`, bx, by + 36)
   }
-}
-
-// ─── Mini-carte inset (dessinée dans le canvas radar principal) ───────────────
-
-function drawMiniMapInset(
-  ctx: CanvasRenderingContext2D,
-  IX: number, IY: number, IW: number, IH: number,
-  route: [number, number][] | null,
-  ac: AcState | null,
-  fir: GeoJSON.FeatureCollection | null,
-  countries: GeoJSON.FeatureCollection | null,
-) {
-  ctx.save()
-  ctx.beginPath(); ctx.rect(IX, IY, IW, IH); ctx.clip()
-  ctx.translate(IX, IY)
-  const W = IW, H = IH
-
-  ctx.fillStyle = 'rgba(0,8,18,0.88)'; ctx.fillRect(0, 0, W, H)
-
-  if (!route || route.length < 2) {
-    ctx.fillStyle = 'rgba(0,60,30,0.6)'; ctx.font = `${Math.max(7, W * 0.09)}px monospace`
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
-    ctx.fillText('MAP', W / 2, H / 2)
-    ctx.strokeStyle = 'rgba(0,80,40,0.5)'; ctx.lineWidth = 0.7; ctx.strokeRect(0.5, 0.5, W - 1, H - 1)
-    ctx.restore(); return
-  }
-
-  let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity
-  route.forEach(([lon, lat]) => {
-    minLon = Math.min(minLon, lon); maxLon = Math.max(maxLon, lon)
-    minLat = Math.min(minLat, lat); maxLat = Math.max(maxLat, lat)
-  })
-  const dLon2 = maxLon - minLon || 5; const dLat2 = maxLat - minLat || 5
-  const mg = 0.22
-  minLon -= dLon2 * mg; maxLon += dLon2 * mg
-  minLat -= dLat2 * mg; maxLat += dLat2 * mg
-  const sc2 = Math.min(W / (maxLon - minLon), H / (maxLat - minLat))
-  const ox = (W - (maxLon - minLon) * sc2) / 2
-  const oy = (H - (maxLat - minLat) * sc2) / 2
-  const toS = (lon: number, lat: number): [number, number] => [
-    ox + (lon - minLon) * sc2,
-    H - oy - (lat - minLat) * sc2,
-  ]
-
-  if (countries) {
-    countries.features.forEach(f => {
-      const g = f.geometry as GeoJSON.Geometry; if (!g) return
-      const polys = g.type === 'Polygon' ? [(g as GeoJSON.Polygon).coordinates]
-        : g.type === 'MultiPolygon' ? (g as GeoJSON.MultiPolygon).coordinates : []
-      polys.forEach(rings => {
-        ctx.beginPath()
-        rings.forEach((ring, ri) => {
-          ring.forEach(([lon, lat], i) => {
-            const [x, y] = toS(lon, lat)
-            i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)
-          })
-          if (ri === 0) ctx.closePath()
-        })
-        ctx.fillStyle = '#0c1f10'; ctx.fill()
-        ctx.strokeStyle = '#1a3d1a'; ctx.lineWidth = 0.4; ctx.stroke()
-      })
-    })
-  }
-
-  if (fir) {
-    fir.features.forEach(f => {
-      const g = f.geometry as GeoJSON.Geometry; if (!g) return
-      const polys = g.type === 'Polygon' ? [(g as GeoJSON.Polygon).coordinates]
-        : g.type === 'MultiPolygon' ? (g as GeoJSON.MultiPolygon).coordinates : []
-      polys.forEach(([ring]) => {
-        ctx.beginPath()
-        ring.forEach(([lon, lat], i) => { const [x, y] = toS(lon, lat); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y) })
-        ctx.closePath()
-        ctx.strokeStyle = 'rgba(0,100,50,0.45)'; ctx.lineWidth = 0.5
-        ctx.setLineDash([2, 3]); ctx.stroke(); ctx.setLineDash([])
-      })
-    })
-  }
-
-  ctx.beginPath()
-  route.forEach(([lon, lat], i) => { const [x, y] = toS(lon, lat); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y) })
-  ctx.strokeStyle = 'rgba(255,255,255,0.50)'; ctx.lineWidth = 1
-  ctx.setLineDash([4, 4]); ctx.stroke(); ctx.setLineDash([])
-
-  const [dLonV, dLatV] = route[0]; const [aLonV, aLatV] = route[route.length - 1]
-  const [dx, dy] = toS(dLonV, dLatV); const [ax, ay] = toS(aLonV, aLatV)
-  const mk = Math.max(3, W * 0.042)
-  ctx.strokeStyle = '#88ffcc'; ctx.lineWidth = 1.2
-  ctx.beginPath(); ctx.moveTo(dx - mk, dy); ctx.lineTo(dx + mk, dy)
-  ctx.moveTo(dx, dy - mk); ctx.lineTo(dx, dy + mk); ctx.stroke()
-  ctx.strokeStyle = '#ff8844'
-  ctx.beginPath(); ctx.moveTo(ax - mk, ay); ctx.lineTo(ax + mk, ay)
-  ctx.moveTo(ax, ay - mk); ctx.lineTo(ax, ay + mk); ctx.stroke()
-
-  if (ac) {
-    const [acX, acY] = toS(ac.lon, ac.lat)
-    // Ligne DEP → avion (progression)
-    ctx.strokeStyle = 'rgba(0,255,200,0.25)'; ctx.lineWidth = 0.8
-    ctx.beginPath(); ctx.moveTo(dx, dy); ctx.lineTo(acX, acY); ctx.stroke()
-    ctx.save(); ctx.translate(acX, acY); ctx.rotate(ac.hdg * Math.PI / 180)
-    ctx.shadowBlur = 5; ctx.shadowColor = '#00ffcc'
-    ctx.beginPath(); ctx.moveTo(0, -4); ctx.lineTo(-2.5, 3.5); ctx.lineTo(2.5, 3.5); ctx.closePath()
-    ctx.fillStyle = '#00ffcc'; ctx.fill()
-    ctx.shadowBlur = 0; ctx.restore()
-    const [aLon2, aLat2] = route[route.length - 1]
-    const nm = Math.round(distNM(ac.lat, ac.lon, aLat2, aLon2))
-    ctx.fillStyle = '#006622'; ctx.font = `${Math.max(6, W * 0.075)}px monospace`
-    ctx.textAlign = 'right'; ctx.textBaseline = 'bottom'
-    ctx.fillText(`${nm}NM`, W - 3, H - 2)
-  }
-
-  ctx.strokeStyle = 'rgba(0,100,50,0.65)'; ctx.lineWidth = 0.8
-  ctx.strokeRect(0.5, 0.5, W - 1, H - 1)
-  ctx.restore()
 }
 
 // ─── Composant principal ──────────────────────────────────────────────────────
