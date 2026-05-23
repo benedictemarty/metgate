@@ -22,37 +22,6 @@ const RADIUS = 22 // rayon utile du dôme (unités de scène)
 // ───────────────────────────────────────────────────────────────────────
 const ADSB_MIN_INTERVAL_MS = 30_000
 const ADSB_MAX_BACKOFF_MS = 300_000
-let adsbLastAttemptAt = 0
-let adsbBackoffUntil = 0
-let adsbInFlight = false
-let adsbErrorStreak = 0
-function adsbCanFireNow(): { ok: boolean; waitMs: number } {
-  const now = Date.now()
-  if (adsbInFlight) return { ok: false, waitMs: 1000 }
-  const sinceLast = now - adsbLastAttemptAt
-  if (sinceLast < ADSB_MIN_INTERVAL_MS) {
-    return { ok: false, waitMs: ADSB_MIN_INTERVAL_MS - sinceLast + 50 }
-  }
-  if (now < adsbBackoffUntil) {
-    return { ok: false, waitMs: adsbBackoffUntil - now + 50 }
-  }
-  return { ok: true, waitMs: 0 }
-}
-function adsbMarkAttempt() {
-  adsbLastAttemptAt = Date.now()
-  adsbInFlight = true
-}
-function adsbMarkSuccess() {
-  adsbInFlight = false
-  adsbErrorStreak = 0
-  adsbBackoffUntil = 0
-}
-function adsbMarkError() {
-  adsbInFlight = false
-  adsbErrorStreak++
-  const backoff = Math.min(ADSB_MAX_BACKOFF_MS, 30_000 * 2 ** adsbErrorStreak)
-  adsbBackoffUntil = Date.now() + backoff
-}
 // SCENE_RANGE_NM est désormais dynamique (state TowerGlobe). Choix typiques :
 //  -   5 NM : vue tour / finale courte
 //  -  15 NM : vue TWR + finale étendue
@@ -574,11 +543,14 @@ function Label3D({
   )
 }
 
-function CellMesh({ cell, hidden }: { cell: Cell; hidden: boolean }) {
+function CellMesh({ cell, hidden, onSelect }: { cell: Cell; hidden: boolean; onSelect?: (c: Cell) => void }) {
   if (hidden) return null
   const segs = 8
   return (
-    <group position={[cell.x, 0, cell.z]}>
+    <group
+      position={[cell.x, 0, cell.z]}
+      onClick={(e) => { e.stopPropagation(); onSelect?.(cell) }}
+    >
       {Array.from({ length: segs }).map((_, i) => {
         const t = i / (segs - 1)
         const r = 1.4 + t * 0.4 + Math.sin(t * Math.PI) * 0.4
@@ -931,18 +903,24 @@ function ArrowHelperWrapper({
   length: number
   color: number
 }) {
-  const arrow = useMemo(() => {
-    const a = new THREE.ArrowHelper(
+  const ref = useRef<THREE.ArrowHelper | null>(null)
+  if (!ref.current) {
+    ref.current = new THREE.ArrowHelper(
       new THREE.Vector3(...dir).normalize(),
       new THREE.Vector3(...position),
-      length,
-      color,
-      length * 0.25,
-      length * 0.18,
+      length, color, length * 0.25, length * 0.18,
     )
-    return a
-  }, [position, dir, length, color])
-  return <primitive object={arrow} />
+  }
+  // Mise à jour impérative : pas de recréation Three.js, juste mutation.
+  useEffect(() => {
+    const a = ref.current
+    if (!a) return
+    a.setDirection(new THREE.Vector3(...dir).normalize())
+    a.setLength(length, length * 0.25, length * 0.18)
+    a.setColor(color)
+    a.position.set(position[0], position[1], position[2])
+  })
+  return ref.current ? <primitive object={ref.current} /> : null
 }
 
 function Tropopause({ visible, y }: { visible: boolean; y: number }) {
@@ -1022,20 +1000,15 @@ function planeScaleForCameraDist(d: number): number {
 
 function PlaneFleet({
   planes,
+  onSelect,
 }: {
   planes: PlaneInstance[]
+  onSelect: (p: PlaneInstance) => void
 }) {
-  const camera = useThree((s) => s.camera)
-  const [camDist, setCamDist] = useState(50)
-  useFrame(() => {
-    const d = camera.position.length()
-    if (Math.abs(d - camDist) > 1) setCamDist(d)
-  })
-  const scale = planeScaleForCameraDist(camDist)
   return (
     <>
       {planes.map((p) => (
-        <Plane key={p.callsign} plane={p} scale={scale} />
+        <Plane key={p.callsign} plane={p} onSelect={onSelect} />
       ))}
     </>
   )
@@ -1047,12 +1020,21 @@ function PlaneFleet({
 // position réelle ADS-B, quitte à avoir un saut à chaque update.
 function Plane({
   plane,
-  scale,
+  onSelect,
 }: {
   plane: PlaneInstance
-  scale: number
+  onSelect: (p: PlaneInstance) => void
 }) {
-  // Couleurs selon phase de vol (climb/desc/level).
+  const groupRef = useRef<THREE.Group>(null)
+  const camera = useThree((s) => s.camera)
+
+  // Scale impératif à chaque frame : évite les re-renders React pendant l'orbite.
+  useFrame(() => {
+    if (!groupRef.current) return
+    const s = planeScaleForCameraDist(camera.position.length())
+    groupRef.current.scale.setScalar(s)
+  })
+
   const colors =
     plane.vsTrend === 'climb'
       ? { body: 0x4ade80, emissive: 0x16a34a }
@@ -1060,42 +1042,33 @@ function Plane({
         ? { body: 0xfb923c, emissive: 0xc2410c }
         : { body: 0x22d3ee, emissive: 0x0891b2 }
 
-  // Visibilité : on masque si la position sort du dôme scène.
   const horizR = Math.sqrt(plane.x * plane.x + plane.z * plane.z)
-  const visible =
-    horizR <= RADIUS && plane.y >= 0.3 && plane.y <= RADIUS
+  const visible = horizR <= RADIUS && plane.y >= 0.3 && plane.y <= RADIUS
 
   return (
     <group
+      ref={groupRef}
       position={[plane.x, plane.y, plane.z]}
       rotation={[0, plane.trackRad, 0]}
-      scale={[scale, scale, scale]}
       visible={visible}
+      onClick={(e) => { e.stopPropagation(); onSelect(plane) }}
     >
-      {/* Convention locale : nez vers -Z (= nord du repère parent quand
-          trackRad=0). La queue (base du cone) est à +Z, l'aile sur X,
-          l'empennage vertical à +Z et au-dessus. */}
-      {/* Fuselage : cone effilé, pointe vers -Z après rotation X. */}
       <mesh rotation={[-Math.PI / 2, 0, 0]}>
         <coneGeometry args={[0.32, 2.4, 12]} />
         <meshBasicMaterial color={colors.body} />
       </mesh>
-      {/* Aile principale, sur X, légèrement en arrière du centre fuselage. */}
       <mesh position={[0, 0, 0.15]}>
         <boxGeometry args={[3.0, 0.10, 0.55]} />
         <meshBasicMaterial color={colors.body} />
       </mesh>
-      {/* Empennage horizontal (stabilo), petit, plus en arrière. */}
       <mesh position={[0, 0, 1.05]}>
         <boxGeometry args={[1.1, 0.08, 0.32]} />
         <meshBasicMaterial color={colors.body} />
       </mesh>
-      {/* Dérive (empennage vertical) : repère ARRIÈRE explicite. */}
       <mesh position={[0, 0.32, 1.0]}>
         <boxGeometry args={[0.08, 0.55, 0.45]} />
         <meshBasicMaterial color={colors.body} />
       </mesh>
-      {/* Halo lumineux discret pour lisibilité contre le fond noir */}
       <mesh>
         <sphereGeometry args={[0.4, 12, 8]} />
         <meshBasicMaterial color={colors.emissive} transparent opacity={0.35} />
@@ -1148,6 +1121,11 @@ interface TowerGlobeProps {
   // À l'avenir : icao sélectionné, données live, etc.
 }
 
+type SelectedInfo =
+  | { kind: 'plane'; data: PlaneInstance }
+  | { kind: 'cell'; data: Cell }
+  | null
+
 export default function TowerGlobe({}: TowerGlobeProps) {
   const [icao, setIcao] = useState('LFPG')
   const [sceneRangeNm, setSceneRangeNm] = useState<RangePreset>(30)
@@ -1180,6 +1158,7 @@ export default function TowerGlobe({}: TowerGlobeProps) {
   const [liveWl, setLiveWl] = useState<OpmetMessage | null>(null)
   const [showMetarPanel, setShowMetarPanel] = useState(true)
   const [livePlanes, setLivePlanes] = useState<PlaneInstance[]>([])
+  const adsbRef = useRef({ lastAttemptAt: 0, backoffUntil: 0, inFlight: false, errorStreak: 0 })
   const [airportInfo, setAirportInfo] = useState<{
     lat: number
     lon: number
@@ -1187,6 +1166,21 @@ export default function TowerGlobe({}: TowerGlobeProps) {
     runways: RunwayGeo[]
   } | null>(null)
   const controlsRef = useRef<typeof OrbitControls.prototype | null>(null)
+
+  // Fix 4 : horloge UTC mise à jour toutes les minutes (évite valeur figée).
+  const [utcTime, setUtcTime] = useState(() => new Date().toISOString().slice(11, 16))
+  useEffect(() => {
+    const id = window.setInterval(() => setUtcTime(new Date().toISOString().slice(11, 16)), 60_000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  // Fix 6 : état de sélection pour le SelectedPanel.
+  const [selected, setSelected] = useState<SelectedInfo>(null)
+
+  // Fix 9 : indicateurs de chargement.
+  const [loadingCells, setLoadingCells] = useState(false)
+  const [loadingFlashes, setLoadingFlashes] = useState(false)
+  const [loadingWinds, setLoadingWinds] = useState(false)
 
   // Reset des states live à chaque changement d'aéroport ou de rayon scène
   // pour éviter d'afficher temporairement les avions/cellules/foudre du
@@ -1287,9 +1281,11 @@ export default function TowerGlobe({}: TowerGlobeProps) {
       const dlat = 5
       const dlon = 5 / Math.max(0.3, Math.cos((ap.lat * Math.PI) / 180))
       const bbox = `${ap.lon - dlon},${ap.lat - dlat},${ap.lon + dlon},${ap.lat + dlat}`
+      setLoadingFlashes(true)
       fetch(`/api/lightning?bbox=${bbox}`)
         .then((r) => (r.ok ? r.json() : null))
         .then((d) => {
+          setLoadingFlashes(false)
           if (aborted || !d) return
           const total = d.features?.length ?? 0
           const inDome: Lightning[] = []
@@ -1316,7 +1312,7 @@ export default function TowerGlobe({}: TowerGlobeProps) {
           setLiveFlashes(inDome)
           setFlashCount({ in: inDome.length, fetched: total })
         })
-        .catch(() => {})
+        .catch(() => { setLoadingFlashes(false) })
     }
     fetchOnce()
     const id = window.setInterval(fetchOnce, 60_000)
@@ -1335,10 +1331,14 @@ export default function TowerGlobe({}: TowerGlobeProps) {
     if (!ap) return
     let aborted = false
     const fetchOnce = async () => {
+      setLoadingCells(true)
+      let fetchError = false
       const [rdtRes, opicRes] = await Promise.all([
-        fetch('/api/feature?type=RDT_MSG_last&count=2000').then((r) => (r.ok ? r.json() : null)).catch(() => null),
-        fetch('/api/feature?type=OPIC_GTD_last&count=2000').then((r) => (r.ok ? r.json() : null)).catch(() => null),
+        fetch('/api/feature?type=RDT_MSG_last&count=2000').then((r) => (r.ok ? r.json() : null)).catch(() => { fetchError = true; return null }),
+        fetch('/api/feature?type=OPIC_GTD_last&count=2000').then((r) => (r.ok ? r.json() : null)).catch(() => { fetchError = true; return null }),
       ])
+      setLoadingCells(false)
+      void fetchError
       if (aborted) return
       const totalFetched = (rdtRes?.features?.length ?? 0) + (opicRes?.features?.length ?? 0)
       const inDome: Cell[] = []
@@ -1407,38 +1407,44 @@ export default function TowerGlobe({}: TowerGlobeProps) {
     if (!ap) return
     let aborted = false
     const fetchWinds = async () => {
+      setLoadingWinds(true)
       const dlat = 1
       const dlon = 1 / Math.max(0.3, Math.cos((ap.lat * Math.PI) / 180))
       const bbox = `${ap.lon - dlon},${ap.lat - dlat},${ap.lon + dlon},${ap.lat + dlat}`
-      const results = await Promise.all(
-        windLevels.map((lvl) =>
-          fetch(`/api/wind?dataset=WIND&level=${lvl.pa}&bbox=${bbox}`)
-            .then((r) => (r.ok ? r.json() : null))
-            .catch(() => null),
-        ),
-      )
-      if (aborted) return
-      const winds: WindLevel[] = []
-      results.forEach((res, i) => {
-        if (!res || !Array.isArray(res.u) || !Array.isArray(res.v)) return
-        const w = res.width
-        const h = res.height
-        if (!w || !h) return
-        const mid = Math.floor(h / 2) * w + Math.floor(w / 2)
-        const u = res.u[mid] ?? 0
-        const v = res.v[mid] ?? 0
-        const speedMs = Math.sqrt(u * u + v * v)
-        const kt = speedMs * 1.94384
-        const dirDeg = ((Math.atan2(-u, -v) * 180) / Math.PI + 360) % 360
-        winds.push({
-          y: windLevels[i].y,
-          dirDeg,
-          kt,
-          color: colorForWindKt(kt),
-          label: windLevels[i].label,
+      try {
+        const results = await Promise.all(
+          windLevels.map((lvl) =>
+            fetch(`/api/wind?dataset=WIND&level=${lvl.pa}&bbox=${bbox}`)
+              .then((r) => (r.ok ? r.json() : null))
+              .catch(() => null),
+          ),
+        )
+        setLoadingWinds(false)
+        if (aborted) return
+        const winds: WindLevel[] = []
+        results.forEach((res, i) => {
+          if (!res || !Array.isArray(res.u) || !Array.isArray(res.v)) return
+          const w = res.width
+          const h = res.height
+          if (!w || !h) return
+          const mid = Math.floor(h / 2) * w + Math.floor(w / 2)
+          const u = res.u[mid] ?? 0
+          const v = res.v[mid] ?? 0
+          const speedMs = Math.sqrt(u * u + v * v)
+          const kt = speedMs * 1.94384
+          const dirDeg = ((Math.atan2(-u, -v) * 180) / Math.PI + 360) % 360
+          winds.push({
+            y: windLevels[i].y,
+            dirDeg,
+            kt,
+            color: colorForWindKt(kt),
+            label: windLevels[i].label,
+          })
         })
-      })
-      setLiveWinds(winds)
+        setLiveWinds(winds)
+      } catch {
+        setLoadingWinds(false)
+      }
     }
     fetchWinds()
     const id = window.setInterval(fetchWinds, 5 * 60_000)
@@ -1548,7 +1554,18 @@ export default function TowerGlobe({}: TowerGlobeProps) {
     let aborted = false
     let timeoutId: number | null = null
     const fetchPlanes = async () => {
-      const gate = adsbCanFireNow()
+      const s = adsbRef.current
+      const now = Date.now()
+      // Vérifie si on peut tirer une requête
+      let gate: { ok: boolean; waitMs: number }
+      if (s.inFlight) {
+        gate = { ok: false, waitMs: 1000 }
+      } else {
+        const sinceLast = now - s.lastAttemptAt
+        if (sinceLast < ADSB_MIN_INTERVAL_MS) gate = { ok: false, waitMs: ADSB_MIN_INTERVAL_MS - sinceLast + 50 }
+        else if (now < s.backoffUntil) gate = { ok: false, waitMs: s.backoffUntil - now + 50 }
+        else gate = { ok: true, waitMs: 0 }
+      }
       if (!gate.ok) {
         timeoutId = window.setTimeout(fetchPlanes, gate.waitMs)
         return
@@ -1556,36 +1573,44 @@ export default function TowerGlobe({}: TowerGlobeProps) {
       const ctx = adsbCtxRef.current
       const ap = ctx.ap
       if (!ap) {
-        // Pas d'aéroport encore résolu : on retente bientôt sans pénalité.
         timeoutId = window.setTimeout(fetchPlanes, 1000)
         return
       }
       const dlat = 1.5
       const dlon = 1.5 / Math.max(0.3, Math.cos((ap.lat * Math.PI) / 180))
       const bbox = `${ap.lon - dlon},${ap.lat - dlat},${ap.lon + dlon},${ap.lat + dlat}`
-      adsbMarkAttempt()
+      s.lastAttemptAt = Date.now()
+      s.inFlight = true
       try {
         const r = await fetch(`/api/aircraft/search?bbox=${bbox}`)
         if (r.ok) {
           const d = await r.json()
           if (d && typeof d.error === 'string' && d.error) {
-            // Le backend répond 200 + liste vide (pour ne pas faire spammer
-            // le front) mais signale une erreur amont (OpenSky 429 typique) :
-            // on enclenche quand même le back-off.
-            adsbMarkError()
+            s.inFlight = false
+            s.errorStreak++
+            const backoff = Math.min(ADSB_MAX_BACKOFF_MS, 30_000 * 2 ** s.errorStreak)
+            s.backoffUntil = Date.now() + backoff
           } else {
-            adsbMarkSuccess()
+            s.inFlight = false
+            s.errorStreak = 0
+            s.backoffUntil = 0
           }
           if (aborted) return
           processStates(d.states ?? [])
         } else {
-          adsbMarkError()
+          s.inFlight = false
+          s.errorStreak++
+          const backoff = Math.min(ADSB_MAX_BACKOFF_MS, 30_000 * 2 ** s.errorStreak)
+          s.backoffUntil = Date.now() + backoff
         }
       } catch {
-        adsbMarkError()
+        s.inFlight = false
+        s.errorStreak++
+        const backoff = Math.min(ADSB_MAX_BACKOFF_MS, 30_000 * 2 ** s.errorStreak)
+        s.backoffUntil = Date.now() + backoff
       }
       if (aborted) return
-      // On replanifie : le prochain tick respectera adsbCanFireNow().
+      // On replanifie : le prochain tick respectera la logique gate ci-dessus.
       timeoutId = window.setTimeout(fetchPlanes, ADSB_MIN_INTERVAL_MS)
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1701,9 +1726,9 @@ export default function TowerGlobe({}: TowerGlobeProps) {
           />
           <LightningSprites visible={showLightning} flashes={liveFlashes} />
           <NeighborADs aerodromes={neighbors} />
-          <PlaneFleet planes={livePlanes} />
+          <PlaneFleet planes={livePlanes} onSelect={(p) => setSelected({ kind: 'plane', data: p })} />
           {liveCells.map((c, i) => (
-            <CellMesh key={i} cell={c} hidden={c.fl < minFL} />
+            <CellMesh key={i} cell={c} hidden={c.fl < minFL} onSelect={(cell) => setSelected({ kind: 'cell', data: cell })} />
           ))}
 
           <OrbitControls
@@ -1723,9 +1748,13 @@ export default function TowerGlobe({}: TowerGlobeProps) {
         <div className="text-[0.625rem] uppercase tracking-wider text-cyan-300 font-semibold mb-1">
           Aérodrome
         </div>
-        <AirportSearch icao={icao} onSelect={setIcao} />
+        <AirportSearch
+          icao={icao}
+          onSelect={setIcao}
+          displayName={airportInfo ? `${icao} · ${airportInfo.name}` : icao}
+        />
         <div className="mt-1.5 text-[0.5625rem] text-slate-500 font-mono">
-          UTC {new Date().toISOString().slice(11, 16)}
+          UTC {utcTime}
         </div>
         {/* Sélecteur de rayon scène : adapte la taille du dôme au cas
             d'usage opérationnel (TWR / APP / briefing étendu). */}
@@ -1761,7 +1790,8 @@ export default function TowerGlobe({}: TowerGlobeProps) {
         <div className="mt-1.5 flex items-center gap-2 text-[0.5625rem] border-t border-slate-800/60 pt-1.5">
           <Zap className="size-3 text-amber-300" />
           <span className="text-slate-400">Foudre dôme</span>
-          <span className="ml-auto font-mono">
+          <span className="ml-auto font-mono flex items-center gap-1">
+            {loadingFlashes && <span className="size-1.5 rounded-full bg-amber-400 animate-pulse inline-block" title="Chargement foudre..." />}
             <span className="text-amber-200">{flashCount.in}</span>
             <span className="text-slate-500"> / {flashCount.fetched} reg.</span>
           </span>
@@ -1769,7 +1799,8 @@ export default function TowerGlobe({}: TowerGlobeProps) {
         <div className="mt-1 flex items-center gap-2 text-[0.5625rem]">
           <span className="size-3 text-rose-300 inline-block">▮</span>
           <span className="text-slate-400">Cellules RDT</span>
-          <span className="ml-auto font-mono">
+          <span className="ml-auto font-mono flex items-center gap-1">
+            {loadingCells && <span className="size-1.5 rounded-full bg-rose-400 animate-pulse inline-block" title="Chargement cellules..." />}
             <span className="text-rose-200">{cellCount.in}</span>
             <span className="text-slate-500"> / {cellCount.fetched} mond.</span>
           </span>
@@ -1781,9 +1812,12 @@ export default function TowerGlobe({}: TowerGlobeProps) {
             <span className="text-cyan-200">{livePlanes.length}</span>
           </span>
         </div>
-        {liveWinds.length > 0 && (
+        {(liveWinds.length > 0 || loadingWinds) && (
           <div className="mt-1.5 border-t border-slate-800/60 pt-1.5 space-y-0.5">
-            <div className="text-[0.5rem] uppercase tracking-wider text-slate-500">Vents</div>
+            <div className="text-[0.5rem] uppercase tracking-wider text-slate-500 flex items-center gap-1">
+              Vents
+              {loadingWinds && <span className="size-1.5 rounded-full bg-cyan-400 animate-pulse inline-block" title="Chargement vents..." />}
+            </div>
             {liveWinds.map((w) => (
               <div key={w.label} className="flex items-center gap-2 text-[0.5625rem] font-mono">
                 <span className="text-slate-500 w-10">{w.label}</span>
@@ -1807,6 +1841,7 @@ export default function TowerGlobe({}: TowerGlobeProps) {
         flashes={liveFlashes}
         wl={liveWl}
       />
+      <SelectedPanel info={selected} onClose={() => setSelected(null)} />
 
       {/* HUD bottom-right : slider FL + toggles */}
       <div className="absolute bottom-4 right-4 z-10 px-3 py-2 rounded-lg bg-slate-950/80 backdrop-blur-md border border-violet-900/40 min-w-[280px] shadow-2xl">
@@ -2076,7 +2111,7 @@ function MetarPanel({
         )}
 
         <div className="flex gap-2 pt-1 border-t border-slate-800/40">
-          {taf?.decoded && (
+          {(taf?.decoded || taf?.tac) && (
             <button
               onClick={() => setExpanded(expanded === 'taf' ? null : 'taf')}
               className={`px-2 py-1 rounded text-[0.5625rem] uppercase tracking-wider ${
@@ -2101,9 +2136,9 @@ function MetarPanel({
             </button>
           )}
         </div>
-        {expanded === 'taf' && taf?.decoded && (
+        {expanded === 'taf' && (taf?.decoded || taf?.tac) && (
           <div className="text-[0.625rem] text-slate-300 bg-slate-900/30 border border-violet-900/40 rounded p-2 whitespace-pre-wrap max-h-72 overflow-y-auto">
-            {taf.decoded}
+            {taf.decoded ?? taf.tac}
           </div>
         )}
         {expanded === 'wl' && wl?.decoded && (
@@ -2220,14 +2255,58 @@ function LegendRow({ color, label }: { color: string; label: string }) {
   )
 }
 
+function SelectedPanel({ info, onClose }: { info: SelectedInfo; onClose: () => void }) {
+  if (!info) return null
+  return (
+    <div className="absolute top-1/2 right-72 -translate-y-1/2 z-10 max-w-[260px] px-3 py-2 rounded-lg bg-slate-950/90 backdrop-blur-md border border-cyan-700/50 shadow-2xl text-[0.625rem] text-slate-200 space-y-1">
+      <div className="flex items-center gap-2 pb-1 border-b border-slate-800/60">
+        <span className="uppercase tracking-wider text-cyan-300 font-semibold flex-1 text-[0.5625rem]">
+          {info.kind === 'plane' ? 'Aéronef' : 'Cellule orageuse'}
+        </span>
+        <button onClick={onClose} className="text-slate-500 hover:text-slate-200 text-xs">✕</button>
+      </div>
+      {info.kind === 'plane' && (
+        <>
+          <div className="font-mono text-cyan-200 text-[0.75rem]">{info.data.callsign}</div>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[0.5625rem]">
+            <span className="text-slate-500">FL</span>
+            <span className="font-mono">{String(info.data.fl).padStart(3, '0')}</span>
+            <span className="text-slate-500">GS</span>
+            <span className="font-mono">{Math.round(info.data.gsKt)} kt</span>
+            <span className="text-slate-500">V/S</span>
+            <span className={`font-mono ${info.data.vsTrend === 'climb' ? 'text-emerald-300' : info.data.vsTrend === 'desc' ? 'text-orange-300' : 'text-slate-300'}`}>
+              {info.data.vsTrend === 'climb' ? '↑ montée' : info.data.vsTrend === 'desc' ? '↓ descente' : '→ palier'}
+            </span>
+            <span className="text-slate-500">Dist.</span>
+            <span className="font-mono">{info.data.distNM.toFixed(1)} NM</span>
+          </div>
+        </>
+      )}
+      {info.kind === 'cell' && (
+        <>
+          <div className="font-mono text-rose-200 text-[0.75rem]">{info.data.label}</div>
+          <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[0.5625rem]">
+            <span className="text-slate-500">Sommet</span>
+            <span className="font-mono">FL{info.data.fl}</span>
+            <span className="text-slate-500">Hauteur</span>
+            <span className="font-mono">{(info.data.topUnits * 30.48 / RADIUS).toFixed(1)} km</span>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 // AirportSearch : input avec autocomplete sur les 43k aérodromes OurAirports.
 // Cherche par ICAO, IATA, nom ou ville.
 function AirportSearch({
   icao,
   onSelect,
+  displayName,
 }: {
   icao: string
   onSelect: (icao: string) => void
+  displayName?: string
 }) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<
@@ -2235,20 +2314,6 @@ function AirportSearch({
   >([])
   const [open, setOpen] = useState(false)
   const [hoverIdx, setHoverIdx] = useState(0)
-
-  // Charge le nom complet de l'aéroport courant pour l'afficher quand input
-  // n'a pas le focus.
-  const [currentName, setCurrentName] = useState('')
-  useEffect(() => {
-    fetch(`/api/airport/${icao}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (d?.airport) {
-          setCurrentName(`${d.airport.ICAO} · ${d.airport.Name}`)
-        }
-      })
-      .catch(() => {})
-  }, [icao])
 
   // Debounce search
   useEffect(() => {
@@ -2283,7 +2348,7 @@ function AirportSearch({
     <div className="relative">
       <input
         type="text"
-        value={open ? query : currentName}
+        value={open ? query : (displayName ?? icao)}
         onChange={(e) => {
           setQuery(e.target.value)
           setOpen(true)
