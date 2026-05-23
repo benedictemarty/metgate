@@ -45,10 +45,18 @@ func FS() fs.FS {
 // Les requêtes vers /api/* et /healthz sont laissées en 404 (elles doivent
 // être routées avant ce handler dans le ServeMux).
 //
-// Les chemins ressemblant à des assets (extension explicite type .js/.css/
-// .map/.svg/.ico/.json) renvoient 404 quand ils n'existent pas, plutôt que
-// le fallback index.html — sinon les sourcemaps demandées par les DevTools
-// reçoivent du HTML que le navigateur tente de parser en JSON.
+// Stratégie de cache :
+//   - index.html (et toute route SPA) : no-cache, must-revalidate — le
+//     navigateur redemande toujours, ce qui garantit que les nouveaux hashes
+//     Vite sont chargés après un déploiement. Sans ça, un index.html mis en
+//     cache référence des chunks avec d'anciens hashes qui n'existent plus →
+//     le serveur renvoie 404 en text/plain → Firefox affiche "MIME interdit".
+//   - Assets Vite (*.js, *.css…) : immutable, max-age=1 an — les hashes de
+//     contenu garantissent que deux fichiers de même nom sont identiques.
+//
+// Les assets inconnus (extension explicite mais fichier absent) renvoient 404
+// plutôt que le fallback index.html — sinon les sourcemaps DevTools reçoivent
+// du HTML que le navigateur tente de parser.
 func Handler() http.Handler {
 	sub := FS()
 	fileServer := http.FileServer(http.FS(sub))
@@ -66,8 +74,16 @@ func Handler() http.Handler {
 				http.NotFound(w, r)
 				return
 			}
+			path = "index.html"
 			r = r.Clone(r.Context())
 			r.URL.Path = "/"
+		}
+		// Cache-Control différencié : index.html toujours revalidé,
+		// assets Vite (hashes dans le nom) mis en cache de façon permanente.
+		if path == "index.html" || !isAssetPath(path) {
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		} else {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		}
 		fileServer.ServeHTTP(w, r)
 	})
