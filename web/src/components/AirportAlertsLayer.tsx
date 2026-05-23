@@ -72,10 +72,10 @@ export default function AirportAlertsLayer({ enabled }: Props) {
     if (!forceMap) return
     const b = forceMap.getBounds()
     if (!b) return
-    // Refuser les vues trop dézoomées (>40°×30°) : pas pertinent + timeout.
+    // Refuser les vues trop dézoomées (>25°×20°) : OOM côté serveur.
     const w2 = b.getEast() - b.getWest()
     const h2 = b.getNorth() - b.getSouth()
-    if (w2 > 40 || h2 > 30) {
+    if (w2 > 25 || h2 > 20) {
       setAlerts([])
       setLastFetch(null)
       setStatus('idle')

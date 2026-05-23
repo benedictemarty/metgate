@@ -67,32 +67,27 @@ func (s *Service) AlertsForAirports(ctx context.Context, aps []SimpleAirport) ([
 	rdtCh   := make(chan featResult, 1)
 	tafCh   := make(chan featResult, 1)
 
+	// Counts réduits volontairement pour limiter la consommation mémoire :
+	// fetchFeatures double-parse les données (GML→JSON puis JSON→map), ce qui
+	// consomme ~5× la taille brute. RDT à 2000 features tuait le LXC (OOM).
 	go func() {
-		f, err := s.fetchFeatures(ctx, "SP_last", 500, "")
+		f, err := s.fetchFeatures(ctx, "SP_last", 300, "")
 		speciCh <- featResult{f, err}
 	}()
 	go func() {
-		f, err := s.fetchFeatures(ctx, "WL_last", 500, "")
+		f, err := s.fetchFeatures(ctx, "WL_last", 200, "")
 		maaCh <- featResult{f, err}
 	}()
 	go func() {
-		f, err := s.fetchFeatures(ctx, "RDT_MSG_last", 2000, "")
+		// RDT limité à 300 : 60 cellules × 5 forecast times = largement suffisant
+		// pour une vue Europa/France. TAF_last (IWXXM 10KB/feat) exclu : trop lourd.
+		f, err := s.fetchFeatures(ctx, "RDT_MSG_last", 300, "")
 		rdtCh <- featResult{f, err}
 	}()
 	go func() {
-		// FT_last = TAF TAC (produits plats, fallback stations sans IWXXM).
-		// TAF_last = IWXXM TAF (stations OACI principales).
-		// On préfère FT_last pour le parsing TAC ; TAF_last pour IWXXM.
-		ft, errFT := s.fetchFeatures(ctx, "FT_last", 500, "")
-		taf, errTAF := s.fetchFeatures(ctx, "TAF_last", 500, "")
-		feats := ft
-		if errFT != nil {
-			feats = taf
-			errFT = errTAF
-		} else {
-			feats = append(feats, taf...)
-		}
-		tafCh <- featResult{feats, errFT}
+		// FT_last uniquement (TAC, léger ~1KB/feature). TAF_last IWXXM exclu (OOM).
+		f, err := s.fetchFeatures(ctx, "FT_last", 200, "")
+		tafCh <- featResult{f, err}
 	}()
 
 	speciRes := <-speciCh
