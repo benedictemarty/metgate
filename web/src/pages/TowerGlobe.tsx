@@ -1182,23 +1182,28 @@ export default function TowerGlobe({}: TowerGlobeProps) {
   const [loadingFlashes, setLoadingFlashes] = useState(false)
   const [loadingWinds, setLoadingWinds] = useState(false)
 
-  // Reset des states live à chaque changement d'aéroport ou de rayon scène
-  // pour éviter d'afficher temporairement les avions/cellules/foudre du
-  // précédent aéroport avec un référentiel devenu obsolète.
-  // Reset des données live à chaque changement d'aéroport OU de rayon.
-  // airportInfo (pistes, coords) ne dépend que de l'ICAO : on le reset uniquement
-  // au changement d'aéroport pour éviter que les pistes disparaissent en changeant de rayon.
+  // Données géo-dépendantes (positionnement dans le dôme) : reset à chaque
+  // changement d'ICAO ou de rayon. Les coordonnées scène sont recalculées en
+  // fonction de nmToUnits → afficher les anciens points avec le nouveau rayon
+  // produirait des positions fausses.
   useEffect(() => {
     setLivePlanes([])
     setLiveCells([])
     setLiveFlashes([])
     setLiveWinds([])
-    setLiveMetar(null)
-    setLiveTaf(null)
-    setLiveWl(null)
     setFlashCount({ in: 0, fetched: 0 })
     setCellCount({ in: 0, fetched: 0 })
   }, [icao, sceneRangeNm])
+
+  // METAR/TAF/WL ne dépendent que de l'ICAO (pas du rayon scène) : reset
+  // uniquement au changement d'aéroport. Sinon le changement de rayon vide
+  // l'affichage OPMET sans relancer le fetch (son useEffect ne dépend que de
+  // [icao]) → données disparaissent définitivement.
+  useEffect(() => {
+    setLiveMetar(null)
+    setLiveTaf(null)
+    setLiveWl(null)
+  }, [icao])
 
   useEffect(() => {
     setAirportInfo(null)
