@@ -11,6 +11,30 @@ interface AcState {
   onGround?: boolean
 }
 
+// ─── Catégorie de vol (METAR) ─────────────────────────────────────────────────
+
+function flightCategory(props: Record<string, unknown>): 'VFR' | 'MVFR' | 'IFR' | 'LIFR' {
+  if (props.cavok === true || props.cavok === 'true') return 'VFR'
+  const cloudStr = String(props.cloud ?? '')
+  let ceilingFt = Infinity
+  for (const g of cloudStr.split(' ')) {
+    const m = g.match(/^(BKN|OVC)(\d{3})/)
+    if (m) { const ft = parseInt(m[2]) * 100; if (ft < ceilingFt) ceilingFt = ft }
+  }
+  const visiM = parseFloat(String(props.visi ?? props.visibility_m ?? '9999')) || 9999
+  if (ceilingFt < 500  || visiM < 1600) return 'LIFR'
+  if (ceilingFt < 1000 || visiM < 4800) return 'IFR'
+  if (ceilingFt < 3000 || visiM < 8000) return 'MVFR'
+  return 'VFR'
+}
+
+const FCAT_COLOR: Record<string, string> = {
+  VFR:  '#00dd44',
+  MVFR: '#4488ff',
+  IFR:  '#ff4444',
+  LIFR: '#ff44ff',
+}
+
 // ─── Couleurs ICAO radar météo ────────────────────────────────────────────────
 
 const WX: Record<number, { fill: string; stroke: string; alpha: number }> = {
@@ -118,6 +142,8 @@ function drawRadar(
   route: [number, number][] | null,
   fir: GeoJSON.FeatureCollection | null,
   countries: GeoJSON.FeatureCollection | null,
+  metar: GeoJSON.FeatureCollection | null,
+  cat: GeoJSON.FeatureCollection | null,
 ) {
   const R   = size / 2 - 6
   const cx  = size / 2
@@ -258,6 +284,31 @@ function drawRadar(
     ctx.restore()
   }
 
+  // ── CAT — turbulence en clair (violet, phase 0.10) ──
+  if (cat && cat.features.length > 0) {
+    const gC = glow(tSec, 0.10, 0.45)
+    ctx.save(); ctx.translate(cx, cy)
+    cat.features.forEach(f => {
+      const geo = f.geometry as GeoJSON.Geometry; if (!geo) return
+      const polys = geo.type === 'Polygon' ? [(geo as GeoJSON.Polygon).coordinates]
+        : geo.type === 'MultiPolygon' ? (geo as GeoJSON.MultiPolygon).coordinates : []
+      polys.forEach(([ring]) => {
+        ctx.beginPath()
+        ring.forEach(([lon, lat], i) => {
+          const [px, py] = p(lat, lon); i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py)
+        })
+        ctx.closePath()
+        ctx.fillStyle = `rgba(170,90,255,${0.05 + gC * 0.07})`; ctx.fill()
+        ctx.shadowBlur = gC * 16; ctx.shadowColor = '#cc88ff'
+        ctx.strokeStyle = `rgba(180,100,255,${0.30 + gC * 0.70})`
+        ctx.lineWidth = 0.6 + gC * 1.4
+        ctx.setLineDash([4, 4]); ctx.stroke(); ctx.setLineDash([])
+        ctx.shadowBlur = 0
+      })
+    })
+    ctx.restore()
+  }
+
   // ── Cellules RDT — contours pulsants, phase décalée par step ──
   // Cycle à 0.55 Hz : SIGMET (ph 0) → T+0 (ph 0.25) → T+15 (ph 0.5) → T+30 (ph 0.75)
   // Chaque step a sa "tranche" de lumière ; les autres restent à l'état de base.
@@ -337,6 +388,37 @@ function drawRadar(
         ctx.shadowBlur = 6 + freshness * 10; ctx.shadowColor = `hsl(${hue},100%,90%)`
       }
       ctx.fill(); ctx.shadowBlur = 0
+    })
+    ctx.restore()
+  }
+
+  // ── METAR aérodromes — points catégorie de vol ──
+  if (metar && metar.features.length > 0) {
+    ctx.save(); ctx.translate(cx, cy)
+    const dotR = Math.max(3, R * 0.018)
+    metar.features.forEach(f => {
+      const geo = f.geometry as GeoJSON.Geometry
+      if (!geo || geo.type !== 'Point') return
+      const [lon, lat] = (geo as GeoJSON.Point).coordinates
+      const [px, py] = p(lat, lon)
+      if (Math.hypot(px, py) > R * 1.02) return
+      const pr = f.properties as Record<string, unknown>
+      const fcat = flightCategory(pr)
+      const col = FCAT_COLOR[fcat]
+      ctx.beginPath(); ctx.arc(px, py, dotR, 0, Math.PI * 2)
+      ctx.fillStyle = col + 'bb'
+      ctx.shadowBlur = 4; ctx.shadowColor = col; ctx.fill(); ctx.shadowBlur = 0
+      // Petite flèche de vent
+      const wdir = parseFloat(String(pr.wind_dir ?? '0'))
+      const wspd = parseFloat(String(pr.wind_speed ?? '0'))
+      if (wspd > 2) {
+        const wrad = (wdir - hdg) * Math.PI / 180
+        const wlen = dotR * 2.2
+        ctx.beginPath()
+        ctx.moveTo(px, py)
+        ctx.lineTo(px + Math.sin(wrad) * wlen, py - Math.cos(wrad) * wlen)
+        ctx.strokeStyle = col + '88'; ctx.lineWidth = 0.8; ctx.stroke()
+      }
     })
     ctx.restore()
   }
@@ -427,10 +509,12 @@ export default function NavDisplay() {
   const totalDurationMsRef = useRef(0)
   const rdtRefTimeRef      = useRef(0)
   const modeRef            = useRef<'real' | 'sim'>('sim')
-  // Refs rdt/sigmet accessibles depuis le handler souris (hors closure RAF)
+  // Refs accessibles depuis le handler souris (hors closure RAF)
   const rdtRef2      = useRef<GeoJSON.FeatureCollection | null>(null)
   const sigmetRef2   = useRef<GeoJSON.FeatureCollection | null>(null)
   const lightningRef = useRef<GeoJSON.FeatureCollection | null>(null)
+  const metarRef2    = useRef<GeoJSON.FeatureCollection | null>(null)
+  const catRef2      = useRef<GeoJSON.FeatureCollection | null>(null)
   const rangeNMRef   = useRef(80)
 
   // State React (pour UI)
@@ -446,6 +530,8 @@ export default function NavDisplay() {
   const [route, setRoute]       = useState<[number, number][] | null>(null)
   const [fir, setFir]           = useState<GeoJSON.FeatureCollection | null>(null)
   const [countries, setCountries] = useState<GeoJSON.FeatureCollection | null>(null)
+  const [metar, setMetar]       = useState<GeoJSON.FeatureCollection | null>(null)
+  const [cat, setCat]           = useState<GeoJSON.FeatureCollection | null>(null)
   const [dep, setDep]           = useState('LFPG')
   const [arr, setArr]           = useState('LFMN')
   const [fl, setFl]             = useState(350)
@@ -476,6 +562,8 @@ export default function NavDisplay() {
   useEffect(() => { rdtRef2.current = rdt }, [rdt])
   useEffect(() => { sigmetRef2.current = sigmet }, [sigmet])
   useEffect(() => { lightningRef.current = lightning }, [lightning])
+  useEffect(() => { metarRef2.current = metar }, [metar])
+  useEffect(() => { catRef2.current = cat }, [cat])
   useEffect(() => { rangeNMRef.current = RANGES[rangeIdx] }, [rangeIdx])
 
   // Extraire l'heure de référence T+0 du dernier RDT reçu
@@ -502,14 +590,18 @@ export default function NavDisplay() {
       const bbox = ac
         ? `${(ac.lon - deg).toFixed(1)},${(ac.lat - deg * 0.7).toFixed(1)},${(ac.lon + deg).toFixed(1)},${(ac.lat + deg * 0.7).toFixed(1)}`
         : '-30,25,50,75'
-      const [r1, r2, r3] = await Promise.all([
+      const [r1, r2, r3, r4, r5] = await Promise.all([
         fetch('/api/feature?type=RDT_MSG_last&count=2000').then(r => r.ok ? r.json() : null),
         fetch('/api/feature?type=SIGMET_last&count=200').then(r => r.ok ? r.json() : null),
         fetch(`/api/lightning?bbox=${bbox}`).then(r => r.ok ? r.json() : null),
+        fetch('/api/feature?type=SA_last&count=500').then(r => r.ok ? r.json() : null),
+        fetch('/api/feature?type=CAT_EURAT01_last&count=100').then(r => r.ok ? r.json() : null),
       ])
       if (r1) setRdt(r1)
       if (r2) setSigmet(r2)
       if (r3) setLightning(r3)
+      if (r4) setMetar(r4)
+      if (r5) setCat(r5)
       setWxUpdatedAt(new Date())
     } finally {
       setWxFetching(false)
@@ -714,6 +806,46 @@ export default function NavDisplay() {
       }
     })
 
+    // Hit-test CAT
+    catRef2.current?.features.forEach(f => {
+      const g = f.geometry as GeoJSON.Geometry; if (!g) return
+      const pr = f.properties as Record<string, unknown>
+      const polys = g.type === 'Polygon' ? [(g as GeoJSON.Polygon).coordinates]
+        : g.type === 'MultiPolygon' ? (g as GeoJSON.MultiPolygon).coordinates : []
+      for (const coords of polys) {
+        if (pointInPolygon(lat, lon, coords as number[][][])) {
+          lines.push('💨 CAT — Turbulence en clair')
+          if (pr?.lowerlimit !== undefined) lines.push(`FL${pr.lowerlimit} – FL${pr.upperlimit}`)
+          if (pr?.severity)       lines.push(`Intensité : ${pr.severity}`)
+          if (pr?.begin_position) lines.push(`Début : ${String(pr.begin_position).slice(11,16)}Z`)
+          if (pr?.end_position)   lines.push(`Fin   : ${String(pr.end_position).slice(11,16)}Z`)
+          return
+        }
+      }
+    })
+
+    // Hit-test METAR aérodromes (distance au point projeté)
+    metarRef2.current?.features.forEach(f => {
+      const g = f.geometry as GeoJSON.Geometry
+      if (!g || g.type !== 'Point') return
+      const [flon, flat] = (g as GeoJSON.Point).coordinates
+      const [fpx, fpy] = proj(flat, flon, clat, clon, SC, hdgR)
+      if (Math.hypot((mx - cx) - fpx, (my - cy) - fpy) > 10) return
+      const pr = f.properties as Record<string, unknown>
+      const fcat = flightCategory(pr)
+      lines.push(`✈ ${pr.id ?? '?'}  ${fcat}`)
+      if (pr.cavok === true || pr.cavok === 'true') {
+        lines.push('CAVOK')
+      } else {
+        if (pr.cloud) lines.push(`Ciel : ${pr.clouds ?? pr.cloud}`)
+        const vm = parseFloat(String(pr.visi ?? '0'))
+        if (vm > 0) lines.push(`Visi : ${vm >= 9999 ? '>10 km' : (vm / 1000).toFixed(1) + ' km'}`)
+      }
+      if (pr.wind_dir != null && pr.wind_speed != null)
+        lines.push(`Vent : ${pr.wind_dir}°/${pr.wind_speed}kt${pr.gust ? ` G${pr.gust}` : ''}`)
+      if (pr.temperature != null) lines.push(`T : ${pr.temperature}°C  Td : ${pr.dewpoint ?? '?'}°C  QNH : ${pr.pressure ?? '?'} hPa`)
+    })
+
     if (lines.length > 0) {
       setTooltip({ x: e.clientX, y: e.clientY, lines })
     } else {
@@ -798,12 +930,12 @@ export default function NavDisplay() {
       const etaDate = new Date(etaMs)
       const etaISO  = `${String(etaDate.getUTCHours()).padStart(2,'0')}${String(etaDate.getUTCMinutes()).padStart(2,'0')}`
 
-      drawRadar(ctx, sizeRef.current, acRef.current, rdt, sigmetFiltered, lightning, rangeNM, tSec, rdtStep, etaISO, etaMs, routeRef.current, fir, countries)
+      drawRadar(ctx, sizeRef.current, acRef.current, rdt, sigmetFiltered, lightning, rangeNM, tSec, rdtStep, etaISO, etaMs, routeRef.current, fir, countries, metar, cat)
       rafRef.current = requestAnimationFrame(animate)
     }
     rafRef.current = requestAnimationFrame(animate)
     return () => cancelAnimationFrame(rafRef.current)
-  }, [rdt, sigmet, lightning, rangeNM, fir, countries])
+  }, [rdt, sigmet, lightning, rangeNM, fir, countries, metar, cat])
 
   // Formatage temps estimé
   const totalDistNM = route && route.length > 1
@@ -936,6 +1068,23 @@ export default function NavDisplay() {
           })}
         </div>
 
+        {/* Légende CAT + METAR */}
+        <div>
+          <div className="text-[0.5rem] uppercase tracking-widest text-[#006622] mb-1 font-mono">AUTRES</div>
+          <div className="flex items-center gap-2 py-0.5">
+            <span className="size-2.5 rounded-sm" style={{backgroundColor:'#aa5aff'}}/>
+            <span className="text-[0.5rem] font-mono text-[#006622]">CAT  Turbulence</span>
+          </div>
+          <div className="flex flex-col gap-0.5 mt-1">
+            {(['VFR','MVFR','IFR','LIFR'] as const).map(c => (
+              <div key={c} className="flex items-center gap-2">
+                <span className="size-2 rounded-full" style={{backgroundColor:FCAT_COLOR[c]}}/>
+                <span className="text-[0.45rem] font-mono text-[#006622]">{c}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
         <div className="mt-auto pt-2 border-t border-[#003311] flex flex-col gap-1">
           {/* Indicateur de mise à jour météo */}
           <div className="flex items-center gap-1.5">
@@ -950,6 +1099,8 @@ export default function NavDisplay() {
                     {rdt ? `${rdt.features.filter(f=>(f.properties as Record<string,unknown>)?.forecasttime==0).length} cell.` : '—'}
                     &nbsp;·&nbsp;
                     {lightning ? `${lightning.features.length} ⚡` : '—'}
+                    &nbsp;·&nbsp;
+                    {metar ? `${metar.features.length} SA` : '—'}
                   </span>
                 : null
             }
