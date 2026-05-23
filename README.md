@@ -6,6 +6,7 @@ Portail météo pour les services ATM — agrège [MetGate](https://metgate.mete
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react)
 ![TypeScript](https://img.shields.io/badge/TypeScript-6-3178C6?logo=typescript)
 ![MapLibre](https://img.shields.io/badge/MapLibre-5-396CB2)
+[![Licence EUPL-1.2](https://img.shields.io/badge/Licence-EUPL--1.2-blue)](LICENSE)
 
 ---
 
@@ -38,6 +39,15 @@ Portail météo pour les services ATM — agrège [MetGate](https://metgate.mete
 - Plan de vol synthétique DEP → ARR : grand cercle, montée / croisière / descente
 - Météo le long de la route : SIGMET, AIRMET, MAA, CAT actifs
 
+### Navigation Display (EFIS ND)
+- Radar météo canvas style phosphore vert, heading-up, 40/80/160/320 NM
+- **Mode SIM** : route DEP → ARR avec heure de départ UTC, slider play/pause ×1–×30
+- **Mode LIVE** : suivi ADS-B temps réel (polling OpenSky 15 s), données FL / GS / TRK / V/S / LAT / LON
+- Phénomènes météo calés sur l'ETA de l'avion : RDT T+0…T+60, SIGMET par fenêtre de validité, flashes MTG-LI avec fade temporel (blanc → rouge → masqué sur 10 min)
+- Contours pulsants alternés (cycle cos² par type), popup au survol
+- Mini-carte géographique (Natural Earth 110m + FIR VATSIM 1038 zones)
+- Indicateur de mise à jour météo (heure + compteurs cellules / flashes)
+
 ---
 
 ## Architecture
@@ -53,6 +63,8 @@ internal/
   lightning/         EUMETSAT MTG-LI LFL, cache par product ID
   eumetsat/          client OAuth2 EUMETSAT (token cache)
   satellite/         proxy tuiles EUMETView WMS (cache 60 s / tuile)
+  fir/               FIR/UIR mondiaux embarqués (VATSIM, 1038 zones, GeoJSON)
+  geo/               pays Natural Earth 110m embarqués (GeoJSON)
   http/              routes HTTP, handlers, spec OpenAPI embarquée
   web/               go:embed du frontend buildé (dist/)
 web/src/             React 19 + TypeScript + MapLibre 5 + Three.js / R3F
@@ -189,6 +201,8 @@ WantedBy=multi-user.target
 | [EUMETSAT Data Store](https://data.eumetsat.int) | MTG-FCI CTTH (sommets nuageux), MTG-LI (foudre) |
 | [EUMETView WMS](https://view.eumetsat.int) | Tuiles satellite FCI IR / RGB Convection |
 | [OurAirports](https://ourairports.com/data/) | Aérodromes, pistes, coordonnées (CC0) |
+| [VATSIM vatspy-data-project](https://github.com/vatsimnetwork/vatspy-data-project) | FIR/UIR mondiaux 1038 zones (MIT) |
+| [Natural Earth](https://www.naturalearthdata.com) | Polygones pays 110m (domaine public) |
 
 > **Note EUMETSAT** : CTH, foudre et satellite MTG sont des données situationnelles **non OPMET**. Elles complètent la vision opérationnelle mais ne remplacent pas les produits OPMET officiels.
 
@@ -204,4 +218,8 @@ WantedBy=multi-user.target
 
 ## Licence
 
-MIT
+[European Union Public Licence v. 1.2 (EUPL-1.2)](LICENSE)
+
+Licence officielle de l'Union Européenne — copyleft compatible AGPL/LGPL/MPL. Toute modification distribuée ou déployée en service doit être publiée sous EUPL-1.2 ou licence compatible.
+
+Les données tierces conservent leur licence d'origine : VATSIM Boundaries (MIT), Natural Earth (domaine public), OurAirports (CC0).
