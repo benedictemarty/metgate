@@ -520,7 +520,9 @@ export default function NavDisplay() {
   const [speedIdx, setSpeedIdx] = useState(0)
   const [progress, setProgress] = useState(0)
   const [tooltip, setTooltip]   = useState<{x:number;y:number;lines:string[]} | null>(null)
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null)
+  const [lastUpdate, setLastUpdate]   = useState<Date | null>(null)
+  const [wxUpdatedAt, setWxUpdatedAt] = useState<Date | null>(null)
+  const [wxFetching, setWxFetching]   = useState(false)
 
   const rangeNM = RANGES[rangeIdx]
 
@@ -552,20 +554,25 @@ export default function NavDisplay() {
 
   // Fetch météo
   const fetchWx = useCallback(async () => {
-    const ac = acRef.current
-    // Bbox centrée sur l'avion (ou Europe par défaut) couvrant ~2× la portée max
-    const deg = 12
-    const bbox = ac
-      ? `${(ac.lon - deg).toFixed(1)},${(ac.lat - deg * 0.7).toFixed(1)},${(ac.lon + deg).toFixed(1)},${(ac.lat + deg * 0.7).toFixed(1)}`
-      : '-30,25,50,75'
-    const [r1, r2, r3] = await Promise.all([
-      fetch('/api/feature?type=RDT_MSG_last&count=2000').then(r => r.ok ? r.json() : null),
-      fetch('/api/feature?type=SIGMET_last&count=200').then(r => r.ok ? r.json() : null),
-      fetch(`/api/lightning?bbox=${bbox}`).then(r => r.ok ? r.json() : null),
-    ])
-    if (r1) setRdt(r1)
-    if (r2) setSigmet(r2)
-    if (r3) setLightning(r3)
+    setWxFetching(true)
+    try {
+      const ac = acRef.current
+      const deg = 12
+      const bbox = ac
+        ? `${(ac.lon - deg).toFixed(1)},${(ac.lat - deg * 0.7).toFixed(1)},${(ac.lon + deg).toFixed(1)},${(ac.lat + deg * 0.7).toFixed(1)}`
+        : '-30,25,50,75'
+      const [r1, r2, r3] = await Promise.all([
+        fetch('/api/feature?type=RDT_MSG_last&count=2000').then(r => r.ok ? r.json() : null),
+        fetch('/api/feature?type=SIGMET_last&count=200').then(r => r.ok ? r.json() : null),
+        fetch(`/api/lightning?bbox=${bbox}`).then(r => r.ok ? r.json() : null),
+      ])
+      if (r1) setRdt(r1)
+      if (r2) setSigmet(r2)
+      if (r3) setLightning(r3)
+      setWxUpdatedAt(new Date())
+    } finally {
+      setWxFetching(false)
+    }
   }, [])
 
   // Fetch FIR + pays (mini-carte) — une seule fois au montage
@@ -1016,8 +1023,26 @@ export default function NavDisplay() {
           })}
         </div>
 
-        <div className="mt-auto pt-2 border-t border-[#003311]">
-          <div className="text-[0.45rem] font-mono text-[#005522] leading-relaxed">{status}</div>
+        <div className="mt-auto pt-2 border-t border-[#003311] flex flex-col gap-1">
+          {/* Indicateur de mise à jour météo */}
+          <div className="flex items-center gap-1.5">
+            <span className={`size-1.5 rounded-full ${wxFetching ? 'bg-[#00ff88] animate-ping' : wxUpdatedAt ? 'bg-[#004411]' : 'bg-[#003311]'}`}/>
+            <span className="text-[0.45rem] font-mono text-[#005522] uppercase tracking-widest">WX</span>
+            {wxFetching
+              ? <span className="text-[0.45rem] font-mono text-[#00aa44]">chargement…</span>
+              : wxUpdatedAt
+                ? <span className="text-[0.45rem] font-mono text-[#006622]">
+                    {String(wxUpdatedAt.getUTCHours()).padStart(2,'0')}:{String(wxUpdatedAt.getUTCMinutes()).padStart(2,'0')}Z
+                    &nbsp;·&nbsp;
+                    {rdt ? `${rdt.features.filter(f=>(f.properties as Record<string,unknown>)?.forecasttime==0).length} cell.` : '—'}
+                    &nbsp;·&nbsp;
+                    {lightning ? `${lightning.features.length} ⚡` : '—'}
+                  </span>
+                : null
+            }
+          </div>
+          {/* Statut opération */}
+          <div className="text-[0.45rem] font-mono text-[#005522] leading-relaxed truncate">{status}</div>
         </div>
       </div>
 
