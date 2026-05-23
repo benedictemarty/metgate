@@ -96,13 +96,9 @@ func (s *Service) RouteWindProfile(ctx context.Context, plan *RoutePlan) (*WindP
 			trackDeg = bearingDegRoute(plan.Waypoints[i-1].Lat, plan.Waypoints[i-1].Lon, w.Lat, w.Lon)
 		}
 
-		// Step nearest temporellement.
+		// Interpolation temporelle linéaire entre les 2 steps encadrant l'ETA.
 		wpUnix, _ := parseISOToUnixMs(w.TimeISO)
-		stepIdx := nearestUnixIndex(stepTimesUnix, wpUnix)
-		step := grid.Steps[stepIdx]
-
-		// Sample bilinéaire dans le step.
-		uMs, vMs, ok := sampleStepUV(grid, step, w.Lat, w.Lon)
+		uMs, vMs, ok := sampleInterpolatedUV(grid, stepTimesUnix, wpUnix, w.Lat, w.Lon)
 		if !ok {
 			continue
 		}
@@ -241,6 +237,56 @@ func parseISOToUnixMs(iso string) (int64, bool) {
 		return t.UnixMilli(), true
 	}
 	return 0, false
+}
+
+// sampleInterpolatedUV interpole temporellement et spatialement (u,v) en m/s.
+// Trouve les deux steps encadrant target, interpole linéairement u,v entre eux.
+// Si target est hors de la plage des steps, utilise le step le plus proche.
+func sampleInterpolatedUV(grid *WindGrid, stepTimesMs []int64, targetMs int64, lat, lon float64) (u, v float64, ok bool) {
+	n := len(stepTimesMs)
+	if n == 0 {
+		return 0, 0, false
+	}
+	if n == 1 {
+		return sampleStepUV(grid, grid.Steps[0], lat, lon)
+	}
+
+	// Trouver l'index i tel que stepTimesMs[i] <= targetMs < stepTimesMs[i+1].
+	lo, hi := 0, n-1
+	for lo < hi-1 {
+		mid := (lo + hi) / 2
+		if stepTimesMs[mid] <= targetMs {
+			lo = mid
+		} else {
+			hi = mid
+		}
+	}
+	// Cas aux bords : clamper sur le step le plus proche.
+	if targetMs <= stepTimesMs[0] {
+		return sampleStepUV(grid, grid.Steps[0], lat, lon)
+	}
+	if targetMs >= stepTimesMs[n-1] {
+		return sampleStepUV(grid, grid.Steps[n-1], lat, lon)
+	}
+
+	dt := float64(stepTimesMs[hi] - stepTimesMs[lo])
+	if dt <= 0 {
+		return sampleStepUV(grid, grid.Steps[lo], lat, lon)
+	}
+	alpha := float64(targetMs-stepTimesMs[lo]) / dt // 0 = step lo, 1 = step hi
+
+	u0, v0, ok0 := sampleStepUV(grid, grid.Steps[lo], lat, lon)
+	u1, v1, ok1 := sampleStepUV(grid, grid.Steps[hi], lat, lon)
+	if !ok0 && !ok1 {
+		return 0, 0, false
+	}
+	if !ok0 {
+		return u1, v1, true
+	}
+	if !ok1 {
+		return u0, v0, true
+	}
+	return u0 + (u1-u0)*alpha, v0 + (v1-v0)*alpha, true
 }
 
 func nearestUnixIndex(times []int64, target int64) int {

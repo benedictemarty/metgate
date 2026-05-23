@@ -71,3 +71,13 @@ func (s *Service) FlightsByAircraft(
 func (s *Service) History(icao24 string) []State {
 	return s.history.Get(icao24)
 }
+
+// DumpHistory sérialise l'historique ADS-B dans path (JSON gzip).
+func (s *Service) DumpHistory(path string) error {
+	return s.history.Dump(path)
+}
+
+// RestoreHistory charge l'historique ADS-B depuis path (JSON gzip).
+func (s *Service) RestoreHistory(path string) error {
+	return s.history.Restore(path)
+}

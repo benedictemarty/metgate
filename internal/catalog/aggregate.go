@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/xml"
 	"fmt"
-	"log"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strings"
@@ -107,15 +107,15 @@ func (s *Service) AggregateProducts(ctx context.Context) (*Aggregate, error) {
 
 	var failures []string
 	if rawErr != nil {
-		log.Printf("AggregateProducts RAW: %v", rawErr)
+		slog.Warn("AggregateProducts", "service", "RAW", "err", rawErr)
 		failures = append(failures, "RAW")
 	}
 	if wfsErr != nil {
-		log.Printf("AggregateProducts WFS: %v", wfsErr)
+		slog.Warn("AggregateProducts", "service", "WFS", "err", wfsErr)
 		failures = append(failures, "WFS")
 	}
 	if wcsE != nil {
-		log.Printf("AggregateProducts WCS: %v", wcsE)
+		slog.Warn("AggregateProducts", "service", "WCS", "err", wcsE)
 		failures = append(failures, "WCS")
 	}
 	// Trois services KO → catalogue vide, on remonte une erreur claire.

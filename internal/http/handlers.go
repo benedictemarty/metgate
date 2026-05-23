@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,21 +21,42 @@ import (
 )
 
 type API struct {
-	catalog   *catalog.Service
-	aircraft  *aircraft.Service
-	lightning *lightning.Service
-	satellite *satellite.Proxy
-	cloudtop  *cloudtop.Service
-	airports  *airports.Store
+	catalog        *catalog.Service
+	aircraft       *aircraft.Service
+	lightning      *lightning.Service
+	satellite      *satellite.Proxy
+	cloudtop       *cloudtop.Service
+	airports       *airports.Store
+	searchLimiter  *ipRateLimiter // 1 req/15s par IP sur /api/aircraft/search
 }
 
 func NewAPI(c *catalog.Service, ac *aircraft.Service, lt *lightning.Service, sp *satellite.Proxy, ct *cloudtop.Service, ap *airports.Store) *API {
-	return &API{catalog: c, aircraft: ac, lightning: lt, satellite: sp, cloudtop: ct, airports: ap}
+	// Brancher le fallback ICAO sur OurAirports pour que PlanRoute fonctionne
+	// même quand MetGate WFS est indisponible.
+	if ap != nil {
+		c.FallbackICAO = func(icao string) (float64, float64, bool) {
+			a := ap.Airport(icao)
+			if a == nil {
+				return 0, 0, false
+			}
+			return a.Lon, a.Lat, true
+		}
+	}
+	return &API{
+		catalog:       c,
+		aircraft:      ac,
+		lightning:     lt,
+		satellite:     sp,
+		cloudtop:      ct,
+		airports:      ap,
+		searchLimiter: newIPRateLimiter(15 * time.Second),
+	}
 }
 
 func (a *API) Routes() *http.ServeMux {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /healthz", a.healthz)
+	m.HandleFunc("GET /api/cache/stats", a.handleCacheStats)
 	m.HandleFunc("GET /api/catalog", a.handleCatalog)
 	m.HandleFunc("GET /api/products", a.handleProducts)
 	m.HandleFunc("GET /api/wfs", a.proxyTo("/broker_service/WFS"))
@@ -115,8 +137,8 @@ func (a *API) handleWind(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Limiter à 80°×60° max pour éviter des NetCDF trop volumineux.
-	bbox = clampBBox(bbox, 80, 60)
+	// Limiter à 120°×90° max pour éviter des NetCDF trop volumineux (couvre transatlantique).
+	bbox = clampBBox(bbox, 120, 90)
 	level, ok := parseFloatParam(w, r, "level", 85000)
 	if !ok {
 		return
@@ -142,7 +164,7 @@ func (a *API) handleTropo(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	bbox = clampBBox(bbox, 80, 60)
+	bbox = clampBBox(bbox, 120, 90)
 	grid, err := a.catalog.TropoGrid(r.Context(), bbox)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -156,6 +178,11 @@ func (a *API) handleTropo(w http.ResponseWriter, r *http.Request) {
 // absent, retourne tous les avions de la bbox (utile pour les vues locales
 // type Tour 3D : trafic dans un rayon autour de l'aérodrome).
 func (a *API) handleAircraftSearch(w http.ResponseWriter, r *http.Request) {
+	if !a.searchLimiter.Allow(r) {
+		w.Header().Set("Retry-After", "15")
+		http.Error(w, "trop de requêtes OpenSky — réessayer dans 15 secondes", http.StatusTooManyRequests)
+		return
+	}
 	cs := strings.TrimSpace(r.URL.Query().Get("cs"))
 	bboxParam := strings.TrimSpace(r.URL.Query().Get("bbox"))
 	if cs == "" && bboxParam == "" {
@@ -396,12 +423,33 @@ func gcDistanceNM(lat1, lon1, lat2, lon2 float64) float64 {
 	return 2 * r * math.Asin(math.Sqrt(a))
 }
 
+// qvacisDomain est la bbox du coverage QVACIS (Atlantique/Sahara). Toute
+// requête est clampée sur ce domaine pour éviter un GetCoverage hors zone.
+var qvacisDomain = [4]float64{-33, 21, 36, 34}
+
+// clampToDomain intersecte bb avec domain. Renvoie domain si bb est
+// entièrement en dehors (cas dégénéré : on retourne le domaine complet).
+func clampToDomain(bb, domain [4]float64) [4]float64 {
+	out := [4]float64{
+		math.Max(bb[0], domain[0]),
+		math.Max(bb[1], domain[1]),
+		math.Min(bb[2], domain[2]),
+		math.Min(bb[3], domain[3]),
+	}
+	if out[0] >= out[2] || out[1] >= out[3] {
+		return domain
+	}
+	return out
+}
+
 // handleQvacis : /api/qvacis?dataset=DETERMINISTIC|PROBABILISTIC&fl=325&bbox=...
+// La bbox demandée est intersectée avec le domaine coverage [-33,21,36,34].
 func (a *API) handleQvacis(w http.ResponseWriter, r *http.Request) {
-	bbox, ok := parseBBoxParam(w, r, "bbox", [4]float64{-30, 22, 30, 33})
+	bbox, ok := parseBBoxParam(w, r, "bbox", qvacisDomain)
 	if !ok {
 		return
 	}
+	bbox = clampToDomain(bbox, qvacisDomain)
 	dataset := strings.ToUpper(r.URL.Query().Get("dataset"))
 	if dataset == "" {
 		dataset = "DETERMINISTIC"
@@ -480,7 +528,7 @@ func (a *API) handleFeature(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "param 'type' requis (ex: METAR_last)", http.StatusBadRequest)
 		return
 	}
-	count, ok := parseIntParam(w, r, "count", 0, 0, 100000)
+	count, ok := parseIntParam(w, r, "count", 0, 0, 2000)
 	if !ok {
 		return
 	}
@@ -491,13 +539,16 @@ func (a *API) handleFeature(w http.ResponseWriter, r *http.Request) {
 	// même si le client s'est déconnecté entre-temps.
 	wfsCtx, wfsCancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer wfsCancel()
-	geo, fromCache, err := a.catalog.FeatureGeoJSON(wfsCtx, typeName, count, filter)
+	geo, resp, err := a.catalog.FeatureGeoJSONWithMeta(wfsCtx, typeName, count, filter)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
 	w.Header().Set("Content-Type", "application/geo+json; charset=utf-8")
-	w.Header().Set("X-Cache", cacheHeader(fromCache))
+	w.Header().Set("X-Cache", cacheHeader(resp.FromCache))
+	if resp.FromCache && resp.CacheAge > 0 {
+		w.Header().Set("X-Cache-Age", strconv.Itoa(resp.CacheAge))
+	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(geo)
 }
@@ -507,6 +558,11 @@ func cacheHeader(hit bool) string {
 		return "HIT"
 	}
 	return "MISS"
+}
+
+// handleCacheStats expose les métriques du cache : hits, misses, entrées actives.
+func (a *API) handleCacheStats(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, a.catalog.CacheStats())
 }
 
 func (a *API) handleProducts(w http.ResponseWriter, r *http.Request) {
@@ -537,6 +593,9 @@ func (a *API) proxyTo(metgatePath string) http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", ct)
 		w.Header().Set("X-Cache", cacheHeader(resp.FromCache))
+		if resp.FromCache && resp.CacheAge > 0 {
+			w.Header().Set("X-Cache-Age", strconv.Itoa(resp.CacheAge))
+		}
 		w.WriteHeader(resp.Status)
 		_, _ = w.Write(resp.Body)
 	}

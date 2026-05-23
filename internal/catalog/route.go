@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"math"
 	"sort"
 	"strings"
@@ -72,6 +72,8 @@ const earthRadiusNM = 3440.065
 // ICAOIndex construit ICAO → (lon, lat) depuis les METAR_last + TAF_last +
 // SPECI_last en cache. Sources concaténées : si un même ICAO apparaît dans
 // plusieurs feed, on garde la 1ère position rencontrée (METAR > TAF > SPECI).
+// Si FallbackICAO est défini sur le service, il est utilisé comme source
+// secondaire pour les ICAO absents des flux MetGate WFS.
 func (s *Service) ICAOIndex(ctx context.Context) (map[string][2]float64, error) {
 	idx := make(map[string][2]float64)
 	for _, t := range []string{"METAR_last", "TAF_last", "SPECI_last"} {
@@ -109,6 +111,20 @@ func (s *Service) ICAOIndex(ctx context.Context) (map[string][2]float64, error) 
 	return idx, nil
 }
 
+// resolveICAO cherche un ICAO dans l'index WFS puis, si absent, dans le
+// fallback OurAirports (si configuré). Retourne false si non trouvé.
+func (s *Service) resolveICAO(idx map[string][2]float64, icao string) ([2]float64, bool) {
+	if pos, ok := idx[icao]; ok {
+		return pos, true
+	}
+	if s.FallbackICAO != nil {
+		if lon, lat, ok := s.FallbackICAO(icao); ok {
+			return [2]float64{lon, lat}, true
+		}
+	}
+	return [2]float64{}, false
+}
+
 // PointFamilies sont les couches WFS Point qu'on scanne pour les events
 // (METAR, TAF, SPECI, Aerodrome Warnings WL = MAA, advisories).
 var routePointFamilies = []string{
@@ -144,13 +160,13 @@ func (s *Service) PlanRoute(
 	}
 	dep := strings.ToUpper(strings.TrimSpace(depICAO))
 	arr := strings.ToUpper(strings.TrimSpace(arrICAO))
-	depPos, ok1 := idx[dep]
-	arrPos, ok2 := idx[arr]
+	depPos, ok1 := s.resolveICAO(idx, dep)
+	arrPos, ok2 := s.resolveICAO(idx, arr)
 	if !ok1 {
-		return nil, fmt.Errorf("ICAO %s introuvable dans le cache METAR/TAF/SPECI", dep)
+		return nil, fmt.Errorf("ICAO %s introuvable dans MetGate WFS ni dans la base aérodromes", dep)
 	}
 	if !ok2 {
-		return nil, fmt.Errorf("ICAO %s introuvable dans le cache METAR/TAF/SPECI", arr)
+		return nil, fmt.Errorf("ICAO %s introuvable dans MetGate WFS ni dans la base aérodromes", arr)
 	}
 	if gsKt <= 0 {
 		gsKt = 450
@@ -274,7 +290,7 @@ func (s *Service) RouteEvents(
 		}
 		geo, _, err := s.FeatureGeoJSON(ctx, family, count, "")
 		if err != nil {
-			log.Printf("RouteEvents %s: WFS %s a échoué: %v", routeDesc, family, err)
+			slog.Warn("RouteEvents WFS échec", "route", routeDesc, "family", family, "err", err)
 			mu.Lock()
 			failed = append(failed, family)
 			mu.Unlock()

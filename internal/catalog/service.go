@@ -12,6 +12,10 @@ import (
 	"github.com/bmarty/metgate/internal/metgate"
 )
 
+// Ré-export du type pour que les callers puissent utiliser *metgate.Response
+// sans importer le package directement.
+type MetgateResponse = metgate.Response
+
 // RawProduct est une ligne du catalogue RAW de MetGate (ex: COMPOSITE radar).
 type RawProduct struct {
 	Name         string `json:"name"`
@@ -25,6 +29,12 @@ type RawProduct struct {
 type Service struct {
 	mg    *metgate.Client
 	cache *responseCache
+
+	// FallbackICAO est appelé par ICAOIndex quand un ICAO n'est pas trouvé
+	// dans les flux WFS MetGate (METAR/TAF/SPECI). Typiquement branché sur
+	// airports.Store.Airport() pour assurer la résolution même si MetGate WFS
+	// est indisponible.
+	FallbackICAO func(icao string) (lon, lat float64, ok bool)
 }
 
 // New construit le service avec un cache TTL pour les réponses MetGate.
@@ -106,6 +116,17 @@ func (s *Service) Proxy(ctx context.Context, path string, query url.Values) (*me
 // filter est un filtre OGC FES 2.0 XML optionnel (vide = pas de filtre).
 // Renvoie le GeoJSON et indique si la réponse MetGate venait du cache.
 func (s *Service) FeatureGeoJSON(ctx context.Context, typeName string, count int, filter string) ([]byte, bool, error) {
+	geo, resp, err := s.FeatureGeoJSONWithMeta(ctx, typeName, count, filter)
+	if err != nil {
+		return nil, false, err
+	}
+	return geo, resp.FromCache, nil
+}
+
+// FeatureGeoJSONWithMeta est identique à FeatureGeoJSON mais retourne la
+// réponse brute MetGate (contient FromCache, CacheAge) pour que le handler
+// puisse poser les headers X-Cache et X-Cache-Age.
+func (s *Service) FeatureGeoJSONWithMeta(ctx context.Context, typeName string, count int, filter string) ([]byte, *metgate.Response, error) {
 	q := url.Values{}
 	q.Set("service", "WFS")
 	q.Set("version", "2.0.0")
@@ -119,17 +140,25 @@ func (s *Service) FeatureGeoJSON(ctx context.Context, typeName string, count int
 	}
 	resp, err := s.fetchCached(ctx, "/broker_service/WFS", q)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, err
 	}
 	if resp.Status != 200 {
-		return nil, false, fmt.Errorf("metgate WFS GetFeature %s: status %d (body=%q)",
+		return nil, nil, fmt.Errorf("metgate WFS GetFeature %s: status %d (body=%q)",
 			typeName, resp.Status, truncate(resp.Body, 200))
 	}
 	geo, err := GMLToGeoJSON(resp.Body, typeName)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, err
 	}
-	return geo, resp.FromCache, nil
+	return geo, resp, nil
+}
+
+// CacheStats retourne les métriques du cache (hits/misses/entrées actives).
+func (s *Service) CacheStats() CacheStats {
+	if s.cache == nil {
+		return CacheStats{}
+	}
+	return s.cache.Stats()
 }
 
 func truncate(b []byte, n int) string {

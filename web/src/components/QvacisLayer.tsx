@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMap } from 'react-map-gl/maplibre'
+import type { Map as MaplibreMap } from 'maplibre-gl'
 import { Pause, Play } from 'lucide-react'
+
+type BBox4 = [number, number, number, number]
 
 interface QvacisStep {
   time: string
@@ -24,7 +27,28 @@ interface QvacisGrid {
 export const QVACIS_FLS = [25, 75, 125, 175, 225, 275, 325, 375, 425, 475, 525, 575]
 export type QvacisDataset = 'DETERMINISTIC' | 'PROBABILISTIC'
 
-const QVACIS_BBOX: [number, number, number, number] = [-33, 21, 36, 34]
+// Domaine géographique du coverage QVACIS (Atlantique/Sahara).
+const QVACIS_DOMAIN: BBox4 = [-33, 21, 36, 34]
+
+// Seuil de changement (degrés) en-dessous duquel on ne re-fetch pas.
+const REFETCH_THRESHOLD = 4
+
+function clampViewportToQvacis(map: MaplibreMap): BBox4 {
+  const b = map.getBounds()
+  const lonMin = Math.max(b.getWest(), QVACIS_DOMAIN[0])
+  const latMin = Math.max(b.getSouth(), QVACIS_DOMAIN[1])
+  const lonMax = Math.min(b.getEast(), QVACIS_DOMAIN[2])
+  const latMax = Math.min(b.getNorth(), QVACIS_DOMAIN[3])
+  if (lonMin >= lonMax || latMin >= latMax) return QVACIS_DOMAIN
+  return [lonMin, latMin, lonMax, latMax]
+}
+
+function bboxChangedEnough(a: BBox4, b: BBox4): boolean {
+  return Math.abs(a[0] - b[0]) > REFETCH_THRESHOLD
+    || Math.abs(a[1] - b[1]) > REFETCH_THRESHOLD
+    || Math.abs(a[2] - b[2]) > REFETCH_THRESHOLD
+    || Math.abs(a[3] - b[3]) > REFETCH_THRESHOLD
+}
 
 interface QvacisLayerProps {
   enabled: boolean
@@ -43,13 +67,14 @@ export default function QvacisLayer({ enabled, dataset, fl, linkedInstant, onTim
   const [playing, setPlaying] = useState(false)
   const [info, setInfo] = useState<{ status: 'idle' | 'loading' | 'error'; msg?: string }>({ status: 'idle' })
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const fetchedBbox = useRef<BBox4 | null>(null)
 
-  useEffect(() => {
-    if (!enabled || !map) return
-    let aborted = false
-    const url = `/api/qvacis?dataset=${dataset}&fl=${fl}&bbox=${QVACIS_BBOX.join(',')}`
+  const doFetch = useCallback((bbox: BBox4) => {
+    const url = `/api/qvacis?dataset=${dataset}&fl=${fl}&bbox=${bbox.join(',')}`
     setInfo({ status: 'loading' })
     onLoadingChange?.(true)
+    fetchedBbox.current = bbox
+    let aborted = false
     fetch(url)
       .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
       .then((g: QvacisGrid) => {
@@ -62,7 +87,26 @@ export default function QvacisLayer({ enabled, dataset, fl, linkedInstant, onTim
       })
       .catch((e) => { if (!aborted) { setInfo({ status: 'error', msg: String(e) }); onLoadingChange?.(false) } })
     return () => { aborted = true }
-  }, [enabled, map, dataset, fl])
+  }, [dataset, fl, onTimesLoaded, onLoadingChange])
+
+  useEffect(() => {
+    if (!enabled || !map) return
+    const bbox = clampViewportToQvacis(map)
+    return doFetch(bbox)
+  }, [enabled, map, dataset, fl, doFetch])
+
+  // Re-fetch quand l'utilisateur déplace la carte de plus de REFETCH_THRESHOLD degrés.
+  useEffect(() => {
+    if (!enabled || !map) return
+    const onMoveEnd = () => {
+      const newBbox = clampViewportToQvacis(map)
+      if (!fetchedBbox.current || bboxChangedEnough(fetchedBbox.current, newBbox)) {
+        doFetch(newBbox)
+      }
+    }
+    map.on('moveend', onMoveEnd)
+    return () => { map.off('moveend', onMoveEnd) }
+  }, [enabled, map, doFetch])
 
   useEffect(() => {
     if (!playing || !grid?.steps?.length) return

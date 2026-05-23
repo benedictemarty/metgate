@@ -20,13 +20,18 @@ export default function FirLayer({ enabled, showUIR = false }: Props) {
 
   // Écoute la perte du contexte WebGL pour désarmer le nettoyage react-map-gl
   // qui appelle map.getLayer() alors que this.style est déjà undefined.
+  // À la restauration, on réinitialise geo pour forcer un re-fetch et que
+  // MapLibre reçoive des données fraîches après reconstruction du contexte GPU.
   const [contextLost, setContextLost] = useState(false)
   useEffect(() => {
     const map = mapRef?.getMap()
     if (!map) return
     const canvas = map.getCanvas()
     const onLost = () => setContextLost(true)
-    const onRestored = () => setContextLost(false)
+    const onRestored = () => {
+      setContextLost(false)
+      setGeo(null) // force re-fetch pour re-alimenter MapLibre après GPU recovery
+    }
     canvas.addEventListener('webglcontextlost', onLost)
     canvas.addEventListener('webglcontextrestored', onRestored)
     return () => {

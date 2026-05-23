@@ -16,13 +16,12 @@ import (
 // GMLToGeoJSON convertit une wfs:FeatureCollection GML 3.2 (sortie MetGate)
 // en GeoJSON FeatureCollection.
 //
-// Limitations actuelles :
-//   - seules les géométries Point sont extraites (cas METAR/TAF/SPECI/AIRMET) ;
-//     les Polygon/MultiPolygon (SIGMET, zones de turbulence) ne sont pas
-//     encore supportés et la feature est ignorée.
+// Géométries supportées : Point, Polygon (exterior + interior/holes),
+// MultiSurface/MultiPolygon.
+//
+// Notes :
 //   - le champ opmet_msg (IWXXM XML brut, parfois > 10 KB) est volontairement
-//     omis pour ne pas alourdir le GeoJSON. Le client peut le récupérer
-//     séparément via une route dédiée si besoin.
+//     omis pour ne pas alourdir le GeoJSON.
 //   - axe-order EPSG:4326 dans MetGate = lat,lon ; on swap en [lon,lat]
 //     pour respecter GeoJSON RFC 7946.
 func GMLToGeoJSON(body []byte, typeName string) ([]byte, error) {

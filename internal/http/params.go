@@ -9,6 +9,7 @@ import (
 
 // clampBBox réduit la bbox à maxLonSpan × maxLatSpan degrés centrée sur son
 // milieu. Évite des requêtes WCS trop larges → NetCDF gigantesque / timeout.
+// Valeur recommandée : 120°×90° (couvre transatlantique sans dépasser ~500 MB).
 func clampBBox(bb [4]float64, maxLonSpan, maxLatSpan float64) [4]float64 {
 	midLon := (bb[0] + bb[2]) / 2
 	midLat := (bb[1] + bb[3]) / 2

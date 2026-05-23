@@ -11,7 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -238,10 +238,11 @@ func (s *Store) loadRunways() error {
 // quand tout va bien.
 func (s *Store) LogStats() {
 	a, ra := s.rejectedAirports, s.rejectedRunways
-	log.Printf("airports OurAirports : %d aérodromes (%d total, %d ICAO invalide, %d csv corrompu)",
-		a.kept, a.totalRows, a.badICAO, a.parseErr)
-	log.Printf("runways  OurAirports : %d pistes (%d total, %d sans géométrie, %d closed, %d ICAO invalide, %d csv corrompu)",
-		ra.kept, ra.totalRows, ra.noGeometry, ra.closed, ra.badICAO, ra.parseErr)
+	slog.Info("airports OurAirports",
+		"aerodromes", a.kept, "total", a.totalRows, "icao_invalide", a.badICAO, "csv_corrompu", a.parseErr)
+	slog.Info("runways OurAirports",
+		"pistes", ra.kept, "total", ra.totalRows, "sans_geo", ra.noGeometry, "closed", ra.closed,
+		"icao_invalide", ra.badICAO, "csv_corrompu", ra.parseErr)
 }
 
 // InBbox retourne les aérodromes situés dans la bbox [lonMin, latMin, lonMax, latMax].

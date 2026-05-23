@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -26,15 +26,20 @@ import (
 )
 
 func main() {
+	// Logger structuré JSON (slog) — parsable par logstash/grafana-loki.
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(logger)
+
 	if err := loadDotenv(".env"); err != nil {
-		log.Printf("warn: .env: %v", err)
+		slog.Warn("impossible de lire .env", "err", err)
 	}
 
 	baseURL := os.Getenv("METGATE_BASE_URL")
 	token := os.Getenv("METGATE_TOKEN")
 	port := envOr("PORT", "8080")
 	if baseURL == "" || token == "" {
-		log.Fatal("METGATE_BASE_URL et METGATE_TOKEN doivent être définis (cf .env)")
+		slog.Error("METGATE_BASE_URL et METGATE_TOKEN doivent être définis (cf .env)")
+		os.Exit(1)
 	}
 
 	cacheTTL := 60 * time.Second
@@ -53,13 +58,20 @@ func main() {
 	osClientSecret := os.Getenv("OPENSKY_CLIENT_SECRET")
 	acClient := aircraft.New(osUser, osPass, osClientID, osClientSecret)
 	acService := aircraft.NewService(acClient, 30*time.Minute)
+
+	historyFile := envOr("AIRCRAFT_HISTORY_FILE", "")
+	if historyFile != "" {
+		if err := acService.RestoreHistory(historyFile); err != nil {
+			slog.Warn("ADS-B history restore", "err", err)
+		}
+	}
 	switch {
 	case osClientID != "":
-		log.Printf("opensky: OAuth2 (client_id=%s…)", osClientID[:min(8, len(osClientID))])
+		slog.Info("opensky: OAuth2 actif", "client_id_prefix", osClientID[:min(8, len(osClientID))])
 	case osUser != "":
-		log.Printf("opensky: basic auth as %s (legacy)", osUser)
+		slog.Info("opensky: basic auth (legacy)", "user", osUser)
 	default:
-		log.Print("opensky: anonymous (~100 req/jour). Voir .env pour OPENSKY_CLIENT_ID/SECRET.")
+		slog.Info("opensky: anonymous (~100 req/jour). Voir .env pour OPENSKY_CLIENT_ID/SECRET.")
 	}
 
 	euKey := os.Getenv("EUMETSAT_CONSUMER_KEY")
@@ -69,17 +81,18 @@ func main() {
 	ltService := lightning.NewService(ltClient)
 	ctService := cloudtop.NewService(euClient)
 	if euClient.Authenticated() {
-		log.Printf("eumetsat MTG: OAuth2 actif (key=%s…) — LI / CTTH disponibles", euKey[:min(8, len(euKey))])
+		slog.Info("eumetsat MTG: OAuth2 actif — LI / CTTH disponibles", "key_prefix", euKey[:min(8, len(euKey))])
 	} else {
-		log.Print("eumetsat MTG: désactivé (clés absentes — voir .env EUMETSAT_CONSUMER_KEY/SECRET)")
+		slog.Info("eumetsat MTG: désactivé (clés absentes — voir .env EUMETSAT_CONSUMER_KEY/SECRET)")
 	}
 
 	satProxy := satellite.NewProxy()
-	log.Print("eumetview WMS proxy : actif (FCI IR / RGB Convection — situationnel non OPMET)")
+	slog.Info("eumetview WMS proxy actif (FCI IR / RGB Convection)")
 
 	apStore, err := airports.New()
 	if err != nil {
-		log.Fatalf("airports store: %v", err)
+		slog.Error("airports store", "err", err)
+		os.Exit(1)
 	}
 	apStore.LogStats()
 
@@ -88,7 +101,7 @@ func main() {
 	ctx, cancelBg := context.WithCancel(context.Background())
 	if euClient.Authenticated() {
 		ctService.StartBackground(ctx)
-		log.Print("CTH: pré-chargement EUMETSAT démarré en arrière-plan")
+		slog.Info("CTH: pré-chargement EUMETSAT démarré en arrière-plan")
 	}
 
 	// Nettoyer les fichiers temporaires NetCDF laissés par des crashs antérieurs
@@ -96,7 +109,7 @@ func main() {
 	go cleanupOrphanTempFiles()
 
 	api := httpapi.NewAPI(cat, acService, ltService, satProxy, ctService, apStore)
-	log.Printf("cache TTL: %s", cacheTTL)
+	slog.Info("cache TTL configuré", "ttl", cacheTTL.String())
 
 	srv := &http.Server{
 		Addr:              ":" + port,
@@ -106,7 +119,7 @@ func main() {
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("portal écoute sur :%s (metgate=%s)", port, baseURL)
+		slog.Info("portal démarré", "port", port, "metgate", baseURL)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
@@ -118,15 +131,24 @@ func main() {
 	select {
 	case err := <-errCh:
 		cancelBg()
-		log.Fatalf("listen: %v", err)
+		slog.Error("listen", "err", err)
+		os.Exit(1)
 	case <-quit:
-		log.Println("shutdown...")
+		slog.Info("shutdown gracieux en cours...")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Printf("shutdown: %v", err)
+		slog.Warn("shutdown", "err", err)
+	}
+
+	if historyFile != "" {
+		if err := acService.DumpHistory(historyFile); err != nil {
+			slog.Warn("ADS-B history dump", "err", err)
+		} else {
+			slog.Info("ADS-B history sauvegardé", "path", historyFile)
+		}
 	}
 }
 
@@ -145,7 +167,12 @@ func withLogging(next http.Handler) http.Handler {
 		start := time.Now()
 		lw := &loggingResponseWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(lw, r)
-		log.Printf("%s %s %d %s", r.Method, r.URL.RequestURI(), lw.status, time.Since(start))
+		slog.Info("http",
+			"method", r.Method,
+			"path", r.URL.RequestURI(),
+			"status", lw.status,
+			"duration_ms", time.Since(start).Milliseconds(),
+		)
 	})
 }
 
@@ -175,7 +202,7 @@ func cleanupOrphanTempFiles() {
 		}
 	}
 	if removed > 0 {
-		log.Printf("startup: %d fichier(s) temp NetCDF orphelin(s) supprimé(s)", removed)
+		slog.Info("fichiers temp NetCDF orphelins supprimés", "count", removed)
 	}
 }
 
