@@ -72,6 +72,16 @@ export default function AirportAlertsLayer({ enabled }: Props) {
     if (!forceMap) return
     const b = forceMap.getBounds()
     if (!b) return
+    // Refuser les vues trop dézoomées (>40°×30°) : pas pertinent + timeout.
+    const w2 = b.getEast() - b.getWest()
+    const h2 = b.getNorth() - b.getSouth()
+    if (w2 > 40 || h2 > 30) {
+      setAlerts([])
+      setLastFetch(null)
+      setStatus('idle')
+      bboxRef.current = 'TOO_LARGE'
+      return
+    }
     const bbox = [
       b.getWest().toFixed(3),
       b.getSouth().toFixed(3),
@@ -163,6 +173,9 @@ export default function AirportAlertsLayer({ enabled }: Props) {
         )}
         {alerts.length === 0 && status === 'idle' && lastFetch && (
           <div className="text-slate-500 italic text-[0.55rem]">Aucune alerte active</div>
+        )}
+        {alerts.length === 0 && status === 'idle' && !lastFetch && (
+          <div className="text-slate-500 italic text-[0.55rem]">Zoomez pour activer</div>
         )}
         {/* Légende niveaux */}
         <div className="flex gap-2 mt-0.5 flex-wrap">

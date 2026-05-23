@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // rdtProximityNM : distance maximale en NM entre l'aérodrome et le centroïde
@@ -64,6 +65,7 @@ func (s *Service) AlertsForAirports(ctx context.Context, aps []SimpleAirport) ([
 	speciCh := make(chan featResult, 1)
 	maaCh   := make(chan featResult, 1)
 	rdtCh   := make(chan featResult, 1)
+	tafCh   := make(chan featResult, 1)
 
 	go func() {
 		f, err := s.fetchFeatures(ctx, "SP_last", 500, "")
@@ -77,12 +79,28 @@ func (s *Service) AlertsForAirports(ctx context.Context, aps []SimpleAirport) ([
 		f, err := s.fetchFeatures(ctx, "RDT_MSG_last", 2000, "")
 		rdtCh <- featResult{f, err}
 	}()
+	go func() {
+		// FT_last = TAF TAC (produits plats, fallback stations sans IWXXM).
+		// TAF_last = IWXXM TAF (stations OACI principales).
+		// On préfère FT_last pour le parsing TAC ; TAF_last pour IWXXM.
+		ft, errFT := s.fetchFeatures(ctx, "FT_last", 500, "")
+		taf, errTAF := s.fetchFeatures(ctx, "TAF_last", 500, "")
+		feats := ft
+		if errFT != nil {
+			feats = taf
+			errFT = errTAF
+		} else {
+			feats = append(feats, taf...)
+		}
+		tafCh <- featResult{feats, errFT}
+	}()
 
 	speciRes := <-speciCh
 	maaRes   := <-maaCh
 	rdtRes   := <-rdtCh
+	tafRes   := <-tafCh
 
-	// Indexer SPECI et MAA par code ICAO.
+	// Indexer SPECI, MAA et TAF par code ICAO.
 	speciByICAO := map[string]map[string]any{}
 	for _, f := range speciRes.feats {
 		p := propsOf(f)
@@ -101,6 +119,21 @@ func (s *Service) AlertsForAirports(ctx context.Context, aps []SimpleAirport) ([
 		}
 		if icao != "" {
 			maaByICAO[icao] = f
+		}
+	}
+	tafByICAO := map[string]map[string]any{}
+	for _, f := range tafRes.feats {
+		p := propsOf(f)
+		icao := icaoFromProps(p)
+		if icao == "" {
+			if tac, ok := p["tac"].(string); ok {
+				icao = icaoFromMetarTAC(tac) // TAF TAC : format similaire METAR
+			}
+		}
+		if icao != "" {
+			if _, exists := tafByICAO[icao]; !exists {
+				tafByICAO[icao] = f // on garde la première (la plus récente si MetGate trié)
+			}
 		}
 	}
 
@@ -133,6 +166,37 @@ func (s *Service) AlertsForAirports(ctx context.Context, aps []SimpleAirport) ([
 			tac, _ := p["tac"].(string)
 			if l, pheno, text := levelFromTAC(tac); l > AlertNone {
 				sources = append(sources, AlertSource{Type: "MAA", Phenomenon: pheno, Text: text})
+				if l > level {
+					level = l
+				}
+			}
+		}
+
+		// 2b. TAF : prévision à +1h (TAC FT_last ou IWXXM TAF_last).
+		if feat, ok := tafByICAO[ap.ICAO]; ok {
+			p := propsOf(feat)
+			now := time.Now().UTC()
+			var l AlertLevel
+			var pheno, text string
+
+			tac, _ := p["tac"].(string)
+			opmet, _ := p["opmet_msg"].(string)
+			if opmet == "" {
+				// L'opmet_msg brut n'est pas dans les props (parsé en enrichFromIWXXM).
+				// On tente avec le decoded IWXXM si disponible.
+			}
+
+			if tac != "" && (strings.HasPrefix(tac, "TAF") || strings.Contains(tac, "/")) {
+				l, pheno, text = tafTACAlertLevel(tac, now, 3)
+			} else if decoded, ok := p["decoded"].(string); ok && decoded != "" {
+				// IWXXM TAF : chercher les phénomènes dans le texte décodé FR.
+				l, pheno, text = levelFromTAC(decoded)
+				if text != "" {
+					text = "TAF: " + text
+				}
+			}
+			if l > AlertNone {
+				sources = append(sources, AlertSource{Type: "TAF", Phenomenon: pheno, Text: text})
 				if l > level {
 					level = l
 				}

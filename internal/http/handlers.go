@@ -720,9 +720,24 @@ func (a *API) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Refuser les bbox trop grandes (>40°×30°) : trop d'aérodromes + MetGate lent.
+	if (bbox[2]-bbox[0]) > 40 || (bbox[3]-bbox[1]) > 30 {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"alerts":           []any{},
+			"count":            0,
+			"airports_checked": 0,
+			"fetched_at":       time.Now().UTC().Format(time.RFC3339),
+			"note":             "Zoom pour voir les alertes aérodromes",
+		})
+		return
+	}
 	// On inclut les petits aérodromes si la bbox est petite (< 5° de côté).
 	mediumLargeOnly := (bbox[2]-bbox[0]) > 5 || (bbox[3]-bbox[1]) > 5
 	aps := a.airports.InBbox(bbox, mediumLargeOnly)
+	// Cap à 400 aérodromes max pour éviter les traitements trop longs.
+	if len(aps) > 400 {
+		aps = aps[:400]
+	}
 
 	simple := make([]catalog.SimpleAirport, len(aps))
 	for i, ap := range aps {
