@@ -1669,6 +1669,11 @@ export default function TowerGlobe({}: TowerGlobeProps) {
         camera={{ position: [35, 28, 35], fov: 45, near: 0.1, far: 1000 }}
         gl={{ antialias: true, alpha: false }}
         style={{ background: '#020617' }}
+        onCreated={({ gl }) => {
+          // Sans preventDefault sur webglcontextlost, le navigateur abandonne
+          // le contexte définitivement (canvas noir) au lieu de le restaurer.
+          gl.domElement.addEventListener('webglcontextlost', (e) => { e.preventDefault() }, false)
+        }}
       >
         <Suspense fallback={null}>
           <fog attach="fog" args={[0x020617, 60, 220]} />

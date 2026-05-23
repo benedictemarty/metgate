@@ -6,9 +6,28 @@ package web
 import (
 	"embed"
 	"io/fs"
+	"mime"
 	"net/http"
 	"strings"
 )
+
+func init() {
+	// Sur conteneurs Linux minimaux (Debian/Alpine sans mime-support), le fichier
+	// /etc/mime.types peut ne pas contenir text/javascript. http.FileServer tomberait
+	// alors sur "text/plain", ce qui bloque le chargement des ES modules dans le
+	// navigateur ("MIME type not allowed"). On enregistre explicitement les types
+	// critiques pour le frontend Vite/React.
+	for ext, ct := range map[string]string{
+		".js":    "text/javascript; charset=utf-8",
+		".mjs":   "text/javascript; charset=utf-8",
+		".css":   "text/css; charset=utf-8",
+		".svg":   "image/svg+xml",
+		".woff2": "font/woff2",
+		".woff":  "font/woff",
+	} {
+		_ = mime.AddExtensionType(ext, ct)
+	}
+}
 
 //go:embed all:dist
 var distFS embed.FS
