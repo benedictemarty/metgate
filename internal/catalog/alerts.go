@@ -202,7 +202,8 @@ func propsOf(f map[string]any) map[string]any {
 // icaoFromProps extrait le code ICAO depuis les propriétés d'une feature.
 // Essaie d'abord `locationIndicatorICAO` puis quelques variantes de noms.
 func icaoFromProps(p map[string]any) string {
-	for _, k := range []string{"locationIndicatorICAO", "stationid", "icao", "station_id"} {
+	// "id" est le champ ICAO des produits plats MetGate (SP_last, SA_last, FT_last, FC_last).
+	for _, k := range []string{"locationIndicatorICAO", "id", "stationid", "icao", "station_id"} {
 		if v, ok := p[k].(string); ok {
 			v = strings.TrimSpace(strings.ToUpper(v))
 			if len(v) == 4 {

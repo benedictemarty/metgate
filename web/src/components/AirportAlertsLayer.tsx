@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Marker, Popup, useMap } from 'react-map-gl/maplibre'
+import { AlertTriangle } from 'lucide-react'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -14,7 +15,7 @@ interface AirportAlert {
   icao: string
   lat: number
   lon: number
-  level: 1 | 2 | 3 | 4 // Blue/Yellow/Orange/Red
+  level: 1 | 2 | 3 | 4
   sources: AlertSource[]
 }
 
@@ -32,10 +33,10 @@ interface Props {
 // ─── Constantes ──────────────────────────────────────────────────────────────
 
 const LEVEL_COLORS: Record<number, string> = {
-  1: '#3b82f6', // blue
-  2: '#eab308', // yellow
+  1: '#3b82f6', // bleu
+  2: '#eab308', // jaune
   3: '#f97316', // orange
-  4: '#ef4444', // red
+  4: '#ef4444', // rouge
 }
 
 const LEVEL_LABELS: Record<number, string> = {
@@ -56,16 +57,20 @@ const REFRESH_MS = 5 * 60_000 // 5 min
 // ─── Composant ───────────────────────────────────────────────────────────────
 
 export default function AirportAlertsLayer({ enabled }: Props) {
-  const { current: map } = useMap()
-  const [alerts, setAlerts]     = useState<AirportAlert[]>([])
-  const [selected, setSelected] = useState<AirportAlert | null>(null)
-  const [fetchedAt, setFetchedAt] = useState<string | null>(null)
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const bboxRef  = useRef<string>('')
+  // Pattern établi dans ce projet : mapWrapper?.getMap() pour l'instance MapLibre.
+  const { current: mapWrapper } = useMap()
+  const map = mapWrapper?.getMap()
 
-  const fetchAlerts = () => {
-    if (!map) return
-    const b = map.getBounds()
+  const [alerts, setAlerts]           = useState<AirportAlert[]>([])
+  const [selected, setSelected]       = useState<AirportAlert | null>(null)
+  const [status, setStatus]           = useState<'idle' | 'loading' | 'error'>('idle')
+  const [lastFetch, setLastFetch]     = useState<AlertsResponse | null>(null)
+  const timerRef  = useRef<ReturnType<typeof setInterval> | null>(null)
+  const bboxRef   = useRef<string>('')
+
+  const fetchAlerts = (forceMap: maplibregl.Map | null | undefined = map) => {
+    if (!forceMap) return
+    const b = forceMap.getBounds()
     if (!b) return
     const bbox = [
       b.getWest().toFixed(3),
@@ -73,39 +78,46 @@ export default function AirportAlertsLayer({ enabled }: Props) {
       b.getEast().toFixed(3),
       b.getNorth().toFixed(3),
     ].join(',')
-    // Éviter un re-fetch si la bbox n'a pas changé significativement.
     if (bbox === bboxRef.current) return
     bboxRef.current = bbox
 
+    setStatus('loading')
     fetch(`/api/alerts?bbox=${bbox}`)
-      .then((r) => r.ok ? r.json() as Promise<AlertsResponse> : Promise.reject(r.status))
+      .then((r) => r.ok ? r.json() as Promise<AlertsResponse> : Promise.reject(`HTTP ${r.status}`))
       .then((d) => {
         setAlerts(d.alerts ?? [])
-        setFetchedAt(d.fetched_at)
+        setLastFetch(d)
+        setStatus('idle')
       })
-      .catch(() => { /* best-effort */ })
+      .catch((e) => {
+        setStatus('error')
+        console.warn('AirportAlertsLayer fetch error:', e)
+      })
   }
 
   useEffect(() => {
     if (!enabled || !map) {
       setAlerts([])
       setSelected(null)
+      bboxRef.current = ''
       return
     }
 
-    // Fetch initial puis à chaque déplacement de carte (debounced 800 ms).
-    fetchAlerts()
+    fetchAlerts(map)
+
     let debounce: ReturnType<typeof setTimeout> | null = null
     const onMoveEnd = () => {
       if (debounce) clearTimeout(debounce)
-      debounce = setTimeout(fetchAlerts, 800)
+      debounce = setTimeout(() => {
+        bboxRef.current = '' // forcer recalcul bbox
+        fetchAlerts(map)
+      }, 800)
     }
     map.on('moveend', onMoveEnd)
 
-    // Refresh périodique (même bbox, données météo évoluent).
     timerRef.current = setInterval(() => {
-      bboxRef.current = '' // forcer le re-fetch
-      fetchAlerts()
+      bboxRef.current = ''
+      fetchAlerts(map)
     }, REFRESH_MS)
 
     return () => {
@@ -119,6 +131,51 @@ export default function AirportAlertsLayer({ enabled }: Props) {
 
   return (
     <>
+      {/* Badge de statut (toujours visible quand la couche est active) */}
+      <div className="absolute top-16 left-4 z-10 px-3 py-2 rounded-lg bg-slate-950/85 backdrop-blur-md border border-red-900/40 text-[0.625rem] text-slate-300 shadow-2xl flex flex-col gap-1.5 min-w-[200px]">
+        <div className="flex items-center gap-2 pb-1.5 border-b border-slate-800/60">
+          <AlertTriangle className="size-3.5 text-red-300" />
+          <span className="font-semibold text-red-200 uppercase tracking-wider">Alertes Aérodromes</span>
+          {status === 'loading' && (
+            <span className="size-1.5 rounded-full bg-sky-400 animate-pulse ml-auto" />
+          )}
+        </div>
+        <div className="flex justify-between gap-2 font-mono">
+          <span className="text-slate-500">Alertes</span>
+          <span className="text-slate-200 tabular-nums font-bold">
+            {alerts.length > 0
+              ? <span style={{ color: LEVEL_COLORS[Math.max(...alerts.map(a => a.level))] }}>{alerts.length}</span>
+              : <span className="text-slate-400">0</span>}
+          </span>
+        </div>
+        <div className="flex justify-between gap-2 font-mono">
+          <span className="text-slate-500">AD vérifiés</span>
+          <span className="text-slate-300 tabular-nums">{lastFetch?.airports_checked ?? '—'}</span>
+        </div>
+        {lastFetch?.fetched_at && (
+          <div className="flex justify-between gap-2 font-mono">
+            <span className="text-slate-500">Màj</span>
+            <span className="text-slate-300">{lastFetch.fetched_at.slice(11, 16)} UTC</span>
+          </div>
+        )}
+        {status === 'error' && (
+          <div className="text-red-300 italic text-[0.55rem]">Erreur de chargement</div>
+        )}
+        {alerts.length === 0 && status === 'idle' && lastFetch && (
+          <div className="text-slate-500 italic text-[0.55rem]">Aucune alerte active</div>
+        )}
+        {/* Légende niveaux */}
+        <div className="flex gap-2 mt-0.5 flex-wrap">
+          {([4, 3, 2, 1] as const).map(l => (
+            <div key={l} className="flex items-center gap-1">
+              <div className="size-2 rounded-full" style={{ backgroundColor: LEVEL_COLORS[l] }} />
+              <span className="text-slate-500">{LEVEL_LABELS[l]}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Marqueurs pulsants */}
       {alerts.map((alert) => {
         const color = LEVEL_COLORS[alert.level] ?? '#94a3b8'
         return (
@@ -133,14 +190,14 @@ export default function AirportAlertsLayer({ enabled }: Props) {
             }}
           >
             <div className="relative cursor-pointer group">
-              {/* Anneau pulsant */}
+              {/* Anneau pulsant externe */}
               <div
-                className="absolute -inset-2 rounded-full animate-ping opacity-50 pointer-events-none"
+                className="absolute -inset-3 rounded-full animate-ping opacity-40 pointer-events-none"
                 style={{ backgroundColor: color }}
               />
               {/* Dot central */}
               <div
-                className="size-3 rounded-full border-2 border-white shadow-md relative z-10 group-hover:scale-125 transition-transform"
+                className="size-4 rounded-full border-2 border-white shadow-lg relative z-10 group-hover:scale-125 transition-transform flex items-center justify-center"
                 style={{ backgroundColor: color }}
               />
               {/* Label ICAO au survol */}
@@ -160,10 +217,9 @@ export default function AirportAlertsLayer({ enabled }: Props) {
           anchor="bottom"
           closeOnClick={false}
           onClose={() => setSelected(null)}
-          className="airport-alert-popup"
+          maxWidth="220px"
         >
-          <div className="min-w-[180px] p-2 text-[0.65rem] font-mono text-slate-200 bg-slate-900 rounded">
-            {/* En-tête */}
+          <div className="p-2 text-[0.65rem] font-mono text-slate-200 bg-slate-900 rounded">
             <div className="flex items-center justify-between mb-2">
               <span className="font-bold text-sm text-white">{selected.icao}</span>
               <span
@@ -177,7 +233,6 @@ export default function AirportAlertsLayer({ enabled }: Props) {
                 {LEVEL_LABELS[selected.level]}
               </span>
             </div>
-            {/* Sources d'alerte */}
             <div className="space-y-1.5">
               {selected.sources.map((src, i) => (
                 <div key={i} className="flex items-start gap-1.5 bg-slate-800/60 rounded px-1.5 py-1">
@@ -198,12 +253,6 @@ export default function AirportAlertsLayer({ enabled }: Props) {
                 </div>
               ))}
             </div>
-            {/* Timestamp */}
-            {fetchedAt && (
-              <div className="mt-2 text-slate-600 text-[0.5rem] text-right">
-                Màj {new Date(fetchedAt).toISOString().slice(11, 16)}Z
-              </div>
-            )}
           </div>
         </Popup>
       )}
