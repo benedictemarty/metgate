@@ -29,11 +29,12 @@ import SatRasterLayer from '../components/SatRasterLayer'
 import CloudTopLayer from '../components/CloudTopLayer'
 import FlightPlan, { type RoutePlan } from '../components/FlightPlan'
 import AircraftTracker, { type AircraftState } from '../components/AircraftTracker'
-import { CloudCog, CloudFog, CloudLightning, Filter, Globe2, Link2, Link2Off, Mountain, Satellite, Zap } from 'lucide-react'
+import { CloudCog, CloudFog, CloudLightning, Filter, Globe2, Link2, Link2Off, Mountain, Radar, Satellite, Zap } from 'lucide-react'
 import type { Aggregate, Family } from '../types'
 import { displayFamilyName } from '../familyDisplay'
 import OGCFilterPanel, { type OGCFilter } from '../components/OGCFilterPanel'
 import FirLayer from '../components/FirLayer'
+import RadarLayer from '../components/RadarLayer'
 
 interface MapViewProps {
   data: Aggregate | null
@@ -286,6 +287,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
   const [tropoEnabled, setTropoEnabled] = useState(false)
   const [qvacisEnabled, setQvacisEnabled] = useState(false)
   const [lightningEnabled, setLightningEnabled] = useState(false)
+  const [radarEnabled, setRadarEnabled]         = useState(false)
   const [satIREnabled, setSatIREnabled] = useState(false)
   const [satCTHEnabled] = useState(false) // CTH WMS legacy (raster instable, remplacé par CTH NetCDF)
   const [satConvEnabled, setSatConvEnabled] = useState(false)
@@ -820,6 +822,10 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
           onLoadingChange={setQvacisLoading}
         />
         <FirLayer enabled={firEnabled} />
+        <RadarLayer
+          enabled={radarEnabled}
+          linkedInstant={masterInstant}
+        />
         <LightningLayer enabled={lightningEnabled} />
         <SatRasterLayer
           enabled={satIREnabled}
@@ -991,6 +997,18 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
             Tropopause
           </button>
           <button
+            onClick={() => setRadarEnabled((v) => !v)}
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
+              radarEnabled
+                ? 'border-green-400/50 bg-green-500/20 text-green-100 shadow-[0_0_15px_rgba(74,222,128,0.25)]'
+                : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
+            }`}
+            title="Mosaïque radar OPERA — RainViewer (situationnel, non OPMET)"
+          >
+            <Radar className="size-4" />
+            Radar
+          </button>
+          <button
             onClick={() => setLightningEnabled((v) => !v)}
             className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
               lightningEnabled
@@ -1139,6 +1157,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
         qvacisEnabled={qvacisEnabled}
         qvacisDataset={qvacisDataset}
         qvacisFL={qvacisFL}
+        radarEnabled={radarEnabled}
         lightningEnabled={lightningEnabled}
         satIREnabled={satIREnabled}
         satConvEnabled={satConvEnabled}
@@ -2025,6 +2044,7 @@ interface LegendProps {
   qvacisEnabled: boolean
   qvacisDataset: QvacisDataset
   qvacisFL: number
+  radarEnabled: boolean
   lightningEnabled: boolean
   satIREnabled: boolean
   satConvEnabled: boolean
@@ -2040,7 +2060,7 @@ function Legend({
   windEnabled, windDataset, windLevelPa,
   tropoEnabled,
   qvacisEnabled, qvacisDataset, qvacisFL,
-  lightningEnabled, satIREnabled, satConvEnabled,
+  radarEnabled, lightningEnabled, satIREnabled, satConvEnabled,
   cthEnabled, cthMinFL,
   firEnabled,
   ogcFilterXml, ogcFilter,
@@ -2064,6 +2084,7 @@ function Legend({
   if (windEnabled)      entries.push({ label: `Vent ${windFL}`, color: '#22d3ee', symbol: 'line' })
   if (tropoEnabled)     entries.push({ label: 'Tropopause', color: '#fbbf24', symbol: 'fill' })
   if (qvacisEnabled)    entries.push({ label: `Cendres FL${qvacisFL} (${qvacisDataset === 'DETERMINISTIC' ? 'dét.' : 'prob.'})`, color: '#fb923c', symbol: 'fill' })
+  if (radarEnabled)     entries.push({ label: 'Radar OPERA', color: '#4ade80', symbol: 'dot' })
   if (lightningEnabled) entries.push({ label: 'Foudre MTG-LI', color: '#facc15', symbol: 'dot' })
   if (satIREnabled)     entries.push({ label: 'Sat IR 10.5µm', color: '#7dd3fc', symbol: 'fill' })
   if (satConvEnabled)   entries.push({ label: 'Convection RGB', color: '#f472b6', symbol: 'fill' })
