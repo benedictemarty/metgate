@@ -15,12 +15,11 @@ import { AlertTriangle, Eye, EyeOff, RotateCcw, ArrowDown, ArrowRight, Zap } fro
 const RADIUS = 22 // rayon utile du dôme (unités de scène)
 
 // ───────────────────────────────────────────────────────────────────────
-// Rate-limiter ADS-B au niveau MODULE (singleton, survit aux re-mounts).
-// Quel que soit le nombre d'instances de TowerGlobe ou de cycles de
-// useEffect, on n'enverra jamais plus de 1 requête /api/aircraft/search
-// toutes les 30 secondes. Sur erreur, back-off jusqu'à 5 minutes.
+// Polling ADS-B anonyme (adsb.fi) — 15 s, sans compte.
+// Dead reckoning frame-par-frame entre deux updates pour une animation
+// fluide malgré la latence réseau.
 // ───────────────────────────────────────────────────────────────────────
-const ADSB_MIN_INTERVAL_MS = 30_000
+const ADSB_MIN_INTERVAL_MS = 15_000
 const ADSB_MAX_BACKOFF_MS = 300_000
 // SCENE_RANGE_NM est désormais dynamique (state TowerGlobe). Choix typiques :
 //  -   5 NM : vue tour / finale courte
@@ -42,12 +41,24 @@ const AIRPORTS: Record<string, { lat: number; lon: number; name: string }> = {
   LFML: { lat: 43.4393, lon: 5.2214, name: 'Marseille' },
   LFLY: { lat: 45.7194, lon: 4.9442, name: 'Lyon Bron' },
   LFMN: { lat: 43.6584, lon: 7.2159, name: 'Nice' },
-  // Bassin méditerranéen / Moyen-Orient (souvent actif)
+  // Bassin méditerranéen / Moyen-Orient
   LGAV: { lat: 37.9364, lon: 23.9445, name: 'Athènes' },
   LTBA: { lat: 40.9769, lon: 28.8146, name: 'Istanbul Atatürk' },
+  LTFM: { lat: 41.2753, lon: 28.7519, name: 'Istanbul (IST)' },
   LCLK: { lat: 34.875, lon: 33.6249, name: 'Larnaca' },
   HECA: { lat: 30.1219, lon: 31.4056, name: 'Le Caire' },
   OEJN: { lat: 21.6797, lon: 39.1565, name: 'Jeddah' },
+  OMDB: { lat: 25.2528, lon: 55.3644, name: 'Dubaï' },
+  // Caucase / Mer Noire
+  UGTB: { lat: 41.6692, lon: 44.9547, name: 'Tbilissi' },
+  UGEE: { lat: 40.0214, lon: 44.3959, name: 'Erevan (Zvartnots)' },
+  UBBB: { lat: 40.4675, lon: 50.0467, name: 'Bakou (Heydar Aliyev)' },
+  UKFF: { lat: 45.0022, lon: 33.9751, name: 'Simféropol' },
+  UKKK: { lat: 50.4010, lon: 30.4494, name: 'Kiev Boryspil' },
+  // Europe de l'Est / Balkans
+  LROP: { lat: 44.5711, lon: 26.0858, name: 'Bucarest Otopeni' },
+  LBSF: { lat: 42.6967, lon: 23.4114, name: 'Sofia' },
+  LWSK: { lat: 41.9616, lon: 21.6214, name: 'Skopje' },
   // Afrique tropicale (convection quasi quotidienne, ZCIT)
   DNMM: { lat: 6.5774, lon: 3.3212, name: 'Lagos (Nigeria)' },
   FKKD: { lat: 4.0064, lon: 9.7195, name: 'Douala (Cameroun)' },
@@ -973,19 +984,19 @@ function NeighborADs({ aerodromes }: { aerodromes: Aerodrome[] }) {
 
 interface PlaneInstance {
   callsign: string
-  x: number
-  z: number
-  y: number
+  icao24: string
+  // Endpoints de l'animation courante (deux positions ADS-B connues).
+  // x0/y0/z0 = position au début du cycle (snapshot N-1)
+  // x1/y1/z1 = position à la fin du cycle (snapshot N, reçu 15 s après)
+  x0: number; y0: number; z0: number
+  x1: number; y1: number; z1: number
+  // Bornes temporelles de l'interpolation (ms).
+  t0: number; t1: number
   trackRad: number
   fl: number
+  gsKt: number
   vsTrend: 'climb' | 'desc' | 'level'
   distNM: number
-  // Vitesse-sol, taux de montée/descente et instant de la dernière position
-  // connue, pour extrapoler la trajectoire (horizontale + verticale) entre
-  // 2 updates OpenSky (toutes les 30 s).
-  gsKt: number
-  vrateMs: number // taux vertical en m/s (positif = montée)
-  lastUpdateMs: number
 }
 
 // Échelle des avions adaptée à la distance caméra : ils restent perceptibles
@@ -1014,10 +1025,9 @@ function PlaneFleet({
   )
 }
 
-// Plane : rendu simple à la position OpenSky (pas d'extrapolation côté client).
-// Chaque fetch met à jour position + cap directement. Toute logique d'animation
-// inter-fetch a été retirée (cf. CHANGELOG) : l'utilisateur préfère voir la
-// position réelle ADS-B, quitte à avoir un saut à chaque update.
+// Plane : interpolation linéaire entre deux positions ADS-B connues (buffer 15 s).
+// Aucune extrapolation : x0/y0/z0 → x1/y1/z1 sur la fenêtre [t0, t1].
+// Pas de reset visible : à t1 on commence déjà à interpoler vers le snapshot suivant.
 function Plane({
   plane,
   onSelect,
@@ -1028,11 +1038,15 @@ function Plane({
   const groupRef = useRef<THREE.Group>(null)
   const camera = useThree((s) => s.camera)
 
-  // Scale impératif à chaque frame : évite les re-renders React pendant l'orbite.
   useFrame(() => {
     if (!groupRef.current) return
-    const s = planeScaleForCameraDist(camera.position.length())
-    groupRef.current.scale.setScalar(s)
+    const alpha = Math.max(0, Math.min(1, (Date.now() - plane.t0) / (plane.t1 - plane.t0)))
+    groupRef.current.position.set(
+      plane.x0 + (plane.x1 - plane.x0) * alpha,
+      plane.y0 + (plane.y1 - plane.y0) * alpha,
+      plane.z0 + (plane.z1 - plane.z0) * alpha,
+    )
+    groupRef.current.scale.setScalar(planeScaleForCameraDist(camera.position.length()))
   })
 
   const colors =
@@ -1042,13 +1056,13 @@ function Plane({
         ? { body: 0xfb923c, emissive: 0xc2410c }
         : { body: 0x22d3ee, emissive: 0x0891b2 }
 
-  const horizR = Math.sqrt(plane.x * plane.x + plane.z * plane.z)
-  const visible = horizR <= RADIUS && plane.y >= 0.3 && plane.y <= RADIUS
+  // Visibilité basée sur la position de départ (évite un recalc chaque frame).
+  const horizR = Math.sqrt(plane.x0 * plane.x0 + plane.z0 * plane.z0)
+  const visible = horizR <= RADIUS && plane.y0 >= 0.3 && plane.y0 <= RADIUS
 
   return (
     <group
       ref={groupRef}
-      position={[plane.x, plane.y, plane.z]}
       rotation={[0, plane.trackRad, 0]}
       visible={visible}
       onClick={(e) => { e.stopPropagation(); onSelect(plane) }}
@@ -1159,6 +1173,8 @@ export default function TowerGlobe({}: TowerGlobeProps) {
   const [showMetarPanel, setShowMetarPanel] = useState(true)
   const [livePlanes, setLivePlanes] = useState<PlaneInstance[]>([])
   const adsbRef = useRef({ lastAttemptAt: 0, backoffUntil: 0, inFlight: false, errorStreak: 0 })
+  // Positions scène du snapshot précédent, clé = icao24 (ou callsign si absent).
+  const prevSnapshotRef = useRef(new Map<string, { x: number; y: number; z: number }>())
   const [airportInfo, setAirportInfo] = useState<{
     lat: number
     lon: number
@@ -1536,12 +1552,8 @@ export default function TowerGlobe({}: TowerGlobeProps) {
   }, [icao])
 
   // Fetch live des avions ADS-B autour de l'aérodrome via OpenSky.
-  // Bbox 1.5° (~ 90 NM en lat) pour avoir ~ tout le dôme + marge. Refresh
-  // 30 s (le quota OpenSky est limité, mais 30 s reste raisonnable).
-  // Refs pour permettre au polling ADS-B de lire les valeurs courantes
-  // (rayon scène, conversion d'échelle) sans re-déclencher le useEffect à
-  // chaque changement — sinon les cascades de re-renders au mount font
-  // partir 5-10 fetches en parallèle, qui retournent tous 502 ensemble.
+  // Refs pour que le polling lise toujours les valeurs courantes sans
+  // re-déclencher le useEffect à chaque render (cascade de fetches au mount).
   const adsbCtxRef = useRef({
     ap: airportInfo ?? AIRPORTS[icao] ?? null,
     sceneRangeNm,
@@ -1558,10 +1570,10 @@ export default function TowerGlobe({}: TowerGlobeProps) {
   useEffect(() => {
     let aborted = false
     let timeoutId: number | null = null
+
     const fetchPlanes = async () => {
       const s = adsbRef.current
       const now = Date.now()
-      // Vérifie si on peut tirer une requête
       let gate: { ok: boolean; waitMs: number }
       if (s.inFlight) {
         gate = { ok: false, waitMs: 1000 }
@@ -1571,126 +1583,128 @@ export default function TowerGlobe({}: TowerGlobeProps) {
         else if (now < s.backoffUntil) gate = { ok: false, waitMs: s.backoffUntil - now + 50 }
         else gate = { ok: true, waitMs: 0 }
       }
-      if (!gate.ok) {
-        timeoutId = window.setTimeout(fetchPlanes, gate.waitMs)
-        return
-      }
+      if (!gate.ok) { timeoutId = window.setTimeout(fetchPlanes, gate.waitMs); return }
+
       const ctx = adsbCtxRef.current
       const ap = ctx.ap
-      if (!ap) {
-        timeoutId = window.setTimeout(fetchPlanes, 1000)
-        return
-      }
-      const dlat = 1.5
-      const dlon = 1.5 / Math.max(0.3, Math.cos((ap.lat * Math.PI) / 180))
-      const bbox = `${ap.lon - dlon},${ap.lat - dlat},${ap.lon + dlon},${ap.lat + dlat}`
+      if (!ap) { timeoutId = window.setTimeout(fetchPlanes, 1000); return }
+
       s.lastAttemptAt = Date.now()
       s.inFlight = true
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let states: any[] | null = null
+
+      // Tentative 1 : OpenSky (compté, meilleure fraîcheur).
       try {
+        const dlat = 1.5
+        const dlon = 1.5 / Math.max(0.3, Math.cos((ap.lat * Math.PI) / 180))
+        const bbox = `${ap.lon - dlon},${ap.lat - dlat},${ap.lon + dlon},${ap.lat + dlat}`
         const r = await fetch(`/api/aircraft/search?bbox=${bbox}`)
         if (r.ok) {
           const d = await r.json()
-          if (d && typeof d.error === 'string' && d.error) {
-            s.inFlight = false
-            s.errorStreak++
-            const backoff = Math.min(ADSB_MAX_BACKOFF_MS, 30_000 * 2 ** s.errorStreak)
-            s.backoffUntil = Date.now() + backoff
-          } else {
-            s.inFlight = false
-            s.errorStreak = 0
-            s.backoffUntil = 0
-          }
-          if (aborted) return
-          processStates(d.states ?? [])
-        } else {
-          s.inFlight = false
-          s.errorStreak++
-          const backoff = Math.min(ADSB_MAX_BACKOFF_MS, 30_000 * 2 ** s.errorStreak)
-          s.backoffUntil = Date.now() + backoff
+          if (!d.error && Array.isArray(d.states) && d.states.length > 0) states = d.states
         }
-      } catch {
-        s.inFlight = false
+      } catch { /* fall through */ }
+
+      // Fallback : adsb.fi (anonyme, sans quota).
+      if (!states) {
+        try {
+          const rangeNm = ctx.sceneRangeNm + 10
+          const r = await fetch(
+            `/api/adsb/nearby?lat=${ap.lat.toFixed(4)}&lon=${ap.lon.toFixed(4)}&range_nm=${rangeNm}`,
+          )
+          if (r.ok) {
+            const d = await r.json()
+            if (!d.error && Array.isArray(d.states)) states = d.states
+          }
+        } catch { /* ignore */ }
+      }
+
+      s.inFlight = false
+      if (states !== null) {
+        s.errorStreak = 0
+        s.backoffUntil = 0
+        if (!aborted) processStates(states)
+      } else {
         s.errorStreak++
-        const backoff = Math.min(ADSB_MAX_BACKOFF_MS, 30_000 * 2 ** s.errorStreak)
-        s.backoffUntil = Date.now() + backoff
+        s.backoffUntil = Date.now() + Math.min(ADSB_MAX_BACKOFF_MS, 30_000 * 2 ** s.errorStreak)
       }
       if (aborted) return
-      // On replanifie : le prochain tick respectera la logique gate ci-dessus.
       timeoutId = window.setTimeout(fetchPlanes, ADSB_MIN_INTERVAL_MS)
     }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const processStates = (states: any[]) => {
       const ctx = adsbCtxRef.current
       const ap = ctx.ap
       if (!ap) return
-      const sceneRangeNm = ctx.sceneRangeNm
-      const nmToUnits = ctx.nmToUnits
-      const metersPerUnit = ctx.metersPerUnit
+      const { sceneRangeNm, nmToUnits, metersPerUnit } = ctx
+
+      const now = Date.now()
+      const animEnd = now + ADSB_MIN_INTERVAL_MS
+      const prevSnap = prevSnapshotRef.current
+      const nextSnap = new Map<string, { x: number; y: number; z: number }>()
+
       const out: PlaneInstance[] = []
       for (const s of states) {
         if (typeof s.lat !== 'number' || typeof s.lon !== 'number') continue
-        // Filtres : on ne montre pas les avions au sol ni immobiles, ni
-        // ceux dont la position remontée par OpenSky est obsolète (l'API
-        // garde en cache les dernières positions connues même quand un
-        // avion a perdu le contact ADS-B — sinon on voit des « fantômes »
-        // qui rejouent en boucle leur dernière approche).
         if (s.on_ground === true) continue
         const fl = typeof s.fl === 'number' ? s.fl : 0
         if (fl === 0) continue
         const gs = typeof s.gs_kt === 'number' ? s.gs_kt : 0
         if (gs < 30) continue
-        // Position obsolète : > 90 s depuis le dernier rapport ADS-B.
         const tPos = typeof s.time_position === 'number' ? s.time_position : 0
         if (tPos > 0 && Date.now() / 1000 - tPos > 90) continue
 
         const dist = distanceNM(ap.lat, ap.lon, s.lat, s.lon)
         if (dist > sceneRangeNm) continue
-        // Hauteur scène = altitude (FL × 30.48 m) / metersPerUnit, bornée
-        // au cap visuel (RADIUS).
+
         const altM = fl * 30.48
-        const yUnits = Math.max(0.4, Math.min(RADIUS - 0.5, altM / metersPerUnit))
-        const [x, , z] = toSceneCoords(ap, s.lat, s.lon, yUnits, nmToUnits)
+        const y1 = Math.max(0.4, Math.min(RADIUS - 0.5, altM / metersPerUnit))
+        const [x1, , z1] = toSceneCoords(ap, s.lat, s.lon, y1, nmToUnits)
         const trackDeg = typeof s.true_track_deg === 'number' ? s.true_track_deg : 0
-        const trackRad = (-trackDeg * Math.PI) / 180
         const vrate = typeof s.vertical_rate_ms === 'number' ? s.vertical_rate_ms : 0
-        // lastUpdateMs = instant du dernier message ADS-B (pas de l'API poll).
-        // OpenSky garde la dernière position connue et la renvoie à chaque
-        // poll même quand l'avion n'a pas émis de nouveau ADS-B. Si on
-        // utilisait Date.now() ici, le useEffect côté AnimatedPlane se
-        // déclencherait tous les 30 s (rythme du poll), réinitialisant
-        // l'extrapolation à 0 → l'avion paraît "rebooter" à sa dernière
-        // position connue toutes les 30 s. En utilisant time_position,
-        // l'extrapolation continue tant qu'aucun vrai nouveau point n'arrive.
-        const lastUpdateMs =
-          typeof s.time_position === 'number' && s.time_position > 0
-            ? s.time_position * 1000
-            : Date.now()
+
+        const icao = (s.icao24 ?? '').trim()
+        const key = icao || (s.callsign ?? '').trim()
+        nextSnap.set(key, { x: x1, y: y1, z: z1 })
+
+        // "from" = position connue du snapshot précédent (buffer 15 s).
+        // "to"   = position ADS-B du snapshot courant.
+        // L'interpolation [t0, t1] couvre exactement l'intervalle de polling :
+        // aucune extrapolation, les deux bornes sont des positions réelles.
+        const prev = prevSnap.get(key)
+        const x0 = prev?.x ?? x1
+        const y0 = prev?.y ?? y1
+        const z0 = prev?.z ?? z1
+
         out.push({
-          callsign: (s.callsign ?? '').trim() || s.icao24 || '????',
-          x,
-          y: yUnits,
-          z,
-          trackRad,
+          callsign: (s.callsign ?? '').trim() || icao || '????',
+          icao24: icao,
+          x0, y0, z0,
+          x1, y1, z1,
+          t0: now,
+          t1: animEnd,
+          trackRad: (-trackDeg * Math.PI) / 180,
           fl,
+          gsKt: gs,
           vsTrend: vrate > 1 ? 'climb' : vrate < -1 ? 'desc' : 'level',
           distNM: dist,
-          gsKt: gs,
-          vrateMs: vrate,
-          lastUpdateMs,
         })
       }
+
+      prevSnapshotRef.current = nextSnap
       out.sort((a, b) => a.distNM - b.distNM)
-      setLivePlanes(out.slice(0, 20)) // borne pour ne pas saturer la scène
+      setLivePlanes(out.slice(0, 50))
     }
+
     fetchPlanes()
     return () => {
       aborted = true
       if (timeoutId) window.clearTimeout(timeoutId)
     }
-    // Volontairement *seulement* `[icao]` : sceneRangeNm / nmToUnits /
-    // airportInfo / metersPerUnit changent en cascade au mount et provoquent
-    // des re-runs qui faisaient partir 5-10 fetches en parallèle. On lit
-    // toujours les valeurs courantes via adsbCtxRef.current.
+    // Volontairement seulement `[icao]` — voir commentaire adsbCtxRef ci-dessus.
   }, [icao])
 
   return (

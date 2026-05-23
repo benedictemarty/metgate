@@ -36,6 +36,7 @@ type Airport struct {
 	Country      string
 	Municipality string
 	Type         string // small_airport / medium_airport / large_airport / heliport
+	Keywords     string // mots-clés OurAirports (noms alternatifs, graphies locales)
 }
 
 type Runway struct {
@@ -142,6 +143,7 @@ func (s *Store) loadAirports() error {
 			Country:      row[idx("iso_country")],
 			Municipality: row[idx("municipality")],
 			Type:         row[idx("type")],
+			Keywords:     row[idx("keywords")],
 		}
 		st.kept++
 	}
@@ -297,11 +299,27 @@ func (s *Store) Stats() (nAirports, nRunways int) {
 // ou ville), triés par pertinence (matches exacts en premier). Filtre les
 // heliports / closed / balloonport pour limiter le bruit. Limit borne le
 // nombre de résultats retournés.
+// normSearch réduit une chaîne pour la recherche approximative :
+// majuscules + suppression des doublons de consonnes (Tbilissi→TBILISI).
+func normSearch(s string) string {
+	s = strings.ToUpper(s)
+	b := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if len(b) > 0 && b[len(b)-1] == c && c != 'A' && c != 'E' && c != 'I' && c != 'O' && c != 'U' {
+			continue // déduplique les consonnes doubles (ff→f, ss→s, nn→n…)
+		}
+		b = append(b, c)
+	}
+	return string(b)
+}
+
 func (s *Store) Search(q string, limit int) []*Airport {
 	q = strings.TrimSpace(strings.ToUpper(q))
 	if q == "" {
 		return nil
 	}
+	qNorm := normSearch(q) // variante normalisée pour les graphies alternatives
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	type ranked struct {
@@ -316,6 +334,7 @@ func (s *Store) Search(q string, limit int) []*Airport {
 		nameU := strings.ToUpper(a.Name)
 		muniU := strings.ToUpper(a.Municipality)
 		iataU := strings.ToUpper(a.IATA)
+		kwU := strings.ToUpper(a.Keywords)
 		var r int
 		switch {
 		case a.ICAO == q:
@@ -332,6 +351,15 @@ func (s *Store) Search(q string, limit int) []*Airport {
 			r = 5
 		case strings.Contains(muniU, q):
 			r = 6
+		case strings.Contains(kwU, q):
+			r = 7
+		// Recherche normalisée (Tbilissi → TBILISI, etc.)
+		case strings.HasPrefix(normSearch(muniU), qNorm):
+			r = 8
+		case strings.Contains(normSearch(nameU), qNorm):
+			r = 9
+		case strings.Contains(normSearch(kwU), qNorm):
+			r = 10
 		default:
 			continue
 		}

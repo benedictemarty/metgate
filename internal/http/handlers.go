@@ -21,13 +21,14 @@ import (
 )
 
 type API struct {
-	catalog        *catalog.Service
-	aircraft       *aircraft.Service
-	lightning      *lightning.Service
-	satellite      *satellite.Proxy
-	cloudtop       *cloudtop.Service
-	airports       *airports.Store
-	searchLimiter  *ipRateLimiter // 1 req/15s par IP sur /api/aircraft/search
+	catalog       *catalog.Service
+	aircraft      *aircraft.Service
+	adsbfi        *aircraft.AdsbFiClient
+	lightning     *lightning.Service
+	satellite     *satellite.Proxy
+	cloudtop      *cloudtop.Service
+	airports      *airports.Store
+	searchLimiter *ipRateLimiter // 1 req/15s par IP sur /api/aircraft/search
 }
 
 func NewAPI(c *catalog.Service, ac *aircraft.Service, lt *lightning.Service, sp *satellite.Proxy, ct *cloudtop.Service, ap *airports.Store) *API {
@@ -45,6 +46,7 @@ func NewAPI(c *catalog.Service, ac *aircraft.Service, lt *lightning.Service, sp 
 	return &API{
 		catalog:       c,
 		aircraft:      ac,
+		adsbfi:        aircraft.NewAdsbFi(),
 		lightning:     lt,
 		satellite:     sp,
 		cloudtop:      ct,
@@ -70,6 +72,7 @@ func (a *API) Routes() *http.ServeMux {
 	m.HandleFunc("GET /api/aircraft/search", a.handleAircraftSearch)
 	m.HandleFunc("GET /api/aircraft/{icao24}", a.handleAircraftState)
 	m.HandleFunc("GET /api/aircraft/{icao24}/route", a.handleAircraftRoute)
+	m.HandleFunc("GET /api/adsb/nearby", a.handleAdsbNearby)
 	m.HandleFunc("GET /api/lightning", a.handleLightning)
 	m.HandleFunc("GET /api/satellite/tile", a.satellite.HandleTile)
 	m.HandleFunc("GET /api/cloudtop", a.handleCloudtop)
@@ -834,5 +837,32 @@ func (a *API) handleGeoCountries(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/geo+json")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
 	w.Write(geo.CountriesGeoJSON) //nolint:errcheck
+}
+
+// handleAdsbNearby : /api/adsb/nearby?lat=X&lon=Y&range_nm=N
+// Retourne les avions proches via adsb.fi (anonyme, sans compte).
+// Même format de réponse que /api/aircraft/search pour compatibilité frontend.
+func (a *API) handleAdsbNearby(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	lat, err1 := strconv.ParseFloat(q.Get("lat"), 64)
+	lon, err2 := strconv.ParseFloat(q.Get("lon"), 64)
+	rangeNm, err3 := strconv.ParseFloat(q.Get("range_nm"), 64)
+	if err1 != nil || err2 != nil || err3 != nil || rangeNm <= 0 || rangeNm > 300 {
+		http.Error(w, "lat, lon et range_nm requis (range_nm ∈ ]0,300])", http.StatusBadRequest)
+		return
+	}
+	states, err := a.adsbfi.Nearby(r.Context(), lat, lon, rangeNm)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"count":  0,
+			"states": []any{},
+			"error":  err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"count":  len(states),
+		"states": states,
+	})
 }
 
