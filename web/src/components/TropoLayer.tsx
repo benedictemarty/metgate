@@ -65,6 +65,17 @@ export default function TropoLayer({ enabled, linkedInstant, onTimesLoaded, onLo
     return () => window.clearInterval(id)
   }, [playing, grid?.steps?.length])
 
+  // Plage d'altitude globale (toutes étapes) pour une palette stable en animation.
+  const { globalAltMin, globalAltMax } = useMemo(() => {
+    if (!grid?.steps?.length) return { globalAltMin: 0, globalAltMax: 1 }
+    let mn = Infinity, mx = -Infinity
+    for (const s of grid.steps) {
+      if (s.alt_min_m < mn) mn = s.alt_min_m
+      if (s.alt_max_m > mx) mx = s.alt_max_m
+    }
+    return { globalAltMin: mn, globalAltMax: Math.max(mn + 1, mx) }
+  }, [grid])
+
   // Index effectif du step.
   const effectiveStepIdx = useMemo(() => {
     if (!grid?.steps?.length) return 0
@@ -106,9 +117,7 @@ export default function TropoLayer({ enabled, linkedInstant, onTimesLoaded, onLo
     const [lonMin, latMin, lonMax, latMax] = grid.bbox
     const gridW = grid.width
     const gridH = grid.height
-    const altMin = step.alt_min_m
-    const altMax = step.alt_max_m
-    const span = Math.max(1, altMax - altMin)
+    const span = Math.max(1, globalAltMax - globalAltMin)
     const cW = canvas.width
     const cH = canvas.height
 
@@ -150,19 +159,15 @@ export default function TropoLayer({ enabled, linkedInstant, onTimesLoaded, onLo
         const a01 = step.alt[(gyi + 1) * gridW + gxi]
         const a11 = step.alt[(gyi + 1) * gridW + gxi + 1]
 
-        const v00 = isNaN(a00) ? null : a00
-        if (v00 === null) continue
-        const v10 = isNaN(a10) ? v00 : a10
-        const v01 = isNaN(a01) ? v00 : a01
-        const v11 = isNaN(a11) ? (v10 ?? v01) : a11
+        // Bilinéaire pondéré : ignore les NaN, rejette si wsum < 0.25 (cohérent avec Go)
+        let altVal = 0, wsum = 0
+        for (const [v, w] of [[a00, (1 - fx) * (1 - fy)], [a10, fx * (1 - fy)], [a01, (1 - fx) * fy], [a11, fx * fy]] as [number, number][]) {
+          if (!isNaN(v)) { altVal += v * w; wsum += w }
+        }
+        if (wsum < 0.25) continue
+        const alt = altVal / wsum
 
-        const alt =
-          v00 * (1 - fx) * (1 - fy) +
-          (v10 ?? 0) * fx * (1 - fy) +
-          (v01 ?? 0) * (1 - fx) * fy +
-          (v11 ?? 0) * fx * fy
-
-        const t = Math.max(0, Math.min(1, (alt - altMin) / span))
+        const t = Math.max(0, Math.min(1, (alt - globalAltMin) / span))
         const [r, g, b] = palette(t)
         const k = (sy * sW + sx) * 4
         data[k] = r; data[k + 1] = g; data[k + 2] = b; data[k + 3] = 155
@@ -175,7 +180,7 @@ export default function TropoLayer({ enabled, linkedInstant, onTimesLoaded, onLo
     ctx.imageSmoothingEnabled = true
     ctx.imageSmoothingQuality = 'high'
     ctx.drawImage(small, 0, 0, cW, cH)
-  }, [enabled, grid, effectiveStepIdx, map])
+  }, [enabled, grid, effectiveStepIdx, map, globalAltMin, globalAltMax])
 
   // Déclenche le rendu et s'abonne aux événements carte.
   useEffect(() => {
@@ -183,9 +188,11 @@ export default function TropoLayer({ enabled, linkedInstant, onTimesLoaded, onLo
     renderCanvas()
     map.on('move', renderCanvas)
     map.on('resize', renderCanvas)
+    map.on('webglcontextrestored', renderCanvas)
     return () => {
       map.off('move', renderCanvas)
       map.off('resize', renderCanvas)
+      map.off('webglcontextrestored', renderCanvas)
       if (canvasRef.current) {
         const ctx = canvasRef.current.getContext('2d')
         ctx?.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height)
@@ -250,14 +257,14 @@ export default function TropoLayer({ enabled, linkedInstant, onTimesLoaded, onLo
           )}
           <div className="flex items-center gap-1 mt-1">
             <span className="text-[0.5625rem] text-slate-500 w-9 text-right">
-              {(step.alt_min_m / 1000).toFixed(1)}km
+              {(globalAltMin / 1000).toFixed(1)}km
             </span>
             <div
               className="flex-1 h-2 rounded-sm"
               style={{ background: 'linear-gradient(to right, rgb(200,60,60), rgb(240,140,60), rgb(240,220,80), rgb(120,200,100), rgb(60,130,200))' }}
             />
             <span className="text-[0.5625rem] text-slate-500 w-9">
-              {(step.alt_max_m / 1000).toFixed(1)}km
+              {(globalAltMax / 1000).toFixed(1)}km
             </span>
           </div>
         </div>

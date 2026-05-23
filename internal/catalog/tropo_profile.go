@@ -35,8 +35,7 @@ func (s *Service) EnrichRouteWithTropo(ctx context.Context, plan *RoutePlan) err
 	for i := range plan.Waypoints {
 		w := &plan.Waypoints[i]
 		wpUnix, _ := parseISOToUnixMs(w.TimeISO)
-		stepIdx := nearestUnixIndex(stepTimesUnix, wpUnix)
-		alt, ok := sampleTropoStep(grid, stepIdx, w.Lat, w.Lon)
+		alt, ok := sampleInterpolatedTropo(grid, stepTimesUnix, wpUnix, w.Lat, w.Lon)
 		if !ok {
 			continue
 		}
@@ -44,6 +43,54 @@ func (s *Service) EnrichRouteWithTropo(ctx context.Context, plan *RoutePlan) err
 		w.TropoAltM = &v
 	}
 	return nil
+}
+
+// sampleInterpolatedTropo interpole temporellement (linéaire entre les 2 steps
+// encadrants) puis spatialement (bilinéaire) l'altitude tropopause. Cohérent
+// avec sampleInterpolatedUV dans wind_profile.go.
+func sampleInterpolatedTropo(grid *TropoGrid, stepTimesMs []int64, targetMs int64, lat, lon float64) (float64, bool) {
+	n := len(stepTimesMs)
+	if n == 0 {
+		return 0, false
+	}
+	if n == 1 {
+		return sampleTropoStep(grid, 0, lat, lon)
+	}
+
+	lo, hi := 0, n-1
+	for lo < hi-1 {
+		mid := (lo + hi) / 2
+		if stepTimesMs[mid] <= targetMs {
+			lo = mid
+		} else {
+			hi = mid
+		}
+	}
+	if targetMs <= stepTimesMs[0] {
+		return sampleTropoStep(grid, 0, lat, lon)
+	}
+	if targetMs >= stepTimesMs[n-1] {
+		return sampleTropoStep(grid, n-1, lat, lon)
+	}
+
+	dt := float64(stepTimesMs[hi] - stepTimesMs[lo])
+	if dt <= 0 {
+		return sampleTropoStep(grid, lo, lat, lon)
+	}
+	alpha := float64(targetMs-stepTimesMs[lo]) / dt
+
+	a0, ok0 := sampleTropoStep(grid, lo, lat, lon)
+	a1, ok1 := sampleTropoStep(grid, hi, lat, lon)
+	if !ok0 && !ok1 {
+		return 0, false
+	}
+	if !ok0 {
+		return a1, true
+	}
+	if !ok1 {
+		return a0, true
+	}
+	return a0 + (a1-a0)*alpha, true
 }
 
 // sampleTropoStep interpole bilinéairement la tropopause à (lat, lon) dans
