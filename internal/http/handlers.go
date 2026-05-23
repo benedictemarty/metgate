@@ -21,14 +21,15 @@ import (
 )
 
 type API struct {
-	catalog       *catalog.Service
-	aircraft      *aircraft.Service
-	adsbfi        *aircraft.AdsbFiClient
-	lightning     *lightning.Service
-	satellite     *satellite.Proxy
-	cloudtop      *cloudtop.Service
-	airports      *airports.Store
-	searchLimiter *ipRateLimiter // 1 req/15s par IP sur /api/aircraft/search
+	catalog      *catalog.Service
+	aircraft     *aircraft.Service
+	adsbfi       *aircraft.AdsbFiClient
+	lightning    *lightning.Service
+	satellite    *satellite.Proxy
+	cloudtop     *cloudtop.Service
+	airports     *airports.Store
+	bboxLimiter  *ipRateLimiter // polling bbox (dôme 3D) : 1 req/14s par IP
+	csLimiter    *ipRateLimiter // recherche callsign (NavDisplay) : 1 req/3s par IP
 }
 
 func NewAPI(c *catalog.Service, ac *aircraft.Service, lt *lightning.Service, sp *satellite.Proxy, ct *cloudtop.Service, ap *airports.Store) *API {
@@ -44,14 +45,15 @@ func NewAPI(c *catalog.Service, ac *aircraft.Service, lt *lightning.Service, sp 
 		}
 	}
 	return &API{
-		catalog:       c,
-		aircraft:      ac,
-		adsbfi:        aircraft.NewAdsbFi(),
-		lightning:     lt,
-		satellite:     sp,
-		cloudtop:      ct,
-		airports:      ap,
-		searchLimiter: newIPRateLimiter(15 * time.Second),
+		catalog:     c,
+		aircraft:    ac,
+		adsbfi:      aircraft.NewAdsbFi(),
+		lightning:   lt,
+		satellite:   sp,
+		cloudtop:    ct,
+		airports:    ap,
+		bboxLimiter: newIPRateLimiter(14 * time.Second), // légèrement < 15s client
+		csLimiter:   newIPRateLimiter(3 * time.Second),  // recherche interactive
 	}
 }
 
@@ -180,17 +182,29 @@ func (a *API) handleTropo(w http.ResponseWriter, r *http.Request) {
 // Recherche par sous-chaîne de callsign + bbox optionnelle. Si `cs` est
 // absent, retourne tous les avions de la bbox (utile pour les vues locales
 // type Tour 3D : trafic dans un rayon autour de l'aérodrome).
+// Rate-limiters séparés : bbox (dôme, 1/14s) et cs (NavDisplay, 1/3s)
+// pour que les deux puissent utiliser OpenSky simultanément.
 func (a *API) handleAircraftSearch(w http.ResponseWriter, r *http.Request) {
-	if !a.searchLimiter.Allow(r) {
-		w.Header().Set("Retry-After", "15")
-		http.Error(w, "trop de requêtes OpenSky — réessayer dans 15 secondes", http.StatusTooManyRequests)
-		return
-	}
 	cs := strings.TrimSpace(r.URL.Query().Get("cs"))
 	bboxParam := strings.TrimSpace(r.URL.Query().Get("bbox"))
 	if cs == "" && bboxParam == "" {
 		http.Error(w, "param 'cs' (callsign) ou 'bbox' requis", http.StatusBadRequest)
 		return
+	}
+	// Rate-limit selon le type de requête : bbox = polling dôme (1/14s),
+	// cs = recherche interactive NavDisplay (1/3s). Quotas indépendants.
+	if cs != "" {
+		if !a.csLimiter.Allow(r) {
+			w.Header().Set("Retry-After", "3")
+			http.Error(w, "trop de requêtes — réessayer dans 3 secondes", http.StatusTooManyRequests)
+			return
+		}
+	} else {
+		if !a.bboxLimiter.Allow(r) {
+			w.Header().Set("Retry-After", "14")
+			http.Error(w, "trop de requêtes — réessayer dans 14 secondes", http.StatusTooManyRequests)
+			return
+		}
 	}
 	// Bbox par défaut Europe + Méditerranée + Maghreb pour ne pas saturer.
 	bbox, ok := parseBBoxParam(w, r, "bbox", [4]float64{-15, 30, 35, 70})

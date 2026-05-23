@@ -1595,7 +1595,8 @@ export default function TowerGlobe({}: TowerGlobeProps) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let states: any[] | null = null
 
-      // Tentative 1 : OpenSky (compté, meilleure fraîcheur).
+      // Primaire : OpenSky (meilleure fraîcheur, endpoint bbox dédié sans
+      // partager le quota callsign de NavDisplay).
       try {
         const dlat = 1.5
         const dlon = 1.5 / Math.max(0.3, Math.cos((ap.lat * Math.PI) / 180))
@@ -1607,7 +1608,7 @@ export default function TowerGlobe({}: TowerGlobeProps) {
         }
       } catch { /* fall through */ }
 
-      // Fallback : adsb.fi (anonyme, sans quota).
+      // Fallback : adsb.fi (anonyme, si OpenSky rate-limité ou indisponible).
       if (!states) {
         try {
           const rangeNm = ctx.sceneRangeNm + 10
