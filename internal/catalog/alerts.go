@@ -4,10 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
 )
+
+// rdtProximityNM : distance maximale en NM entre l'aérodrome et le centroïde
+// d'une cellule RDT pour déclencher une alerte de proximité.
+const rdtProximityNM = 30
 
 // AlertLevel encode la sévérité d'une alerte météo sur un aérodrome.
 type AlertLevel int
@@ -135,21 +140,33 @@ func (s *Service) AlertsForAirports(ctx context.Context, aps []SimpleAirport) ([
 		}
 
 		// 3. RDT : intersection spatiale avec cellules convectives.
+		// On déclenche si l'aérodrome est DANS la cellule (menace directe) OU
+		// si le centroïde de la cellule est à moins de rdtProximityNM NM (menace proche).
 		bestRDT := AlertNone
 		bestRDTSrc := AlertSource{}
 		for _, feat := range rdtRes.feats {
-			if !pointInFeature(ap.Lat, ap.Lon, feat) {
+			inside := pointInFeature(ap.Lat, ap.Lon, feat)
+			distNM := centroidDistNM(ap.Lat, ap.Lon, feat)
+			if !inside && distNM > rdtProximityNM {
 				continue
 			}
 			p := propsOf(feat)
 			ftMin := rdtForecastMin(p)
 			l := rdtLevel(ftMin)
+			// Si seulement proche (pas dedans), on abaisse d'un niveau.
+			if !inside && l > AlertBlue {
+				l--
+			}
 			if l > bestRDT {
 				bestRDT = l
+				proximity := ""
+				if !inside {
+					proximity = fmt.Sprintf(" (à %.0f NM)", distNM)
+				}
 				bestRDTSrc = AlertSource{
 					Type:        "RDT",
 					Phenomenon:  "TS/CB",
-					Text:        rdtText(ftMin),
+					Text:        rdtText(ftMin) + proximity,
 					ForecastMin: ftMin,
 				}
 			}
@@ -440,4 +457,57 @@ func toFloat64(v any) (float64, bool) {
 		return f, err == nil
 	}
 	return 0, false
+}
+
+// centroidDistNM calcule la distance en NM entre (lat, lon) et le centroïde
+// approximatif du premier anneau extérieur de la géométrie de la feature.
+// Renvoie +Inf si la géométrie est absente ou illisible.
+func centroidDistNM(lat, lon float64, feature map[string]any) float64 {
+	geom, ok := feature["geometry"].(map[string]any)
+	if !ok || geom == nil {
+		return math.Inf(1)
+	}
+	gtype, _ := geom["type"].(string)
+	coords := geom["coordinates"]
+
+	var ring [][]float64
+	switch gtype {
+	case "Polygon":
+		rings := toRings(coords)
+		if len(rings) > 0 {
+			ring = rings[0]
+		}
+	case "MultiPolygon":
+		polys := toMultiPolygon(coords)
+		if len(polys) > 0 && len(polys[0]) > 0 {
+			ring = polys[0][0]
+		}
+	}
+	if len(ring) == 0 {
+		return math.Inf(1)
+	}
+
+	// Centroïde = moyenne des sommets (précis pour des polygones convexes).
+	var sumX, sumY float64
+	for _, pt := range ring {
+		sumX += pt[0]
+		sumY += pt[1]
+	}
+	cLon := sumX / float64(len(ring))
+	cLat := sumY / float64(len(ring))
+	return haversineNM(lat, lon, cLat, cLon)
+}
+
+// haversineNM : distance orthodromique en NM entre deux points (lat/lon en degrés).
+func haversineNM(lat1, lon1, lat2, lon2 float64) float64 {
+	const r = 3440.065 // rayon terrestre en NM
+	const deg = math.Pi / 180
+	p1 := lat1 * deg
+	p2 := lat2 * deg
+	dp := (lat2 - lat1) * deg
+	dl := (lon2 - lon1) * deg
+	s1 := math.Sin(dp / 2)
+	s2 := math.Sin(dl / 2)
+	a := s1*s1 + math.Cos(p1)*math.Cos(p2)*s2*s2
+	return 2 * r * math.Asin(math.Sqrt(a))
 }
