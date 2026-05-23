@@ -24,3 +24,4 @@ coverage.out
 *.swp
 api/openapi.json
 CLAUDE.md
+screenshot.png
