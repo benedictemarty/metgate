@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useMap } from 'react-map-gl/maplibre'
 import { Zap } from 'lucide-react'
+import DraggableWindow from './DraggableWindow'
 
 const SOURCE_ID = 'eumetsat-lightning-src'
 const LAYER_HALO = 'eumetsat-lightning-halo'
@@ -160,7 +161,11 @@ export default function LightningLayer({ enabled }: LightningLayerProps) {
   if (!enabled) return null
 
   return (
-    <div className="absolute top-16 right-4 z-10 px-3 py-2 rounded-lg bg-slate-950/85 backdrop-blur-md border border-amber-900/40 text-[0.625rem] text-slate-300 shadow-2xl flex flex-col gap-1.5 min-w-[260px]">
+    <DraggableWindow
+      storageKey="metgate.lightningInfo.pos"
+      handleClassName="-top-2 right-2"
+      className="absolute top-16 right-4 z-10 px-3 py-2 rounded-lg bg-slate-950/85 backdrop-blur-md border border-amber-900/40 text-[0.625rem] text-slate-300 shadow-2xl flex flex-col gap-1.5 min-w-[260px]"
+    >
       <div className="flex items-center justify-between gap-3 pb-1.5 border-b border-slate-800/60">
         <div className="flex items-center gap-2">
           <Zap className="size-3.5 text-amber-300" />
@@ -190,6 +195,6 @@ export default function LightningLayer({ enabled }: LightningLayerProps) {
       <div className="text-amber-300/70 italic leading-snug">
         Situationnel — <span className="text-amber-200">non OPMET</span> (OACI Annexe 3 / 2017/373).
       </div>
-    </div>
+    </DraggableWindow>
   )
 }

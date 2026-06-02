@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMap } from 'react-map-gl/maplibre'
 import type { Map as MaplibreMap } from 'maplibre-gl'
+import DraggableWindow from './DraggableWindow'
 import { Pause, Play } from 'lucide-react'
 
 type BBox4 = [number, number, number, number]
@@ -247,7 +248,11 @@ export default function QvacisLayer({ enabled, dataset, fl, linkedInstant, onTim
         </div>
       )}
       {grid && step && (
-        <div className="absolute bottom-64 right-4 z-10 px-3 py-2 rounded-lg bg-slate-950/85 backdrop-blur-md border border-orange-900/40 text-[0.625rem] text-slate-300 shadow-2xl flex flex-col gap-2 min-w-[280px]">
+        <DraggableWindow
+          storageKey="metgate.qvacisInfo.pos"
+          handleClassName="-top-2 right-2"
+          className="absolute bottom-64 right-4 z-10 px-3 py-2 rounded-lg bg-slate-950/85 backdrop-blur-md border border-orange-900/40 text-[0.625rem] text-slate-300 shadow-2xl flex flex-col gap-2 min-w-[280px]"
+        >
           <div className="flex items-center gap-2">
             <span className="text-orange-300/80">Cendres volcaniques</span>
             <span className="font-mono text-slate-400">FL{fl}</span>
@@ -289,7 +294,7 @@ export default function QvacisLayer({ enabled, dataset, fl, linkedInstant, onTim
           <div className="text-[0.5625rem] text-slate-500">
             Seuils ICAO : 0.2 (low) · 2 (medium) · 4 (high · no-fly)
           </div>
-        </div>
+        </DraggableWindow>
       )}
     </>
   )

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useMap } from 'react-map-gl/maplibre'
 import { CloudCog } from 'lucide-react'
+import DraggableWindow from './DraggableWindow'
 
 const SOURCE_ID = 'eumetsat-cloudtop-src'
 const LAYER_ID = 'eumetsat-cloudtop-layer'
@@ -112,7 +113,11 @@ export default function CloudTopLayer({
   if (!enabled) return null
 
   return (
-    <div className="absolute top-16 right-72 z-10 px-3 py-2 rounded-lg bg-slate-950/85 backdrop-blur-md border border-violet-900/40 text-[0.625rem] text-slate-300 shadow-2xl flex flex-col gap-2 min-w-[260px]">
+    <DraggableWindow
+      storageKey="metgate.cthInfo.pos"
+      handleClassName="-top-2 right-2"
+      className="absolute top-16 right-72 z-10 px-3 py-2 rounded-lg bg-slate-950/85 backdrop-blur-md border border-violet-900/40 text-[0.625rem] text-slate-300 shadow-2xl flex flex-col gap-2 min-w-[260px]"
+    >
       <div className="flex items-center gap-2 pb-1.5 border-b border-slate-800/60">
         <CloudCog className="size-3.5 text-violet-300" />
         <span className="font-semibold text-violet-200 uppercase tracking-wider">Cloud Top Height</span>
@@ -136,7 +141,7 @@ export default function CloudTopLayer({
         Sommets nuageux ≥ FL{minFL}. Source EUMETSAT — situationnel,{' '}
         <span className="text-violet-200">non OPMET</span>.
       </div>
-    </div>
+    </DraggableWindow>
   )
 }
 

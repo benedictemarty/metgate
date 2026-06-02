@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMap } from 'react-map-gl/maplibre'
 import { Pause, Play } from 'lucide-react'
+import DraggableWindow from './DraggableWindow'
 
 interface WindStep {
   time: string
@@ -301,7 +302,11 @@ export default function WindLayer({
         </div>
       )}
       {enabled && grid && currentStep && (
-        <div className="absolute bottom-24 right-4 z-10 px-3 py-2 rounded-lg bg-slate-950/85 backdrop-blur-md border border-slate-800/70 text-[0.625rem] text-slate-300 shadow-2xl flex flex-col gap-2 min-w-[260px]">
+        <DraggableWindow
+          storageKey="metgate.windInfo.pos"
+          handleClassName="-top-2 right-2"
+          className="absolute bottom-24 right-4 z-10 px-3 py-2 rounded-lg bg-slate-950/85 backdrop-blur-md border border-slate-800/70 text-[0.625rem] text-slate-300 shadow-2xl flex flex-col gap-2 min-w-[260px]"
+        >
           <div className="flex items-center gap-2">
             <span className="text-slate-500">{dataset === 'JET' ? 'Jet stream' : 'Vent'}</span>
             {dataset === 'WIND' && (
@@ -360,7 +365,7 @@ export default function WindLayer({
               </span>
             </div>
           )}
-        </div>
+        </DraggableWindow>
       )}
     </>
   )

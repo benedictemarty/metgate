@@ -29,7 +29,7 @@ import SatRasterLayer from '../components/SatRasterLayer'
 import CloudTopLayer from '../components/CloudTopLayer'
 import FlightPlan, { type RoutePlan } from '../components/FlightPlan'
 import AircraftTracker, { type AircraftState } from '../components/AircraftTracker'
-import { AlertTriangle, ChevronDown, ChevronUp, CloudCog, CloudFog, CloudLightning, Filter, Globe2, Landmark, Link2, Link2Off, Mountain, Radar, Satellite, Settings, Zap } from 'lucide-react'
+import { AlertTriangle, Box, ChevronDown, ChevronUp, CloudCog, CloudFog, CloudLightning, Filter, Globe2, Landmark, Link2, Link2Off, Mountain, Radar, Satellite, Settings, Zap } from 'lucide-react'
 import type { Aggregate, Family } from '../types'
 import { displayFamilyName } from '../familyDisplay'
 import OGCFilterPanel, { type OGCFilter } from '../components/OGCFilterPanel'
@@ -39,6 +39,7 @@ import ConfigPanel, { type MapLanguageCode } from '../components/ConfigPanel'
 import BasemapLanguage from '../components/BasemapLanguage'
 import DraggableShell from '../components/DraggableShell'
 import DraggableWindow from '../components/DraggableWindow'
+import Pitch3D from '../components/Pitch3D'
 import RadarLayer from '../components/RadarLayer'
 import AirportAlertsLayer from '../components/AirportAlertsLayer'
 
@@ -53,27 +54,35 @@ interface MapViewProps {
 // Les noms ici sont des *familles* (sortie de /api/products) — pas des
 // FeatureTypes WFS. Le typeName réel envoyé à MetGate vient de family.latest
 // (ex: "METAR_last").
-const MAPPABLE_FAMILIES = new Set([
-  // Points (aérodromes / observations / advisories)
+// Familles OPMET stricto sensu (OACI Annexe 3, Doc 8896) : observations,
+// prévisions et avis officiels couverts par les services de notification météo
+// aéronautique.
+const OPMET_FAMILIES = new Set([
   'METAR',
   'SPECI',
   'TAF',
   'LocalReport',
-  'WL', // Aerodrome Warning (= MAA Météo France, code WMO WL)
-  'VolcanicAshAdvisory',
-  'TropicalCycloneAdvisory',
-  'SpaceWeatherAdvisory',
-  // Polygones / MultiPolygones (zones)
+  'WL', // Aerodrome Warning (= MAA Météo France)
   'AIRMET',
   'SIGMET',
   'VolcanicAshSIGMET',
   'TropicalCycloneSIGMET',
+  'VolcanicAshAdvisory',
+  'TropicalCycloneAdvisory',
+  'SpaceWeatherAdvisory',
+])
+
+// Familles WFS exploitées par le portail mais qui NE sont PAS OPMET : produits
+// dérivés, situationnels ou support de prévision (Météo-France, EUMETSAT, VAAC).
+const SITUATIONAL_FAMILIES = new Set([
   'CAT_EURAT01',
   'GIVRAGE_EURAT01',
   'RDT_MSG',
   'OPIC_GTD',
   'QVACIS',
 ])
+
+const MAPPABLE_FAMILIES = new Set([...OPMET_FAMILIES, ...SITUATIONAL_FAMILIES])
 
 interface LayerStyle {
   color: string
@@ -167,6 +176,60 @@ function trailParamsFor(ftMin: number): {
   }
 }
 
+// Familles dont les polygones sont extrudables verticalement quand le mode 3D
+// est actif. Limité aux produits qui transportent une plage d'altitudes fiable.
+const EXTRUDABLE_FAMILIES = new Set([
+  'RDT_MSG',
+  'CAT_EURAT01',
+  'GIVRAGE_EURAT01',
+  'SIGMET',
+  'AIRMET',
+  'VolcanicAshSIGMET',
+  'TropicalCycloneSIGMET',
+])
+
+const FL_TO_METERS = 30.48 // 1 FL = 100 ft = 30,48 m
+
+function pickNum(props: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const k of keys) {
+    const v = props[k]
+    if (typeof v === 'number' && Number.isFinite(v)) return v
+    if (typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v)) return Number(v)
+  }
+  return undefined
+}
+
+// Calcule les limites verticales d'un feature (`base_m`, `top_m` en mètres MSL),
+// à partir des conventions IWXXM / MetGate observées.
+function featureFLMeters(props: Record<string, unknown>): { base_m: number; top_m: number } | null {
+  // RDT_MSG : limites en mètres directement.
+  const lowM = pickNum(props, ['lowerboundary'])
+  const topM = pickNum(props, ['unbiasedforecastupperboundary', 'upperboundary'])
+  if (typeof topM === 'number') {
+    return { base_m: typeof lowM === 'number' ? Math.max(0, lowM) : 0, top_m: topM }
+  }
+  // SIGMET/AIRMET (parsés depuis le decoded) puis CAT/GIVRAGE (champs scalaires).
+  const flMax = pickNum(props, ['parsed_fl_max', 'fl_max', 'upper_limit_fl', 'upper_fl'])
+  const flMin = pickNum(props, ['parsed_fl_min', 'fl_min', 'lower_limit_fl', 'lower_fl'])
+  if (typeof flMax === 'number') {
+    return {
+      base_m: (typeof flMin === 'number' ? Math.max(0, flMin) : 0) * FL_TO_METERS * 100,
+      top_m: flMax * FL_TO_METERS * 100,
+    }
+  }
+  return null
+}
+
+function decorateFLFeature(f: GeoJSON.Feature): GeoJSON.Feature {
+  const props = (f.properties ?? {}) as Record<string, unknown>
+  const fl = featureFLMeters(props)
+  if (!fl) return f
+  return {
+    ...f,
+    properties: { ...props, _base_m: fl.base_m, _top_m: fl.top_m },
+  }
+}
+
 function decorateTrailFeature(f: GeoJSON.Feature): GeoJSON.Feature {
   const props = (f.properties ?? {}) as Record<string, unknown>
   const raw = props.forecasttime
@@ -203,7 +266,10 @@ function filterBySlot(
 
   // En mode trails, on injecte les paramètres d'opacité comme properties
   // pour chaque feature ; MapLibre n'a plus qu'à lire ['get', '_fillOp'].
-  const features = showTrails ? base.map(decorateTrailFeature) : base
+  const trailed = showTrails ? base.map(decorateTrailFeature) : base
+  // Décoration FL (toujours) : pose `_base_m`/`_top_m` sur les features qui
+  // transportent une plage d'altitudes — utilisé par le mode 3D (extrusion).
+  const features = trailed.map(decorateFLFeature)
 
   return { ...geo, features }
 }
@@ -310,6 +376,13 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
   const [firEnabled, setFirEnabled] = useState(false)
   const [countriesEnabled, setCountriesEnabled] = useState(false)
   const [configOpen, setConfigOpen] = useState(false)
+  const [extrude3D, setExtrude3D] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    return window.localStorage.getItem('metgate.extrude3D') === '1'
+  })
+  useEffect(() => {
+    try { window.localStorage.setItem('metgate.extrude3D', extrude3D ? '1' : '0') } catch { /* no-op */ }
+  }, [extrude3D])
   const [mapLanguage, setMapLanguage] = useState<MapLanguageCode>(() => {
     const saved = typeof window !== 'undefined' ? window.localStorage.getItem('metgate.mapLanguage') : null
     return (saved as MapLanguageCode | null) ?? 'fr'
@@ -745,6 +818,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
           const lineOpacity = showTrails ? (['get', '_lineOp'] as unknown as number) : 0.85
           const lineWidth = showTrails ? (['get', '_lineW'] as unknown as number) : 1.5
 
+          const extrudable = extrude3D && EXTRUDABLE_FAMILIES.has(name)
           return (
             <Source key={name} id={`src-${name}`} type="geojson" data={layer.data}>
               {/* Polygones / multipolygones : remplissage + bordure.
@@ -759,9 +833,33 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
                     ['==', ['get', 'status'], 'EXERCISE'], '#38bdf8',
                     s.color,
                   ] as unknown as string,
-                  'fill-opacity': fillOpacity,
+                  // En mode 3D, on garde le fill 2D très atténué (1/3 de l'opacité)
+                  // pour repérer l'emprise au sol sous le volume extrudé.
+                  'fill-opacity': extrudable
+                    ? (typeof fillOpacity === 'number' ? fillOpacity / 3 : 0.06)
+                    : fillOpacity,
                 }}
               />
+              {extrudable && (
+                <Layer
+                  id={`${name}-extrusion`}
+                  type="fill-extrusion"
+                  filter={['all',
+                    ['in', ['geometry-type'], ['literal', ['Polygon', 'MultiPolygon']]],
+                    ['has', '_top_m'],
+                  ] as unknown as never}
+                  paint={{
+                    'fill-extrusion-color': ['case',
+                      ['==', ['get', 'status'], 'TEST'],     '#fbbf24',
+                      ['==', ['get', 'status'], 'EXERCISE'], '#38bdf8',
+                      s.color,
+                    ] as unknown as string,
+                    'fill-extrusion-base': ['get', '_base_m'] as unknown as number,
+                    'fill-extrusion-height': ['get', '_top_m'] as unknown as number,
+                    'fill-extrusion-opacity': 0.55,
+                  }}
+                />
+              )}
               <Layer
                 id={`${name}-line`}
                 type="line"
@@ -840,6 +938,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
         <FirLayer enabled={firEnabled} />
         <CountriesLayer enabled={countriesEnabled} language={mapLanguage} />
         <BasemapLanguage language={mapLanguage} />
+        <Pitch3D enabled={extrude3D} />
         <RadarLayer
           enabled={radarEnabled}
           linkedInstant={masterInstant}
@@ -1051,6 +1150,11 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
             key: 'countries', label: 'Pays', icon: Landmark, color: '#fde047',
             enabled: countriesEnabled, onToggle: () => setCountriesEnabled(v => !v),
             title: 'Contours pays (Natural Earth 50m, multilingue)',
+          },
+          {
+            key: '3d', label: '3D (FL)', icon: Box, color: '#a78bfa',
+            enabled: extrude3D, onToggle: () => setExtrude3D(v => !v),
+            title: 'Affichage 3D : pitch 45° + extrusion verticale RDT / CAT / Givrage / SIGMET / AIRMET basée sur leurs FL',
           },
         ]}
       />
@@ -1739,68 +1843,95 @@ function Sidebar({
                 )
               })}
             </ul>
-            {candidates.length > 0 && (
-              <div className="mt-3 px-2 py-1 text-[0.625rem] uppercase tracking-wider text-slate-500">
-                Produits OPMET
-              </div>
-            )}
           </div>
         )}
-        <ul className="space-y-1">
-          {candidates.map((f) => {
-            const isActive = active.has(f.name)
-            const isLoading = loading.has(f.name)
-            const layer = loaded[f.name]
-            const err = errors[f.name]
-            const s = styleFor(f.name)
-            return (
-              <li key={f.name}>
-                <button
-                  onClick={() => onToggleLayer(f.name)}
-                  className={`w-full text-left px-3 py-2 rounded-lg border transition ${
-                    isActive
-                      ? 'border-slate-700 bg-slate-900/80'
-                      : 'border-transparent hover:bg-slate-900/40'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="size-2.5 rounded-full shrink-0"
-                      style={{
-                        backgroundColor: s.color,
-                        boxShadow: isActive ? `0 0 10px ${s.glow}` : 'none',
-                      }}
-                    />
-                    <span className="text-sm flex-1 truncate" title={f.name}>
-                      {displayFamilyName(f.name)}
-                    </span>
-                    {isLoading && <Loader2 className="size-3 animate-spin text-slate-500" />}
-                    {!isLoading && layer && isActive && (
-                      <span
-                        className="text-[0.6875rem] tabular-nums text-slate-500"
-                        title={
-                          layer.total !== layer.count
-                            ? `${layer.count} affichés (analyse T+0) sur ${layer.total} reçus (incl. prévisions)`
-                            : undefined
-                        }
-                      >
-                        {layer.count}
-                        {layer.total !== layer.count && (
-                          <span className="text-slate-600">/{layer.total}</span>
+        {(() => {
+          const opmetFams = candidates.filter(f => OPMET_FAMILIES.has(f.name))
+          const sitFams = candidates.filter(f => SITUATIONAL_FAMILIES.has(f.name))
+          const renderFamilies = (fams: Family[]) => (
+            <ul className="space-y-1">
+              {fams.map((f) => {
+                const isActive = active.has(f.name)
+                const isLoading = loading.has(f.name)
+                const layer = loaded[f.name]
+                const err = errors[f.name]
+                const s = styleFor(f.name)
+                return (
+                  <li key={f.name}>
+                    <button
+                      onClick={() => onToggleLayer(f.name)}
+                      className={`w-full text-left px-3 py-2 rounded-lg border transition ${
+                        isActive
+                          ? 'border-slate-700 bg-slate-900/80'
+                          : 'border-transparent hover:bg-slate-900/40'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="size-2.5 rounded-full shrink-0"
+                          style={{
+                            backgroundColor: s.color,
+                            boxShadow: isActive ? `0 0 10px ${s.glow}` : 'none',
+                          }}
+                        />
+                        <span className="text-sm flex-1 truncate" title={f.name}>
+                          {displayFamilyName(f.name)}
+                        </span>
+                        {isLoading && <Loader2 className="size-3 animate-spin text-slate-500" />}
+                        {!isLoading && layer && isActive && (
+                          <span
+                            className="text-[0.6875rem] tabular-nums text-slate-500"
+                            title={
+                              layer.total !== layer.count
+                                ? `${layer.count} affichés (analyse T+0) sur ${layer.total} reçus (incl. prévisions)`
+                                : undefined
+                            }
+                          >
+                            {layer.count}
+                            {layer.total !== layer.count && (
+                              <span className="text-slate-600">/{layer.total}</span>
+                            )}
+                          </span>
                         )}
-                      </span>
-                    )}
+                      </div>
+                      {err && (
+                        <div className="mt-1 text-[0.625rem] text-red-400 truncate" title={err}>
+                          {err}
+                        </div>
+                      )}
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          )
+          return (
+            <>
+              {opmetFams.length > 0 && (
+                <div className="mt-3">
+                  <div
+                    className="px-2 py-1 text-[0.625rem] uppercase tracking-wider text-slate-500"
+                    title="Observations, prévisions et avis OACI Annexe 3 (Doc 8896)"
+                  >
+                    Produits OPMET
                   </div>
-                  {err && (
-                    <div className="mt-1 text-[0.625rem] text-red-400 truncate" title={err}>
-                      {err}
-                    </div>
-                  )}
-                </button>
-              </li>
-            )
-          })}
-        </ul>
+                  {renderFamilies(opmetFams)}
+                </div>
+              )}
+              {sitFams.length > 0 && (
+                <div className="mt-3">
+                  <div
+                    className="px-2 py-1 text-[0.625rem] uppercase tracking-wider text-slate-500"
+                    title="Produits dérivés ou support à la prévision (non OPMET)"
+                  >
+                    Produits situationnels
+                  </div>
+                  {renderFamilies(sitFams)}
+                </div>
+              )}
+            </>
+          )
+        })()}
       </div>
 
       <div className="px-4 py-3 border-t border-slate-800/70 text-[0.625rem] text-slate-500 leading-snug">
@@ -2127,12 +2258,15 @@ function Legend({
 
   type Entry = { label: string; color: string; dash?: boolean; count?: number; symbol: 'dot' | 'line' | 'fill' }
   const opmet: Entry[] = []
+  const situational: Entry[] = []
   const layers: Entry[] = []
 
   active.forEach(name => {
     const s = styleFor(name)
     const layer = loaded[name]
-    opmet.push({ label: displayFamilyName(name), color: s.color, count: layer?.count, symbol: 'dot' })
+    const entry: Entry = { label: displayFamilyName(name), color: s.color, count: layer?.count, symbol: 'dot' }
+    if (OPMET_FAMILIES.has(name)) opmet.push(entry)
+    else situational.push(entry)
   })
 
   if (windEnabled)      layers.push({ label: `Vent ${windFL}`, color: '#22d3ee', symbol: 'line' })
@@ -2151,7 +2285,7 @@ function Legend({
     ? `Filtre : ${ogcFilter.icaoPattern}`
     : ogcFilterXml ? 'Filtre OGC actif' : null
 
-  if (opmet.length === 0 && layers.length === 0 && !filterLabel) return null
+  if (opmet.length === 0 && situational.length === 0 && layers.length === 0 && !filterLabel) return null
 
   const renderEntry = (e: Entry, i: number) => (
     <div key={i} className="flex items-center gap-2 py-0.5">
@@ -2186,7 +2320,7 @@ function Legend({
           Couches affichées
         </span>
         <span className="text-[0.6875rem] tabular-nums text-slate-500">
-          {opmet.length + layers.length}
+          {opmet.length + situational.length + layers.length}
         </span>
         {expanded ? <ChevronDown className="size-3.5 text-slate-500" /> : <ChevronUp className="size-3.5 text-slate-500" />}
       </button>
@@ -2204,6 +2338,13 @@ function Legend({
             <>
               <div className="text-[0.5625rem] uppercase tracking-wider text-slate-500 mt-0.5">Produits OPMET</div>
               {opmet.map(renderEntry)}
+            </>
+          )}
+
+          {situational.length > 0 && (
+            <>
+              <div className="text-[0.5625rem] uppercase tracking-wider text-slate-500 mt-1.5">Produits situationnels</div>
+              {situational.map(renderEntry)}
             </>
           )}
 

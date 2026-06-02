@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Marker, Popup, useMap } from 'react-map-gl/maplibre'
 import DraggableShell from './DraggableShell'
+import DraggableWindow from './DraggableWindow'
 import { AlertTriangle } from 'lucide-react'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -143,7 +144,11 @@ export default function AirportAlertsLayer({ enabled }: Props) {
   return (
     <>
       {/* Badge de statut (toujours visible quand la couche est active) */}
-      <div className="absolute top-16 right-4 z-10 px-3 py-2 rounded-lg bg-slate-950/85 backdrop-blur-md border border-red-900/40 text-[0.625rem] text-slate-300 shadow-2xl flex flex-col gap-1.5 min-w-[200px]">
+      <DraggableWindow
+        storageKey="metgate.airportAlertsInfo.pos"
+        handleClassName="-top-2 right-2"
+        className="absolute top-16 right-4 z-10 px-3 py-2 rounded-lg bg-slate-950/85 backdrop-blur-md border border-red-900/40 text-[0.625rem] text-slate-300 shadow-2xl flex flex-col gap-1.5 min-w-[200px]"
+      >
         <div className="flex items-center gap-2 pb-1.5 border-b border-slate-800/60">
           <AlertTriangle className="size-3.5 text-red-300" />
           <span className="font-semibold text-red-200 uppercase tracking-wider">Alertes Aérodromes</span>
@@ -187,7 +192,7 @@ export default function AirportAlertsLayer({ enabled }: Props) {
             </div>
           ))}
         </div>
-      </div>
+      </DraggableWindow>
 
       {/* Marqueurs pulsants */}
       {alerts.map((alert) => {
