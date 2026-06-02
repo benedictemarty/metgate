@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { MapLayerMouseEvent } from 'maplibre-gl'
 import {
   Map as MapGL,
@@ -11,7 +11,6 @@ import {
 import 'maplibre-gl/dist/maplibre-gl.css'
 import {
   Clock,
-  GripHorizontal,
   Layers as LayersIcon,
   Loader2,
   Pause,
@@ -30,11 +29,16 @@ import SatRasterLayer from '../components/SatRasterLayer'
 import CloudTopLayer from '../components/CloudTopLayer'
 import FlightPlan, { type RoutePlan } from '../components/FlightPlan'
 import AircraftTracker, { type AircraftState } from '../components/AircraftTracker'
-import { AlertTriangle, CloudCog, CloudFog, CloudLightning, Filter, Globe2, Link2, Link2Off, Mountain, Radar, Satellite, Zap } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronUp, CloudCog, CloudFog, CloudLightning, Filter, Globe2, Landmark, Link2, Link2Off, Mountain, Radar, Satellite, Settings, Zap } from 'lucide-react'
 import type { Aggregate, Family } from '../types'
 import { displayFamilyName } from '../familyDisplay'
 import OGCFilterPanel, { type OGCFilter } from '../components/OGCFilterPanel'
 import FirLayer from '../components/FirLayer'
+import CountriesLayer from '../components/CountriesLayer'
+import ConfigPanel, { type MapLanguageCode } from '../components/ConfigPanel'
+import BasemapLanguage from '../components/BasemapLanguage'
+import DraggableShell from '../components/DraggableShell'
+import DraggableWindow from '../components/DraggableWindow'
 import RadarLayer from '../components/RadarLayer'
 import AirportAlertsLayer from '../components/AirportAlertsLayer'
 
@@ -304,6 +308,15 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
   const [ogcFilterXml, setOgcFilterXml] = useState<string | null>(null)
   const [ogcFilter, setOgcFilter] = useState<OGCFilter | null>(null)
   const [firEnabled, setFirEnabled] = useState(false)
+  const [countriesEnabled, setCountriesEnabled] = useState(false)
+  const [configOpen, setConfigOpen] = useState(false)
+  const [mapLanguage, setMapLanguage] = useState<MapLanguageCode>(() => {
+    const saved = typeof window !== 'undefined' ? window.localStorage.getItem('metgate.mapLanguage') : null
+    return (saved as MapLanguageCode | null) ?? 'fr'
+  })
+  useEffect(() => {
+    try { window.localStorage.setItem('metgate.mapLanguage', mapLanguage) } catch { /* no-op */ }
+  }, [mapLanguage])
   const [windLoading, setWindLoading] = useState(false)
   const [tropoLoading, setTropoLoading] = useState(false)
   const [qvacisLoading, setQvacisLoading] = useState(false)
@@ -825,6 +838,8 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
           onLoadingChange={setQvacisLoading}
         />
         <FirLayer enabled={firEnabled} />
+        <CountriesLayer enabled={countriesEnabled} language={mapLanguage} />
+        <BasemapLanguage language={mapLanguage} />
         <RadarLayer
           enabled={radarEnabled}
           linkedInstant={masterInstant}
@@ -927,6 +942,14 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
             onClose={() => setOgcPanelOpen(false)}
           />
         )}
+
+        {configOpen && (
+          <ConfigPanel
+            language={mapLanguage}
+            onLanguageChange={setMapLanguage}
+            onClose={() => setConfigOpen(false)}
+          />
+        )}
       </MapGL>
 
       {/* Boutons flip-flop Plan de vol / Suivi avion — hors MapGL pour éviter l'overflow du canvas */}
@@ -958,9 +981,81 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
         loaded={loaded}
         errors={errors}
         onToggleLayer={toggle}
+        additionalLayers={[
+          {
+            key: 'wind', label: 'Vent', icon: WindIcon, color: '#22d3ee',
+            enabled: windEnabled, onToggle: () => setWindEnabled(v => !v),
+            title: 'Particules de vent (WCS WIND/JET)',
+            extras: (
+              <WindLevelSelector
+                dataset={windDataset}
+                value={windLevelPa}
+                onSelect={(d, lvl) => { setWindDataset(d); if (d === 'WIND') setWindLevelPa(lvl) }}
+              />
+            ),
+          },
+          {
+            key: 'tropo', label: 'Tropopause', icon: Mountain, color: '#fbbf24',
+            enabled: tropoEnabled, onToggle: () => setTropoEnabled(v => !v),
+            title: 'Altitude de la tropopause (raster colorisé)',
+          },
+          {
+            key: 'qvacis', label: 'Cendres', icon: CloudFog, color: '#fb923c',
+            enabled: qvacisEnabled, onToggle: () => setQvacisEnabled(v => !v),
+            title: 'Concentration de cendres volcaniques (WCS QVACIS — VAAC Toulouse)',
+            extras: (
+              <QvacisSelector
+                dataset={qvacisDataset}
+                fl={qvacisFL}
+                onDataset={setQvacisDataset}
+                onFL={setQvacisFL}
+              />
+            ),
+          },
+          {
+            key: 'radar', label: 'Radar OPERA', icon: Radar, color: '#4ade80',
+            enabled: radarEnabled, onToggle: () => setRadarEnabled(v => !v),
+            title: 'Mosaïque radar OPERA — RainViewer (situationnel, non OPMET)',
+          },
+          {
+            key: 'lightning', label: 'Foudre', icon: Zap, color: '#facc15',
+            enabled: lightningEnabled, onToggle: () => setLightningEnabled(v => !v),
+            title: 'Impacts foudre — EUMETSAT MTG-LI',
+          },
+          {
+            key: 'alerts', label: 'Alertes AD', icon: AlertTriangle, color: '#ef4444',
+            enabled: alertsEnabled, onToggle: () => setAlertsEnabled(v => !v),
+            title: 'Alertes aérodromes — SPECI, MAA, RDT',
+          },
+          {
+            key: 'satIR', label: 'Sat IR', icon: Satellite, color: '#7dd3fc',
+            enabled: satIREnabled, onToggle: () => setSatIREnabled(v => !v),
+            title: 'Imagerie satellite IR 10.5 µm — EUMETSAT MTG-FCI',
+          },
+          {
+            key: 'cth', label: 'CTH', icon: CloudCog, color: '#c084fc',
+            enabled: cthEnabled, onToggle: () => setCthEnabled(v => !v),
+            title: 'Cloud Top Height — EUMETSAT MTG-FCI CTTH',
+          },
+          {
+            key: 'satConv', label: 'Convection', icon: CloudLightning, color: '#f472b6',
+            enabled: satConvEnabled, onToggle: () => setSatConvEnabled(v => !v),
+            title: 'Convection RGB — EUMETSAT MSG',
+          },
+          {
+            key: 'fir', label: 'FIR / UIR', icon: Globe2, color: '#818cf8',
+            enabled: firEnabled, onToggle: () => setFirEnabled(v => !v),
+            title: 'Limites des FIR/UIR mondiales',
+          },
+          {
+            key: 'countries', label: 'Pays', icon: Landmark, color: '#fde047',
+            enabled: countriesEnabled, onToggle: () => setCountriesEnabled(v => !v),
+            title: 'Contours pays (Natural Earth 50m, multilingue)',
+          },
+        ]}
       />
 
-      {/* Toggles WCS (Vent / Tropopause) en haut à droite */}
+      {/* Actions (Config / Filtre OGC / Lien WCS) en haut à droite */}
       <div className="absolute top-4 right-4 z-10 flex flex-col items-end gap-2">
         <div className="flex gap-2">
           {wcsActiveCount >= 2 && (
@@ -978,124 +1073,16 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
             </button>
           )}
           <button
-            onClick={() => setQvacisEnabled((v) => !v)}
+            onClick={() => setConfigOpen((v) => !v)}
             className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
-              qvacisEnabled
-                ? 'border-orange-400/50 bg-orange-500/20 text-orange-100 shadow-[0_0_15px_rgba(249,115,22,0.25)]'
+              configOpen
+                ? 'border-slate-400/50 bg-slate-500/20 text-slate-100'
                 : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
             }`}
-            title="Concentration de cendres volcaniques (WCS QVACIS)"
+            title="Configuration"
           >
-            <CloudFog className="size-4" />
-            Cendres
-          </button>
-          <button
-            onClick={() => setTropoEnabled((v) => !v)}
-            className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
-              tropoEnabled
-                ? 'border-amber-400/50 bg-amber-500/20 text-amber-100 shadow-[0_0_15px_rgba(245,158,11,0.25)]'
-                : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
-            }`}
-            title="Altitude de la tropopause (raster colorisé)"
-          >
-            <Mountain className="size-4" />
-            Tropopause
-          </button>
-          <button
-            onClick={() => setRadarEnabled((v) => !v)}
-            className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
-              radarEnabled
-                ? 'border-green-400/50 bg-green-500/20 text-green-100 shadow-[0_0_15px_rgba(74,222,128,0.25)]'
-                : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
-            }`}
-            title="Mosaïque radar OPERA — RainViewer (situationnel, non OPMET)"
-          >
-            <Radar className="size-4" />
-            Radar
-          </button>
-          <button
-            onClick={() => setLightningEnabled((v) => !v)}
-            className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
-              lightningEnabled
-                ? 'border-yellow-400/50 bg-yellow-500/20 text-yellow-100 shadow-[0_0_15px_rgba(250,204,21,0.3)]'
-                : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
-            }`}
-            title="Impacts foudre — EUMETSAT MTG-LI (situationnel, non OPMET)"
-          >
-            <Zap className="size-4" />
-            Foudre
-          </button>
-          <button
-            onClick={() => setAlertsEnabled((v) => !v)}
-            className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
-              alertsEnabled
-                ? 'border-red-400/50 bg-red-500/20 text-red-100 shadow-[0_0_15px_rgba(239,68,68,0.3)]'
-                : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
-            }`}
-            title="Alertes aérodromes — SPECI, MAA, RDT (pulsant par sévérité)"
-          >
-            <AlertTriangle className="size-4" />
-            Alertes AD
-          </button>
-          <button
-            onClick={() => setSatIREnabled((v) => !v)}
-            className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
-              satIREnabled
-                ? 'border-sky-400/50 bg-sky-500/20 text-sky-100 shadow-[0_0_15px_rgba(56,189,248,0.25)]'
-                : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
-            }`}
-            title="Imagerie satellite IR 10.5 µm — EUMETSAT MTG-FCI (situationnel)"
-          >
-            <Satellite className="size-4" />
-            Sat IR
-          </button>
-          <button
-            onClick={() => setCthEnabled((v) => !v)}
-            className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
-              cthEnabled
-                ? 'border-violet-400/50 bg-violet-500/20 text-violet-100 shadow-[0_0_15px_rgba(167,139,250,0.25)]'
-                : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
-            }`}
-            title="Cloud Top Height — EUMETSAT MTG-FCI CTTH avec filtre FL (situationnel)"
-          >
-            <CloudCog className="size-4" />
-            CTH
-          </button>
-          <button
-            onClick={() => setSatConvEnabled((v) => !v)}
-            className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
-              satConvEnabled
-                ? 'border-pink-400/50 bg-pink-500/20 text-pink-100 shadow-[0_0_15px_rgba(244,114,182,0.25)]'
-                : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
-            }`}
-            title="Convection RGB — EUMETSAT MSG (cellules convectives, situationnel)"
-          >
-            <CloudLightning className="size-4" />
-            Conv
-          </button>
-          <button
-            onClick={() => setWindEnabled((v) => !v)}
-            className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
-              windEnabled
-                ? 'border-cyan-400/50 bg-cyan-500/20 text-cyan-100 shadow-[0_0_15px_rgba(34,211,238,0.25)]'
-                : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
-            }`}
-            title="Particules de vent (WCS WIND/JET)"
-          >
-            <WindIcon className="size-4" />
-            Vent
-          </button>
-          <button
-            onClick={() => setFirEnabled((v) => !v)}
-            className={`flex items-center gap-2 px-3 py-2 rounded-lg border backdrop-blur-md text-sm transition shadow-xl ${
-              firEnabled
-                ? 'border-indigo-400/50 bg-indigo-500/20 text-indigo-100 shadow-[0_0_15px_rgba(99,102,241,0.25)]'
-                : 'border-slate-800 bg-slate-950/80 text-slate-300 hover:bg-slate-900/80'
-            }`}
-            title="Limites des FIR/UIR mondiales"
-          >
-            <Globe2 className="size-4" />
-            FIR
+            <Settings className="size-4" />
+            Config
           </button>
           <button
             onClick={() => setOgcPanelOpen((v) => !v)}
@@ -1113,26 +1100,6 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
             {ogcFilterXml && <span className="size-1.5 rounded-full bg-indigo-400 ml-0.5" />}
           </button>
         </div>
-
-        {windEnabled && (
-          <WindLevelSelector
-            dataset={windDataset}
-            value={windLevelPa}
-            onSelect={(d, lvl) => {
-              setWindDataset(d)
-              if (d === 'WIND') setWindLevelPa(lvl)
-            }}
-          />
-        )}
-
-        {qvacisEnabled && (
-          <QvacisSelector
-            dataset={qvacisDataset}
-            fl={qvacisFL}
-            onDataset={setQvacisDataset}
-            onFL={setQvacisFL}
-          />
-        )}
       </div>
 
       {showWcsMasterSlider && masterInstant && (
@@ -1182,6 +1149,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
         cthEnabled={cthEnabled}
         cthMinFL={cthMinFL}
         firEnabled={firEnabled}
+        countriesEnabled={countriesEnabled}
         ogcFilterXml={ogcFilterXml}
         ogcFilter={ogcFilter}
       />
@@ -1242,7 +1210,11 @@ function TimeSlider({
   })()
 
   return (
-    <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 rounded-xl border border-slate-800/70 bg-slate-950/85 backdrop-blur-md px-3 py-2 shadow-2xl max-w-[90vw]">
+    <DraggableWindow
+      centered
+      storageKey="metgate.timeSlider.pos"
+      className="absolute bottom-6 left-1/2 z-10 flex items-center gap-3 rounded-xl border border-slate-800/70 bg-slate-950/85 backdrop-blur-md px-3 py-2 shadow-2xl max-w-[90vw]"
+    >
       <button
         onClick={onTogglePlay}
         disabled={total < 2}
@@ -1306,7 +1278,7 @@ function TimeSlider({
           })}
         </div>
       </div>
-    </div>
+    </DraggableWindow>
   )
 }
 
@@ -1356,63 +1328,6 @@ function fmtVal(v: unknown, key: string, props: Record<string, unknown>): string
   const uom = props[`${key}_uom`]
   if (typeof uom === 'string' && uom !== '') s += ' ' + uom
   return s
-}
-
-// Enveloppe « draggable » : barre de prise en haut, conteneur de popup décalable
-// à la souris. On remonte au noeud `.maplibregl-popup-content` (qui porte le fond
-// de la bulle) et on lui applique un translate — le tip MapLibre reste fixe sur
-// le point d'ancrage géographique, ce qui donne un effet « leader line ».
-function DraggableShell({ children }: { children: React.ReactNode }) {
-  const wrapperRef = useRef<HTMLDivElement | null>(null)
-  const offsetRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
-  const dragging = useRef<{ startX: number; startY: number; baseX: number; baseY: number } | null>(null)
-
-  // Trouve le parent `.maplibregl-popup-content` et applique le transform dessus.
-  const apply = (x: number, y: number) => {
-    offsetRef.current = { x, y }
-    const node = wrapperRef.current
-    if (!node) return
-    const content = node.closest('.maplibregl-popup-content') as HTMLElement | null
-    if (content) content.style.transform = `translate(${x}px, ${y}px)`
-  }
-
-  useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      const d = dragging.current
-      if (!d) return
-      apply(d.baseX + (e.clientX - d.startX), d.baseY + (e.clientY - d.startY))
-    }
-    const onUp = () => { dragging.current = null }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-    return () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-  }, [])
-
-  return (
-    <div ref={wrapperRef}>
-      <div
-        onMouseDown={(e) => {
-          e.stopPropagation()
-          e.preventDefault()
-          dragging.current = {
-            startX: e.clientX,
-            startY: e.clientY,
-            baseX: offsetRef.current.x,
-            baseY: offsetRef.current.y,
-          }
-        }}
-        onDoubleClick={() => apply(0, 0)}
-        title="Glisser pour déplacer · double-clic pour recentrer"
-        className="flex items-center justify-center gap-1 -mx-3 -mt-2 mb-1 px-3 py-1 cursor-grab active:cursor-grabbing text-slate-500 hover:text-slate-300 hover:bg-slate-800/40 rounded-t-md select-none"
-      >
-        <GripHorizontal className="size-3.5" />
-      </div>
-      {children}
-    </div>
-  )
 }
 
 function FeaturePopup({
@@ -1720,6 +1635,17 @@ function FeaturePopupBody({ props }: { props: Record<string, unknown>; family: s
   )
 }
 
+interface LayerToggleDef {
+  key: string
+  label: string
+  icon: React.ComponentType<{ className?: string }>
+  enabled: boolean
+  onToggle: () => void
+  color: string
+  title?: string
+  extras?: React.ReactNode
+}
+
 interface SidebarProps {
   open: boolean
   onToggle: () => void
@@ -1729,6 +1655,7 @@ interface SidebarProps {
   loaded: Record<string, FetchedLayer>
   errors: Record<string, string>
   onToggleLayer: (name: string) => void
+  additionalLayers: LayerToggleDef[]
 }
 
 function Sidebar({
@@ -1740,6 +1667,7 @@ function Sidebar({
   loaded,
   errors,
   onToggleLayer,
+  additionalLayers,
 }: SidebarProps) {
   if (!open) {
     return (
@@ -1773,6 +1701,49 @@ function Sidebar({
         {candidates.length === 0 && (
           <div className="text-xs text-slate-500 p-3">
             Aucune famille point n'a été détectée. Recharge le catalogue depuis l'onglet Catalogue.
+          </div>
+        )}
+        {additionalLayers.length > 0 && (
+          <div className="mb-2">
+            <div className="px-2 py-1 text-[0.625rem] uppercase tracking-wider text-slate-500">
+              Couches météo
+            </div>
+            <ul className="space-y-1">
+              {additionalLayers.map((t) => {
+                const Icon = t.icon
+                return (
+                  <li key={t.key}>
+                    <button
+                      onClick={t.onToggle}
+                      title={t.title}
+                      className={`w-full text-left px-3 py-2 rounded-lg border transition flex items-center gap-2 ${
+                        t.enabled
+                          ? 'border-slate-700 bg-slate-900/80'
+                          : 'border-transparent hover:bg-slate-900/40'
+                      }`}
+                    >
+                      <span
+                        className="size-2.5 rounded-full shrink-0"
+                        style={{
+                          backgroundColor: t.color,
+                          boxShadow: t.enabled ? `0 0 10px ${t.color}88` : 'none',
+                        }}
+                      />
+                      <Icon className={`size-4 shrink-0 ${t.enabled ? '' : 'text-slate-500'}`} />
+                      <span className="text-sm flex-1 truncate">{t.label}</span>
+                    </button>
+                    {t.enabled && t.extras && (
+                      <div className="mt-1 pl-3">{t.extras}</div>
+                    )}
+                  </li>
+                )
+              })}
+            </ul>
+            {candidates.length > 0 && (
+              <div className="mt-3 px-2 py-1 text-[0.625rem] uppercase tracking-wider text-slate-500">
+                Produits OPMET
+              </div>
+            )}
           </div>
         )}
         <ul className="space-y-1">
@@ -2072,7 +2043,11 @@ function WcsMasterSlider({
   const m = instant.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})/)
   const label = m ? `${m[1]} ${m[2]}:${m[3]} UTC` : instant
   return (
-    <div className="absolute bottom-28 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 rounded-xl border border-violet-400/40 bg-slate-950/85 backdrop-blur-md px-3 py-2 shadow-[0_0_30px_rgba(167,139,250,0.18)] max-w-[90vw]">
+    <DraggableWindow
+      centered
+      storageKey="metgate.wcsMasterSlider.pos"
+      className="absolute bottom-28 left-1/2 z-10 flex items-center gap-3 rounded-xl border border-violet-400/40 bg-slate-950/85 backdrop-blur-md px-3 py-2 shadow-[0_0_30px_rgba(167,139,250,0.18)] max-w-[90vw]"
+    >
       <button
         onClick={onTogglePlay}
         disabled={total < 2}
@@ -2103,7 +2078,7 @@ function WcsMasterSlider({
           className="accent-violet-400 h-1"
         />
       </div>
-    </div>
+    </DraggableWindow>
   )
 }
 
@@ -2127,6 +2102,7 @@ interface LegendProps {
   cthEnabled: boolean
   cthMinFL: number
   firEnabled: boolean
+  countriesEnabled: boolean
   ogcFilterXml: string | null
   ogcFilter: OGCFilter | null
 }
@@ -2138,9 +2114,10 @@ function Legend({
   qvacisEnabled, qvacisDataset, qvacisFL,
   radarEnabled, lightningEnabled, alertsEnabled, satIREnabled, satConvEnabled,
   cthEnabled, cthMinFL,
-  firEnabled,
+  firEnabled, countriesEnabled,
   ogcFilterXml, ogcFilter,
 }: LegendProps) {
+  const [expanded, setExpanded] = useState(false)
   const windFL = (() => {
     if (!windEnabled) return ''
     if (windDataset === 'JET') return 'JET'
@@ -2149,63 +2126,95 @@ function Legend({
   })()
 
   type Entry = { label: string; color: string; dash?: boolean; count?: number; symbol: 'dot' | 'line' | 'fill' }
-  const entries: Entry[] = []
+  const opmet: Entry[] = []
+  const layers: Entry[] = []
 
   active.forEach(name => {
     const s = styleFor(name)
     const layer = loaded[name]
-    entries.push({ label: displayFamilyName(name), color: s.color, count: layer?.count, symbol: 'dot' })
+    opmet.push({ label: displayFamilyName(name), color: s.color, count: layer?.count, symbol: 'dot' })
   })
 
-  if (windEnabled)      entries.push({ label: `Vent ${windFL}`, color: '#22d3ee', symbol: 'line' })
-  if (tropoEnabled)     entries.push({ label: 'Tropopause', color: '#fbbf24', symbol: 'fill' })
-  if (qvacisEnabled)    entries.push({ label: `Cendres FL${qvacisFL} (${qvacisDataset === 'DETERMINISTIC' ? 'dét.' : 'prob.'})`, color: '#fb923c', symbol: 'fill' })
-  if (radarEnabled)     entries.push({ label: 'Radar OPERA', color: '#4ade80', symbol: 'dot' })
-  if (lightningEnabled) entries.push({ label: 'Foudre MTG-LI', color: '#facc15', symbol: 'dot' })
-  if (alertsEnabled)    entries.push({ label: 'Alertes AD (🔴🟠🟡🔵)', color: '#ef4444', symbol: 'dot' })
-  if (satIREnabled)     entries.push({ label: 'Sat IR 10.5µm', color: '#7dd3fc', symbol: 'fill' })
-  if (satConvEnabled)   entries.push({ label: 'Convection RGB', color: '#f472b6', symbol: 'fill' })
-  if (cthEnabled)       entries.push({ label: `CTH ≥ FL${cthMinFL}`, color: '#c084fc', symbol: 'fill' })
-  if (firEnabled)       entries.push({ label: 'FIR/UIR', color: '#818cf8', dash: true, symbol: 'line' })
+  if (windEnabled)      layers.push({ label: `Vent ${windFL}`, color: '#22d3ee', symbol: 'line' })
+  if (tropoEnabled)     layers.push({ label: 'Tropopause', color: '#fbbf24', symbol: 'fill' })
+  if (qvacisEnabled)    layers.push({ label: `Cendres FL${qvacisFL} (${qvacisDataset === 'DETERMINISTIC' ? 'dét.' : 'prob.'})`, color: '#fb923c', symbol: 'fill' })
+  if (radarEnabled)     layers.push({ label: 'Radar OPERA', color: '#4ade80', symbol: 'dot' })
+  if (lightningEnabled) layers.push({ label: 'Foudre MTG-LI', color: '#facc15', symbol: 'dot' })
+  if (alertsEnabled)    layers.push({ label: 'Alertes AD', color: '#ef4444', symbol: 'dot' })
+  if (satIREnabled)     layers.push({ label: 'Sat IR 10.5µm', color: '#7dd3fc', symbol: 'fill' })
+  if (satConvEnabled)   layers.push({ label: 'Convection RGB', color: '#f472b6', symbol: 'fill' })
+  if (cthEnabled)       layers.push({ label: `CTH ≥ FL${cthMinFL}`, color: '#c084fc', symbol: 'fill' })
+  if (firEnabled)       layers.push({ label: 'FIR / UIR', color: '#818cf8', dash: true, symbol: 'line' })
+  if (countriesEnabled) layers.push({ label: 'Pays', color: '#fde047', symbol: 'line' })
 
   const filterLabel = ogcFilter?.icaoPattern
     ? `Filtre : ${ogcFilter.icaoPattern}`
     : ogcFilterXml ? 'Filtre OGC actif' : null
 
-  if (entries.length === 0 && !filterLabel) return null
+  if (opmet.length === 0 && layers.length === 0 && !filterLabel) return null
+
+  const renderEntry = (e: Entry, i: number) => (
+    <div key={i} className="flex items-center gap-2 py-0.5">
+      {e.symbol === 'dot' && (
+        <span className="size-2.5 rounded-full shrink-0" style={{ backgroundColor: e.color, boxShadow: `0 0 6px ${e.color}88` }} />
+      )}
+      {e.symbol === 'line' && (
+        <span className="w-4 h-0.5 shrink-0 rounded" style={{
+          background: e.dash
+            ? `repeating-linear-gradient(90deg,${e.color} 0,${e.color} 3px,transparent 3px,transparent 6px)`
+            : e.color,
+        }} />
+      )}
+      {e.symbol === 'fill' && (
+        <span className="w-4 h-2.5 shrink-0 rounded-sm" style={{ backgroundColor: e.color + '55', border: `1px solid ${e.color}99` }} />
+      )}
+      <span className="flex-1 truncate">{e.label}</span>
+      {e.count !== undefined && (
+        <span className="tabular-nums text-slate-500 shrink-0">{e.count}</span>
+      )}
+    </div>
+  )
 
   return (
-    <div className="absolute bottom-8 left-4 z-10 flex flex-col gap-1 rounded-lg border border-slate-800/70 bg-slate-950/80 backdrop-blur-md px-3 py-2 shadow-xl text-[0.625rem] text-slate-300 max-w-[210px]">
-      <div className="text-[0.5625rem] uppercase tracking-wider text-slate-500 mb-0.5">Légende</div>
+    <div className="absolute bottom-8 left-4 z-10 flex flex-col rounded-xl border border-slate-700/70 bg-slate-950/85 backdrop-blur-md shadow-2xl text-xs text-slate-200 min-w-[200px] max-w-[260px]">
+      <button
+        onClick={() => setExpanded(v => !v)}
+        className="flex items-center gap-2 px-3 py-2 border-b border-slate-800/60 hover:bg-slate-900/40 transition rounded-t-xl"
+        title={expanded ? 'Réduire' : 'Déplier'}
+      >
+        <span className="text-[0.625rem] uppercase tracking-wider text-slate-400 flex-1 text-left">
+          Couches affichées
+        </span>
+        <span className="text-[0.6875rem] tabular-nums text-slate-500">
+          {opmet.length + layers.length}
+        </span>
+        {expanded ? <ChevronDown className="size-3.5 text-slate-500" /> : <ChevronUp className="size-3.5 text-slate-500" />}
+      </button>
 
-      {filterLabel && (
-        <div className="flex items-center gap-1.5 text-indigo-300 border-b border-slate-800/50 pb-1 mb-0.5">
-          <span className="size-2 rounded-sm bg-indigo-500/40 border border-indigo-400/60 shrink-0" />
-          <span className="truncate">{filterLabel}</span>
+      {expanded && (
+        <div className="overflow-y-auto px-3 py-1.5 max-h-[40vh]">
+          {filterLabel && (
+            <div className="flex items-center gap-1.5 text-indigo-300 border-b border-slate-800/60 pb-1 mb-1 text-[0.6875rem]">
+              <span className="size-2 rounded-sm bg-indigo-500/40 border border-indigo-400/60 shrink-0" />
+              <span className="truncate">{filterLabel}</span>
+            </div>
+          )}
+
+          {opmet.length > 0 && (
+            <>
+              <div className="text-[0.5625rem] uppercase tracking-wider text-slate-500 mt-0.5">Produits OPMET</div>
+              {opmet.map(renderEntry)}
+            </>
+          )}
+
+          {layers.length > 0 && (
+            <>
+              <div className="text-[0.5625rem] uppercase tracking-wider text-slate-500 mt-1.5">Couches météo</div>
+              {layers.map(renderEntry)}
+            </>
+          )}
         </div>
       )}
-
-      {entries.map((e, i) => (
-        <div key={i} className="flex items-center gap-1.5">
-          {e.symbol === 'dot' && (
-            <span className="size-2.5 rounded-full shrink-0" style={{ backgroundColor: e.color, boxShadow: `0 0 6px ${e.color}88` }} />
-          )}
-          {e.symbol === 'line' && (
-            <span className="w-4 h-0.5 shrink-0 rounded" style={{
-              background: e.dash
-                ? `repeating-linear-gradient(90deg,${e.color} 0,${e.color} 3px,transparent 3px,transparent 6px)`
-                : e.color,
-            }} />
-          )}
-          {e.symbol === 'fill' && (
-            <span className="w-4 h-2.5 shrink-0 rounded-sm" style={{ backgroundColor: e.color + '55', border: `1px solid ${e.color}99` }} />
-          )}
-          <span className="flex-1 truncate">{e.label}</span>
-          {e.count !== undefined && (
-            <span className="tabular-nums text-slate-500 shrink-0">{e.count}</span>
-          )}
-        </div>
-      ))}
     </div>
   )
 }

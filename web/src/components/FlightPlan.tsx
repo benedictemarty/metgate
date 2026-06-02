@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useMap, Source, Layer, Marker, Popup } from 'react-map-gl/maplibre'
+import DraggableShell from './DraggableShell'
 import {
   Activity,
   AlertOctagon,
@@ -470,7 +471,6 @@ export default function FlightPlan({
             <Popup
               longitude={selectedEvent.lon}
               latitude={selectedEvent.lat}
-              anchor="bottom"
               offset={14}
               closeOnClick={false}
               closeButton={false}
@@ -478,10 +478,12 @@ export default function FlightPlan({
               maxWidth="380px"
               className="metgate-popup"
             >
-              <BulletinPopup
-                ev={selectedEvent}
-                onClose={() => setSelectedEvent(null)}
-              />
+              <DraggableShell>
+                <BulletinPopup
+                  ev={selectedEvent}
+                  onClose={() => setSelectedEvent(null)}
+                />
+              </DraggableShell>
             </Popup>
           )}
         </>

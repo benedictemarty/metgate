@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Marker, Popup, useMap } from 'react-map-gl/maplibre'
+import DraggableShell from './DraggableShell'
 import { AlertTriangle } from 'lucide-react'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -227,11 +228,11 @@ export default function AirportAlertsLayer({ enabled }: Props) {
         <Popup
           longitude={selected.lon}
           latitude={selected.lat}
-          anchor="bottom"
           closeOnClick={false}
           onClose={() => setSelected(null)}
           maxWidth="220px"
         >
+          <DraggableShell>
           <div className="p-2 text-[0.65rem] font-mono text-slate-200 bg-slate-900 rounded">
             <div className="flex items-center justify-between mb-2">
               <span className="font-bold text-sm text-white">{selected.icao}</span>
@@ -267,6 +268,7 @@ export default function AirportAlertsLayer({ enabled }: Props) {
               ))}
             </div>
           </div>
+          </DraggableShell>
         </Popup>
       )}
     </>

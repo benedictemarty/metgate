@@ -454,9 +454,11 @@ var (
 )
 
 // enrichFromIWXXM extrait du payload IWXXM les champs courants et les ajoute
-// aux properties GeoJSON ; calcule également un champ `tac` (texte court)
-// soit en reprenant l'attribut translatedFailedTAC s'il existe, soit en
-// reconstruisant un TAC minimal à partir des champs IWXXM 3.0.
+// aux properties GeoJSON. Le champ `tac` n'est posé QUE si l'attribut OACI
+// `translatedTAC` / `translatedFailedTAC` est présent (TAC d'origine authentique).
+// On NE reconstruit PAS de pseudo-TAC depuis les champs IWXXM 3.0 : une telle
+// reconstruction ne respecterait pas le format OACI strict et serait incomplète
+// (visi, nuages, phénomènes, COR/AMD…), donc trompeuse pour l'opérationnel.
 func enrichFromIWXXM(props map[string]any, opmet string) {
 	if m := rxTACAttr.FindStringSubmatch(opmet); len(m) >= 2 && strings.TrimSpace(m[1]) != "" {
 		props["tac"] = strings.TrimSpace(m[1])
@@ -531,75 +533,95 @@ func enrichFromIWXXM(props map[string]any, opmet string) {
 		props["cavok"] = true
 	}
 
-	icao, _ := props["locationIndicatorICAO"].(string)
-	if icao == "" {
-		if m := rxICAOInfo.FindStringSubmatch(opmet); len(m) >= 2 {
-			icao = strings.TrimSpace(m[1])
-		}
-	}
+	// Pas de reconstruction de TAC ici : on ne pose `tac` que via l'attribut
+	// `translatedTAC` (capté plus haut). Voir doc de la fonction.
 
-	if temp != "" || wspd != "" {
-		props["tac"] = formatTAC(icao, props, temp, dew, qnh, wdir, wspd, cavok)
-	}
+	// Traduction française composée directement depuis les champs IWXXM réels
+	// (pas via DecodeMETAR(reconstructedTAC) qui produirait des approximations).
+	props["decoded"] = composeMETARDecodedFR(props, opmet, temp, dew, qnh, wdir, wspd, visi, cavok)
 }
 
-// formatTAC compose un TAC simplifié dans l'esprit OACI mais lisible :
-// `METAR LFPG 252210Z 240/10KT CAVOK 09/03 Q1018=`.
-func formatTAC(icao string, props map[string]any, temp, dew, qnh, wdir, wspd string, cavok bool) string {
-	var sb strings.Builder
-	sb.WriteString("METAR ")
-	if icao != "" {
-		sb.WriteString(icao)
-		sb.WriteByte(' ')
+// composeMETARDecodedFR produit une traduction française du METAR uniquement à
+// partir des champs réellement présents dans l'IWXXM. N'invente rien : un champ
+// absent n'est pas mentionné.
+func composeMETARDecodedFR(props map[string]any, opmet, temp, dew, qnh, wdir, wspd, visi string, cavok bool) string {
+	var lines []string
+
+	// En-tête : type, COR/AMD, AUTO
+	if strings.Contains(opmet, "<iwxxm:SPECI") {
+		lines = append(lines, "Observation spéciale (SPECI)")
+	} else {
+		lines = append(lines, "Observation régulière (METAR)")
 	}
-	if t, ok := props["observationTime"].(string); ok && len(t) >= 16 {
-		// 2026-04-25T22:50:00Z → 252250Z
-		sb.WriteString(t[8:10] + t[11:13] + t[14:16] + "Z ")
+	if strings.Contains(opmet, `reportStatus="CORRECTION"`) {
+		lines = append(lines, "Message corrigé (COR)")
+	} else if strings.Contains(opmet, `reportStatus="AMENDMENT"`) {
+		lines = append(lines, "Message amendé (AMD)")
 	}
+	if strings.Contains(opmet, `automatedStation="true"`) {
+		lines = append(lines, "Station automatique")
+	}
+
+	if icao, _ := props["locationIndicatorICAO"].(string); icao != "" {
+		lines = append(lines, "Station : "+icao)
+	}
+	if t, _ := props["observationTime"].(string); len(t) >= 16 {
+		// 2026-06-02T12:30:00Z → jour 02 à 12:30 UTC
+		lines = append(lines, fmt.Sprintf("Heure d'observation : jour %s à %s:%s UTC", t[8:10], t[11:13], t[14:16]))
+	}
+
 	if wdir != "" || wspd != "" {
-		if wdir == "" {
-			wdir = "VRB"
-		} else if d, err := strconv.Atoi(trimDecimals(wdir)); err == nil {
-			wdir = fmt.Sprintf("%03d", d) // padder à 3 chiffres : "20" → "020"
+		d := wdir
+		if d == "" {
+			d = "variable"
+		} else {
+			if n, err := strconv.Atoi(trimFrac(d)); err == nil {
+				d = fmt.Sprintf("%d°", n)
+			}
 		}
-		if wspd == "" {
-			wspd = "//"
+		if wspd != "" {
+			lines = append(lines, fmt.Sprintf("Vent : %s à %s kt", d, trimFrac(wspd)))
+		} else {
+			lines = append(lines, "Vent : "+d)
 		}
-		fmt.Fprintf(&sb, "%s/%sKT ", wdir, trimDecimals(wspd))
 	}
+
 	if cavok {
-		sb.WriteString("CAVOK ")
+		lines = append(lines, "CAVOK : visibilité ≥ 10 km, pas de nuages significatifs, pas de phénomène")
+	} else {
+		if visi != "" {
+			if n, err := strconv.Atoi(trimFrac(visi)); err == nil {
+				switch {
+				case n >= 9999:
+					lines = append(lines, "Visibilité : ≥ 10 km")
+				case n >= 1000:
+					lines = append(lines, fmt.Sprintf("Visibilité : %.1f km", float64(n)/1000))
+				default:
+					lines = append(lines, fmt.Sprintf("Visibilité : %d m", n))
+				}
+			}
+		}
+		if clouds, _ := props["clouds"].(string); clouds != "" {
+			lines = append(lines, "Nuages : "+clouds)
+		}
 	}
-	if temp != "" || dew != "" {
-		fmt.Fprintf(&sb, "%s/%s ", toMPrefix(temp), toMPrefix(dew))
+
+	if temp != "" && dew != "" {
+		lines = append(lines, fmt.Sprintf("Température : %s °C, point de rosée : %s °C", trimFrac(temp), trimFrac(dew)))
+	} else if temp != "" {
+		lines = append(lines, fmt.Sprintf("Température : %s °C", trimFrac(temp)))
 	}
 	if qnh != "" {
-		fmt.Fprintf(&sb, "Q%s ", trimDecimals(qnh))
+		lines = append(lines, fmt.Sprintf("QNH : %s hPa", trimFrac(qnh)))
 	}
-	return strings.TrimSpace(sb.String()) + "="
+
+	return strings.Join(lines, "\n")
 }
 
-func trimDecimals(s string) string {
+// trimFrac : "9.0" → "9", "1007.0" → "1007", "VRB" → "VRB".
+func trimFrac(s string) string {
 	if i := strings.IndexByte(s, '.'); i >= 0 {
-		// "31.0" → "31", "1007.0" → "1007"
 		return s[:i]
-	}
-	return s
-}
-
-// toMPrefix convertit une température IWXXM ("-5.0", "9.0") en format METAR
-// ("M05", "09") avec le préfixe M pour les négatifs et padding à 2 chiffres.
-func toMPrefix(s string) string {
-	s = trimDecimals(s)
-	neg := strings.HasPrefix(s, "-")
-	if neg {
-		s = s[1:]
-	}
-	if n, err := strconv.Atoi(s); err == nil {
-		if neg {
-			return fmt.Sprintf("M%02d", n)
-		}
-		return fmt.Sprintf("%02d", n)
 	}
 	return s
 }

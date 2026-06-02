@@ -283,26 +283,24 @@ export default function WindLayer({
     }
   }, [enabled, grid, map])
 
-  if (!enabled) return null
-
   return (
     <>
       <canvas
         ref={canvasRef}
         className="absolute inset-0 pointer-events-none"
-        style={{ mixBlendMode: 'screen' }}
+        style={{ mixBlendMode: 'screen', display: enabled ? undefined : 'none' }}
       />
-      {info.status === 'loading' && (
+      {enabled && info.status === 'loading' && (
         <div className="absolute top-4 right-4 z-10 px-2 py-1 rounded bg-slate-950/80 backdrop-blur text-[0.625rem] text-slate-400 border border-slate-800/60">
           chargement vent…
         </div>
       )}
-      {info.status === 'error' && (
+      {enabled && info.status === 'error' && (
         <div className="absolute top-4 right-4 z-10 px-2 py-1 rounded bg-red-950/60 text-[0.625rem] text-red-300 border border-red-900/60">
           vent: {info.msg}
         </div>
       )}
-      {grid && currentStep && (
+      {enabled && grid && currentStep && (
         <div className="absolute bottom-24 right-4 z-10 px-3 py-2 rounded-lg bg-slate-950/85 backdrop-blur-md border border-slate-800/70 text-[0.625rem] text-slate-300 shadow-2xl flex flex-col gap-2 min-w-[260px]">
           <div className="flex items-center gap-2">
             <span className="text-slate-500">{dataset === 'JET' ? 'Jet stream' : 'Vent'}</span>
