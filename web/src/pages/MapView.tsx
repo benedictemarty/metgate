@@ -891,7 +891,6 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
             <Popup
               longitude={popup.lng}
               latitude={popup.lat}
-              anchor="bottom"
               offset={14}
               closeOnClick={false}
               closeButton={false}
