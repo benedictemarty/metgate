@@ -137,8 +137,11 @@ function statusHistogram(fc: GeoJSON.FeatureCollection): Array<[string, number]>
   const counts: Record<string, number> = {}
   for (const f of fc.features) {
     const s = (f.properties as Record<string, unknown> | null)?.status
-    const k = typeof s === 'string' && s !== '' ? s : 'UNKNOWN'
-    counts[k] = (counts[k] ?? 0) + 1
+    // Pas de status renseigné (ex : VolcanicAshAdvisory dont le WFS MetGate
+    // n'expose ni permissibleUsage ni opmet_msg) → on ne fabrique pas de
+    // badge UNKNOWN, l'absence d'info n'est pas une catégorie.
+    if (typeof s !== 'string' || s === '') continue
+    counts[s] = (counts[s] ?? 0) + 1
   }
   const entries = Object.entries(counts)
   entries.sort((a, b) => {
