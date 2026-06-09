@@ -76,31 +76,75 @@ Le frontend est embarqué dans le binaire via `go:embed` — **un seul fichier �
 
 ## Prérequis
 
-- Go ≥ 1.26
-- Node.js ≥ 20 + npm
-- Token applicatif MetGate (Météo-France)
-- *(optionnel)* Credentials OpenSky pour le suivi ADS-B
-- *(optionnel)* Credentials EUMETSAT pour CTH / foudre / satellite
+- Token applicatif **MetGate** (Météo-France) — obligatoire
+- *(optionnel)* Clés **EUMETSAT** consumer_key / consumer_secret pour CTH / foudre / satellite
+- *(optionnel)* Credentials **OpenSky** pour le suivi ADS-B
+- Pour build source : Go ≥ 1.24, Node.js ≥ 22, GNU make
 
 ---
 
 ## Installation
 
+Trois voies possibles, par ordre de simplicité : **Docker** → **Kubernetes** → **build source**.
+
+### A. Docker (recommandé)
+
+Image multi-stage distroless (~32 MB, user 65532 non-root) publiée sur GHCR à chaque tag :
+
+```bash
+# 1) Préparer le fichier de configuration
+curl -O https://raw.githubusercontent.com/benedictemarty/metgate/main/.env.example
+mv .env.example .env && $EDITOR .env
+chmod 600 .env
+
+# 2) Lancer
+docker run -d --name metgate \
+  --env-file .env \
+  -p 8080:8080 \
+  --read-only --tmpfs /tmp \
+  --security-opt no-new-privileges \
+  ghcr.io/benedictemarty/metgate:latest
+
+# 3) Vérifier
+curl http://localhost:8080/healthz
+```
+
+Tags disponibles : `latest`, `vX.Y.Z`, `X.Y`, `X`, `sha-<short>`.
+Build local possible : `docker build -t metgate:dev .`
+
+### B. Kubernetes
+
+Manifest minimal fourni dans `deploy/k8s/metgate.yaml` (Deployment 2 replicas + Service ClusterIP, securityContext durci : `runAsNonRoot`, `readOnlyRootFilesystem`, `drop ALL` capabilities, seccomp `RuntimeDefault`).
+
+```bash
+# 1) Créer le Secret (jamais committé)
+kubectl create secret generic metgate-secret \
+  --from-literal=METGATE_TOKEN='xxxxx' \
+  --from-literal=EUMETSAT_CONSUMER_KEY='xxxxx' \
+  --from-literal=EUMETSAT_CONSUMER_SECRET='xxxxx' \
+  --from-literal=OPENSKY_CLIENT_ID='' \
+  --from-literal=OPENSKY_CLIENT_SECRET=''
+
+# 2) Appliquer
+kubectl apply -f deploy/k8s/metgate.yaml
+
+# 3) Vérifier
+kubectl get pods -l app=metgate
+kubectl port-forward svc/metgate 8080:80
+```
+
+Pour exposer sur Internet : ajouter un Ingress + cert-manager (TLS) + auth en frontal (oauth2-proxy, Authelia, etc.) — le portail **n'a pas d'auth applicative à ce stade**.
+
+### C. Build source
+
 ```bash
 git clone https://github.com/benedictemarty/metgate
 cd metgate
 
-# Copier et remplir le fichier de configuration
-cp .env.example .env
-$EDITOR .env
+cp .env.example .env && $EDITOR .env && chmod 600 .env
 
-# Dépendances frontend
 cd web && npm install && cd ..
-
-# Build complet (frontend embarqué dans le binaire)
-make build
-
-# Lancer
+make build              # frontend → embed → binaire ./bin/portal
 ./bin/portal
 ```
 
@@ -167,6 +211,20 @@ Spec OpenAPI : [`/api/openapi.yaml`](http://localhost:8080/api/openapi.yaml)
 
 ## Déploiement
 
+### Pipeline release (GitHub Actions)
+
+À chaque tag `v*` poussé, le workflow `.github/workflows/release.yml` :
+
+1. Build amd64 local.
+2. Scan **Trivy** (CRITICAL+HIGH, `ignore-unfixed`) — bloque le job si CVE corrigeables. Résultats SARIF remontés dans l'onglet **Security** GitHub.
+3. Si scan OK : build multi-arch `linux/amd64` + `linux/arm64` et push sur `ghcr.io/benedictemarty/metgate`.
+
+Lancement ad-hoc sans tag : `Actions → Release → Run workflow`.
+
+### Binaire (systemd / LXC / VM)
+
+Build cross-compilé sortant en `bin/portal` (~32 MB statique, CGO désactivé) :
+
 ```bash
 make build
 scp bin/portal user@server:/opt/metgate/portal
@@ -189,6 +247,8 @@ RestartSec=5s
 [Install]
 WantedBy=multi-user.target
 ```
+
+Le `Makefile` inclut une cible `make deploy` qui pousse le binaire sur un LXC Proxmox via SCP + `pct mount` (variables `PROXMOX_SSH`, `PROXMOX_PORT`, `LXC_ID`, `LXC_DEST` en haut du Makefile à adapter).
 
 ---
 
