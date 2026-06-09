@@ -144,6 +144,9 @@ func parseMember(dec *xml.Decoder, typeName string) (map[string]any, error) {
 						}
 					}
 				}
+				// Enrichit les SIGMET/AIRMET/CAT/GIVRAGE avec parsed_fl_min/max
+				// extraits depuis le `decoded` — utilisé par le mode 3D (extrusion).
+				enrichSIGMETLikeProps(props)
 				out := map[string]any{
 					"type":       "Feature",
 					"geometry":   geom,

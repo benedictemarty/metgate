@@ -226,6 +226,7 @@ function trailParamsFor(ftMin: number): {
 // est actif. Limité aux produits qui transportent une plage d'altitudes fiable.
 const EXTRUDABLE_FAMILIES = new Set([
   'RDT_MSG',
+  'OPIC_GTD',
   'CAT_EURAT01',
   'GIVRAGE_EURAT01',
   'SIGMET',
@@ -248,6 +249,15 @@ function pickNum(props: Record<string, unknown>, keys: string[]): number | undef
 // Calcule les limites verticales d'un feature (`base_m`, `top_m` en mètres MSL),
 // à partir des conventions IWXXM / MetGate observées.
 function featureFLMeters(props: Record<string, unknown>): { base_m: number; top_m: number } | null {
+  // OPIC_GTD : `maxforecastupperboundary` exprimé en FL (centaines de ft).
+  // Détecté via uom == 'FL' (ou heuristique : valeur < 1000, vs RDT en mètres).
+  const opicTopRaw = pickNum(props, ['maxforecastupperboundary'])
+  const opicUom = props['maxforecastupperboundary_uom']
+  if (typeof opicTopRaw === 'number' && (opicUom === 'FL' || opicTopRaw < 1000)) {
+    const opicLowRaw = pickNum(props, ['minforecastlowerboundary'])
+    const base_m = typeof opicLowRaw === 'number' ? Math.max(0, opicLowRaw * FL_TO_METERS) : 0
+    return { base_m, top_m: opicTopRaw * FL_TO_METERS }
+  }
   // RDT_MSG : limites en mètres directement.
   const lowM = pickNum(props, ['lowerboundary'])
   const topM = pickNum(props, ['unbiasedforecastupperboundary', 'upperboundary'])
@@ -261,6 +271,15 @@ function featureFLMeters(props: Record<string, unknown>): { base_m: number; top_
     return {
       base_m: (typeof flMin === 'number' ? Math.max(0, flMin) : 0) * FL_TO_METERS * 100,
       top_m: flMax * FL_TO_METERS * 100,
+    }
+  }
+  // CAT_EURAT01 / GIVRAGE_EURAT01 : `top`/`bottom` en mètres MSL bruts.
+  const topMeters = pickNum(props, ['top'])
+  const botMeters = pickNum(props, ['bottom'])
+  if (typeof topMeters === 'number' && topMeters > 0) {
+    return {
+      base_m: typeof botMeters === 'number' ? Math.max(0, botMeters) : 0,
+      top_m: topMeters,
     }
   }
   return null
@@ -1562,6 +1581,48 @@ const FIELD_HELP: Record<string, string> = {
   validityendtime: "Fin de la fenêtre de validité du bulletin (UTC).",
   forecasttime: "Horizon de la prévision en minutes par rapport à l'analyse.",
   issueTime: "Heure d'émission du message (UTC).",
+  // OPIC_GTD / RDT_MSG — cellules convectives détectées par satellite (NWC SAF MSG)
+  trackingid:
+    "Identifiant de suivi de la cellule convective. Conservé tant que l'algorithme RDT/OPIC suit la même cellule entre deux images successives.",
+  areaname:
+    "Nom de la zone d'identification du produit OPIC/RDT (zone géographique nominale du producteur).",
+  producttype:
+    "Type de produit OPIC : RDT (Rapidly Developing Thunderstorms) ou variante (CTH, contour à seuil…).",
+  originatingcentre: "Centre producteur sur 3 caractères (ex. fme = Toulouse Météo-France, FAB Europe).",
+  severity:
+    "Indice de sévérité de la cellule (0 = neutre, plus élevé = orage plus mature/dangereux). Combine intensité IR, taux d'expansion, foudre.",
+  confidencelevel:
+    "Indice de confiance de la détection RDT (0-100 %). Bas = cellule jeune ou ambiguë, élevé = cellule bien établie.",
+  hail:
+    "Risque de grêle estimé à partir de la signature IR/VIS (true/false). Indicateur, pas une certitude radar.",
+  iceicingrisk:
+    "Risque de givrage en vol associé à la cellule (true/false). Présence d'eau surfondue probable dans le nuage.",
+  layer:
+    "Couche d'atmosphère couverte par la cellule (souvent sommet du cumulonimbus jusqu'à la tropopause).",
+  lowerboundary: "Limite verticale inférieure observée de la cellule.",
+  maxforecastupperboundary:
+    "Sommet prévu maximum (top) de la cellule à courte échéance — exprimé en FL (niveau de vol). Permet d'estimer si un avion peut survoler la cellule.",
+  unbiasedforecastupperboundary:
+    "Sommet prévu non biaisé de la cellule (FL). Variante du top sans correction empirique appliquée par l'algorithme.",
+  movingdirection:
+    "Direction VERS LAQUELLE se déplace la cellule (en degrés, convention vectorielle — inverse de la convention vent météo).",
+  movingspeed: "Vitesse de déplacement de la cellule.",
+  trendarea:
+    "Tendance d'évolution de la surface de la cellule : croissance / stable / décroissance.",
+  trenddepth:
+    "Tendance d'évolution de l'épaisseur / sommet de la cellule : montée / stable / descente du top.",
+  // SIGMET / AIRMET — champs partagés
+  intensity:
+    "Intensité du phénomène. SIGMET/AIRMET : mot-clé (WKN faible, MOD modéré, SEV sévère, ou tendance INTSF / WKN / NC). GIVRAGE/CAT : indice numérique (0 = nul, valeurs croissantes = givrage/turbulence plus forte).",
+  cattype: "Type de turbulence en air clair (CAT) ou nature du phénomène signalé.",
+  altitude: "Altitude de référence du phénomène.",
+  top: "Limite supérieure du phénomène (FL ou m).",
+  bottom: "Limite inférieure du phénomène (FL ou m, SFC = sol).",
+  issuingAirTrafficServicesRegion: "FIR/UIR émettrice du message (région d'information de vol).",
+  // Aerodrome warnings
+  cnl: "Référence du message annulé (CNL = CANCEL).",
+  message_number: "Numéro de séquence du bulletin émis par le centre.",
+  analysis_time: "Heure de l'analyse à laquelle se rattache le message (UTC).",
 }
 
 const POPUP_EXCLUDE_KEYS = new Set([
