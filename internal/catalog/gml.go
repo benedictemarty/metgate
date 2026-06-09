@@ -431,6 +431,12 @@ var (
 	// IWXXM 2021-2 et antérieurs conservaient le TAC d'origine en attribut.
 	rxTACAttr = regexp.MustCompile(`translated(?:Failed)?TAC="([^"]*)"`)
 
+	// Attributs IWXXM porteurs du statut opérationnel (METAR/TAF/SIGMET/AIRMET).
+	// permissibleUsage = OPERATIONAL | NON-OPERATIONAL
+	// permissibleUsageReason = TEST | EXERCISE (si NON-OPERATIONAL)
+	rxPermUsage       = regexp.MustCompile(`permissibleUsage="([^"]+)"`)
+	rxPermUsageReason = regexp.MustCompile(`permissibleUsageReason="([^"]+)"`)
+
 	// IWXXM 3.0 : champs scalaires utiles pour reconstruire un TAC compact.
 	rxAirTemp  = regexp.MustCompile(`<iwxxm:airTemperature[^>]*uom="([^"]+)"[^>]*>([^<]+)</iwxxm:airTemperature>`)
 	rxDewTemp  = regexp.MustCompile(`<iwxxm:dewpointTemperature[^>]*uom="([^"]+)"[^>]*>([^<]+)</iwxxm:dewpointTemperature>`)
@@ -463,6 +469,30 @@ var (
 // reconstruction ne respecterait pas le format OACI strict et serait incomplète
 // (visi, nuages, phénomènes, COR/AMD…), donc trompeuse pour l'opérationnel.
 func enrichFromIWXXM(props map[string]any, opmet string) {
+	// Statut opérationnel : extrait depuis l'attribut IWXXM `permissibleUsage`
+	// (et `permissibleUsageReason` pour TEST/EXERCISE) si le WFS n'a pas déjà
+	// posé `status` au niveau feature. Mappage : OPERATIONAL → NORMAL ;
+	// NON-OPERATIONAL → TEST | EXERCISE selon reason, sinon NON-OPERATIONAL.
+	if _, has := props["status"]; !has {
+		if m := rxPermUsage.FindStringSubmatch(opmet); len(m) >= 2 {
+			usage := strings.ToUpper(strings.TrimSpace(m[1]))
+			switch usage {
+			case "OPERATIONAL":
+				props["status"] = "NORMAL"
+			case "NON-OPERATIONAL", "NONOPERATIONAL":
+				reason := ""
+				if r := rxPermUsageReason.FindStringSubmatch(opmet); len(r) >= 2 {
+					reason = strings.ToUpper(strings.TrimSpace(r[1]))
+				}
+				if reason == "TEST" || reason == "EXERCISE" {
+					props["status"] = reason
+				} else {
+					props["status"] = "NON-OPERATIONAL"
+				}
+			}
+		}
+	}
+
 	if m := rxTACAttr.FindStringSubmatch(opmet); len(m) >= 2 && strings.TrimSpace(m[1]) != "" {
 		props["tac"] = strings.TrimSpace(m[1])
 		return

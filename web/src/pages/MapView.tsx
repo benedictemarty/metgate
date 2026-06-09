@@ -1985,26 +1985,29 @@ function FeaturePopupBody({ props, onShowXml }: { props: Record<string, unknown>
 }
 
 // ─── Fenêtre flottante : source IWXXM XML d'un message OPMET ──────────────────
-// Indente naïvement le XML (split sur '<' avec compteur de profondeur) pour
-// donner un aperçu lisible sans dépendance externe.
+// Pretty-print du XML : insère un saut de ligne entre tags adjacents puis
+// indente selon la profondeur. Les lignes auto-fermées (`<foo/>`), déclarations
+// (`<?xml … ?>`, `<!-- … -->`) et celles contenant déjà le tag fermant
+// (`<foo>bar</foo>`) ne modifient pas la profondeur.
 function prettyXml(xml: string): string {
-  const tokens = xml.replace(/>\s*</g, '>\n<').split('\n')
+  const normalized = xml.replace(/>\s*</g, '>\n<').trim()
+  const out: string[] = []
   let depth = 0
-  return tokens
-    .map((line) => {
-      const trimmed = line.trim()
-      if (!trimmed) return ''
-      const isClosing = /^<\//.test(trimmed)
-      const isSelfClosing = /\/>$/.test(trimmed)
-      const isDecl = /^<\?|^<!/.test(trimmed)
-      const isOpening = /^<[^/?!]/.test(trimmed) && !isSelfClosing
-      if (isClosing) depth = Math.max(0, depth - 1)
-      const indented = '  '.repeat(depth) + trimmed
-      if (isOpening && !isDecl) depth++
-      return indented
-    })
-    .filter(Boolean)
-    .join('\n')
+  for (const raw of normalized.split('\n')) {
+    const line = raw.trim()
+    if (!line) continue
+    const isDecl = /^<[?!]/.test(line)
+    const isClose = /^<\//.test(line)
+    const isSelfClose = /\/\s*>$/.test(line)
+    // Ouverture qui se ferme sur la même ligne : <foo>bar</foo> ou <foo …>…</foo>
+    const isInline = !isClose && !isSelfClose && /<\/[^>]+>\s*$/.test(line)
+    const isOpen = !isDecl && !isClose && !isSelfClose && !isInline
+
+    if (isClose) depth = Math.max(0, depth - 1)
+    out.push('  '.repeat(depth) + line)
+    if (isOpen) depth++
+  }
+  return out.join('\n')
 }
 
 function XmlSourceWindow({ title, xml, onClose }: { title: string; xml: string; onClose: () => void }) {
