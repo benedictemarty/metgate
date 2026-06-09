@@ -889,7 +889,6 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
     setPopup({ lng, lat, items, idx: 0 })
   }
 
-  const isLoading = loading.size > 0 || windLoading || tropoLoading || qvacisLoading || cthLoading
 
   return (
     <div className="relative h-[calc(100vh-72px)] w-full overflow-hidden">
