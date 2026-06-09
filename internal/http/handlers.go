@@ -561,6 +561,12 @@ func (a *API) handleFeature(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
+	// Enrichissement : injecte le nom complet de l'aérodrome (OurAirports)
+	// dans chaque feature qui porte un code ICAO 4 lettres. Coût ~µs/feature,
+	// pas de réseau.
+	if enriched, eerr := enrichFeaturesWithAirportNames(geo, a.airports); eerr == nil {
+		geo = enriched
+	}
 	w.Header().Set("Content-Type", "application/geo+json; charset=utf-8")
 	w.Header().Set("X-Cache", cacheHeader(resp.FromCache))
 	if resp.FromCache && resp.CacheAge > 0 {
@@ -568,6 +574,79 @@ func (a *API) handleFeature(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(geo)
+}
+
+// enrichFeaturesWithAirportNames injecte airport_name / airport_municipality /
+// airport_country sur chaque feature dont les properties portent un code ICAO
+// 4 lettres (`locationIndicatorICAO` IWXXM ou `id` produits plats). N'altère
+// pas la géométrie. En cas d'erreur de désérialisation, renvoie l'entrée
+// inchangée pour ne jamais casser le flux.
+func enrichFeaturesWithAirportNames(geo []byte, store *airports.Store) ([]byte, error) {
+	if store == nil || len(geo) == 0 {
+		return geo, nil
+	}
+	var fc struct {
+		Type     string                   `json:"type"`
+		Features []map[string]interface{} `json:"features"`
+		Extra    map[string]interface{}   `json:"-"`
+	}
+	// Décodage complet en map pour préserver les champs non listés (fetched_at,
+	// disclaimer…). On utilise un wrapper RawMessage pour ne pas tout remonter.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(geo, &raw); err != nil {
+		return geo, nil
+	}
+	featsRaw, ok := raw["features"]
+	if !ok {
+		return geo, nil
+	}
+	if err := json.Unmarshal(featsRaw, &fc.Features); err != nil {
+		return geo, nil
+	}
+	changed := false
+	for _, f := range fc.Features {
+		propsAny, ok := f["properties"]
+		if !ok {
+			continue
+		}
+		props, ok := propsAny.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		icao := ""
+		if s, _ := props["locationIndicatorICAO"].(string); len(s) == 4 {
+			icao = strings.ToUpper(s)
+		} else if s, _ := props["id"].(string); len(s) == 4 {
+			icao = strings.ToUpper(s)
+		}
+		if icao == "" {
+			continue
+		}
+		ap := store.Airport(icao)
+		if ap == nil {
+			continue
+		}
+		if ap.Name != "" {
+			props["airport_name"] = ap.Name
+		}
+		if ap.Municipality != "" {
+			props["airport_municipality"] = ap.Municipality
+		}
+		if ap.Country != "" {
+			props["airport_country"] = ap.Country
+		}
+		f["properties"] = props
+		changed = true
+	}
+	if !changed {
+		return geo, nil
+	}
+	encoded, err := json.Marshal(fc.Features)
+	if err != nil {
+		return geo, nil
+	}
+	raw["features"] = encoded
+	return json.Marshal(raw)
 }
 
 func cacheHeader(hit bool) string {

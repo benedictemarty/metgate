@@ -1543,6 +1543,10 @@ const POPUP_EXCLUDE_KEYS = new Set([
   'visi',
   'id',
   'analysis_time',
+  // Enrichissement aéroport (déjà affiché dans le header)
+  'airport_name',
+  'airport_municipality',
+  'airport_country',
 ])
 
 function fmtKey(k: string): string {
@@ -1594,6 +1598,10 @@ function FeaturePopup({
   const cavok = props.cavok === true || props.cavok === 'true'
 
   const headerTitle = icao ?? (props.trackingid as string | undefined) ?? family.replace(/_last$/, '')
+  // Nom complet de l'aérodrome (OurAirports, enrichi côté backend). Affiché
+  // sous l'ICAO si présent, avec la ville quand disponible.
+  const airportName = props.airport_name as string | undefined
+  const airportMuni = props.airport_municipality as string | undefined
   const headerTime =
     obsTime ?? (props.timeposition as string | undefined) ?? (props.analysistime as string | undefined)
 
@@ -1689,6 +1697,14 @@ function FeaturePopup({
           >
             {headerTitle}
           </div>
+          {airportName && (
+            <div className="text-[0.6875rem] text-slate-300 truncate" title={airportMuni ? `${airportName} — ${airportMuni}` : airportName}>
+              {airportName}
+              {airportMuni && airportMuni !== airportName && (
+                <span className="text-slate-500"> · {airportMuni}</span>
+              )}
+            </div>
+          )}
           <div className="text-[0.625rem] uppercase tracking-wider text-slate-400 truncate">
             {family.replace(/_last$/, '')}
             {headerTime && ' · ' + fmtVal(headerTime, '_t', props)}
