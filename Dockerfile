@@ -16,7 +16,7 @@ COPY internal/web/dist/.gitkeep /src/internal/web/dist/.gitkeep
 RUN npm run build
 
 # ─── Étape 2 : build du binaire Go avec dist embarqué ───────────────────────
-FROM golang:1.24-alpine@sha256:8bee1901f1e530bfb4a7850aa7a479d17ae3a18beb6e09064ed54cfd245b7191 AS go-builder
+FROM golang:1.26-alpine@sha256:f23e8b227fb4493eabe03bede4d5a32d04092da71962f1fb79b5f7d1e6c2a17f AS go-builder
 WORKDIR /src
 
 # Cache modules sur go.sum
