@@ -122,6 +122,33 @@ const SOURCE_STYLES: Record<string, SourceStyle> = {
   },
 }
 
+// Couleurs et libellés des statuts IWXXM (permissibleUsage). NORMAL et
+// OPERATIONAL = état nominal ; les autres marquent un message non-opérationnel.
+const STATUS_STYLES: Record<string, { color: string; label: string }> = {
+  NORMAL:            { color: '#22c55e', label: 'OPER' },
+  OPERATIONAL:       { color: '#22c55e', label: 'OPER' },
+  TEST:              { color: '#fbbf24', label: 'TEST' },
+  EXERCISE:          { color: '#38bdf8', label: 'EXER' },
+  'NON-OPERATIONAL': { color: '#fb923c', label: 'N-OP' },
+}
+const STATUS_ORDER = ['NORMAL', 'OPERATIONAL', 'EXERCISE', 'TEST', 'NON-OPERATIONAL']
+
+function statusHistogram(fc: GeoJSON.FeatureCollection): Array<[string, number]> {
+  const counts: Record<string, number> = {}
+  for (const f of fc.features) {
+    const s = (f.properties as Record<string, unknown> | null)?.status
+    const k = typeof s === 'string' && s !== '' ? s : 'UNKNOWN'
+    counts[k] = (counts[k] ?? 0) + 1
+  }
+  const entries = Object.entries(counts)
+  entries.sort((a, b) => {
+    const ia = STATUS_ORDER.indexOf(a[0])
+    const ib = STATUS_ORDER.indexOf(b[0])
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib)
+  })
+  return entries
+}
+
 const styleFor = (familyName: string): LayerStyle => {
   const stripped = familyName.replace(/_last$/, '')
   for (const key of Object.keys(LAYER_STYLES)) {
@@ -2011,6 +2038,32 @@ function Sidebar({
                           {err}
                         </div>
                       )}
+                      {isActive && layer && (() => {
+                        const hist = statusHistogram(layer.rawData)
+                        if (hist.length === 0) return null
+                        return (
+                          <div className="mt-1.5 flex flex-wrap gap-1">
+                            {hist.map(([st, n]) => {
+                              const sty = STATUS_STYLES[st] ?? { color: '#94a3b8', label: st }
+                              return (
+                                <span
+                                  key={st}
+                                  title={`${st} : ${n} bulletin${n > 1 ? 's' : ''}`}
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[0.5625rem] font-mono uppercase tracking-wider bg-slate-900/70 border border-slate-800/70"
+                                  style={{ color: sty.color }}
+                                >
+                                  <span
+                                    className="size-1.5 rounded-full"
+                                    style={{ backgroundColor: sty.color, boxShadow: `0 0 4px ${sty.color}aa` }}
+                                  />
+                                  {sty.label}
+                                  <span className="text-slate-400 tabular-nums">{n}</span>
+                                </span>
+                              )
+                            })}
+                          </div>
+                        )
+                      })()}
                     </button>
                     {isActive && SOURCE_AWARE_FAMILIES.has(f.name) && (() => {
                       const ss = SOURCE_STYLES[f.name]
