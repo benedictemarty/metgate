@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { MapLayerMouseEvent } from 'maplibre-gl'
 import {
   Map as MapGL,
@@ -21,10 +21,10 @@ import {
   Wind as WindIcon,
   X,
 } from 'lucide-react'
-import WindLayer from '../components/WindLayer'
+import WindLayer, { type WindProbeFn } from '../components/WindLayer'
 import TropoLayer from '../components/TropoLayer'
 import QvacisLayer, { QVACIS_FLS, type QvacisDataset } from '../components/QvacisLayer'
-import LightningLayer from '../components/LightningLayer'
+import LightningLayer, { LIGHTNING_LAYER_DOT, LIGHTNING_LAYER_HALO } from '../components/LightningLayer'
 import SatRasterLayer from '../components/SatRasterLayer'
 import CloudTopLayer from '../components/CloudTopLayer'
 import FlightPlan, { type RoutePlan } from '../components/FlightPlan'
@@ -369,6 +369,8 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [popup, setPopup] = useState<PopupState | null>(null)
+  // Probe vent : MapView interroge la grille gérée par WindLayer au clic carte.
+  const windProbeRef = useRef<WindProbeFn | null>(null)
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null)
   const [playing, setPlaying] = useState(false)
   const [showTrails, setShowTrails] = useState(false)
@@ -781,8 +783,13 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
     active.forEach((name) => {
       ids.push(`${name}-circle`, `${name}-fill`)
     })
+    // Couche foudre : ajoutée impérativement par LightningLayer, on l'inclut
+    // dans la sélection pour qu'un clic produise une popup descriptive.
+    if (lightningEnabled) {
+      ids.push(LIGHTNING_LAYER_DOT, LIGHTNING_LAYER_HALO)
+    }
     return ids
-  }, [active])
+  }, [active, lightningEnabled])
 
   const handleMapClick = (e: MapLayerMouseEvent) => {
     // queryRenderedFeatures ±8px : capture toutes les couches actives
@@ -793,11 +800,6 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
       { layers: interactiveLayerIds },
     ) as GeoJSON.Feature[]
 
-    if (allFeatures.length === 0) {
-      setPopup(null)
-      return
-    }
-
     const seen = new Set<string>()
     const items: PopupItem[] = []
     let lng = e.lngLat.lng
@@ -805,9 +807,15 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
 
     for (const f of allFeatures) {
       const layerId = (f as unknown as { layer?: { id?: string } }).layer?.id ?? ''
-      const family = layerId.replace(/-(circle|fill|line)$/, '')
+      // Foudre : les deux layer IDs (-halo, -dot) sont mappés à une famille unique.
+      let family: string
+      if (layerId === LIGHTNING_LAYER_DOT || layerId === LIGHTNING_LAYER_HALO) {
+        family = 'Lightning'
+      } else {
+        family = layerId.replace(/-(circle|fill|line)$/, '')
+      }
       const props = (f.properties ?? {}) as Record<string, unknown>
-      const key = `${family}::${props.message_id ?? props.gml_id ?? props.ogc_fid ?? JSON.stringify(props).slice(0, 80)}`
+      const key = `${family}::${props.message_id ?? props.gml_id ?? props.ogc_fid ?? props.time ?? JSON.stringify(props).slice(0, 80)}`
       if (seen.has(key)) continue
       seen.add(key)
       items.push({ family, props })
@@ -817,6 +825,35 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
           ;[lng, lat] = (geom as GeoJSON.Point).coordinates
         }
       }
+    }
+
+    // Sondage vent : si la couche est active, on injecte une entrée synthétique
+    // décrivant le vent au point cliqué (u,v,vitesse,direction,niveau,step).
+    if (windEnabled && windProbeRef.current) {
+      const probe = windProbeRef.current(e.lngLat.lng, e.lngLat.lat)
+      if (probe) {
+        items.push({
+          family: probe.dataset === 'JET' ? 'JetStream' : 'Wind',
+          props: {
+            _kind: 'wind-probe',
+            dataset: probe.dataset,
+            level_hPa: probe.dataset === 'WIND' ? Math.round(probe.level_pa / 100) : undefined,
+            windDirection_deg: probe.dir_deg.toFixed(0),
+            windSpeed_kt: probe.speed_kt.toFixed(0),
+            speed_ms: probe.speed_ms.toFixed(1),
+            u_ms: probe.u_ms.toFixed(2),
+            v_ms: probe.v_ms.toFixed(2),
+            step_time: probe.step_time,
+            lon: e.lngLat.lng.toFixed(3),
+            lat: e.lngLat.lat.toFixed(3),
+          },
+        })
+      }
+    }
+
+    if (items.length === 0) {
+      setPopup(null)
+      return
     }
 
     setPopup({ lng, lat, items, idx: 0 })
@@ -982,6 +1019,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
           linkedInstant={linkedInstantForLayers}
           onTimesLoaded={setWindTimes}
           onLoadingChange={setWindLoading}
+          probeRef={windProbeRef}
         />
         <TropoLayer
           enabled={tropoEnabled}

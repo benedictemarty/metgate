@@ -31,6 +31,19 @@ const PARTICLE_COUNT = 1800
 const FADE_ALPHA = 0.07
 const SPEED_FACTOR = 0.04 // deg/sec ≈ (m/s) * SPEED_FACTOR / cos(lat) — empirique pour visu
 
+export interface WindProbeResult {
+  dataset: 'WIND' | 'JET'
+  level_pa: number
+  step_time: string
+  u_ms: number
+  v_ms: number
+  speed_ms: number
+  speed_kt: number
+  dir_deg: number // direction d'où vient le vent (convention météo)
+}
+
+export type WindProbeFn = (lon: number, lat: number) => WindProbeResult | null
+
 interface WindLayerProps {
   enabled: boolean
   dataset: 'WIND' | 'JET'
@@ -42,6 +55,9 @@ interface WindLayerProps {
   // chargée. Le parent les agrège pour le slider master.
   onTimesLoaded?: (times: string[]) => void
   onLoadingChange?: (loading: boolean) => void
+  // Référence mutable que le parent peut interroger pour échantillonner
+  // le vent (u,v,vitesse,direction) au clic. Null si grille non chargée.
+  probeRef?: React.MutableRefObject<WindProbeFn | null>
 }
 
 export default function WindLayer({
@@ -51,6 +67,7 @@ export default function WindLayer({
   linkedInstant,
   onTimesLoaded,
   onLoadingChange,
+  probeRef,
 }: WindLayerProps) {
   const { current: mapWrapper } = useMap()
   const map = mapWrapper?.getMap()
@@ -154,6 +171,34 @@ export default function WindLayer({
   stepRef.current = currentStep
   const gridRef = useRef<WindGrid | null>(null)
   gridRef.current = grid
+
+  // Expose au parent une fonction de sondage (u,v,vitesse,direction) au point cliqué.
+  // Désactivée tant que la grille ou le step ne sont pas chargés.
+  useEffect(() => {
+    if (!probeRef) return
+    if (!enabled) { probeRef.current = null; return }
+    probeRef.current = (lon, lat) => {
+      const g = gridRef.current
+      const s = stepRef.current
+      if (!g || !s) return null
+      const uv = sampleUV(g, s, lon, lat)
+      if (!uv) return null
+      // Convention météo : direction d'où vient le vent (atan2 sur -u,-v).
+      let dir = (Math.atan2(-uv.u, -uv.v) * 180) / Math.PI
+      if (dir < 0) dir += 360
+      return {
+        dataset,
+        level_pa: g.level_pa,
+        step_time: s.time,
+        u_ms: uv.u,
+        v_ms: uv.v,
+        speed_ms: uv.speed,
+        speed_kt: uv.speed * 1.94384,
+        dir_deg: dir,
+      }
+    }
+    return () => { if (probeRef) probeRef.current = null }
+  }, [probeRef, enabled, dataset, grid, currentStep])
 
   // Auto-play : avance d'un step toutes les 1.4 s.
   useEffect(() => {

@@ -4,8 +4,10 @@ import { Zap } from 'lucide-react'
 import DraggableWindow from './DraggableWindow'
 
 const SOURCE_ID = 'eumetsat-lightning-src'
-const LAYER_HALO = 'eumetsat-lightning-halo'
-const LAYER_DOT = 'eumetsat-lightning-dot'
+export const LIGHTNING_LAYER_HALO = 'eumetsat-lightning-halo'
+export const LIGHTNING_LAYER_DOT = 'eumetsat-lightning-dot'
+const LAYER_HALO = LIGHTNING_LAYER_HALO
+const LAYER_DOT = LIGHTNING_LAYER_DOT
 
 const POLL_MS = 60_000 // produit MTG-LI = 10 min cadence ; on rafraîchit large
 
