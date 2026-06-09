@@ -1,0 +1,65 @@
+# Ingress nginx avec basic auth pour MetGate.
+#
+# Prérequis :
+#   - ingress-nginx-controller installé dans le cluster
+#     (https://kubernetes.github.io/ingress-nginx/)
+#   - cert-manager + ClusterIssuer letsencrypt-prod si tu veux TLS Let's Encrypt
+#     (sinon retirer la section tls: et l'annotation cert-manager)
+#
+# Création du Secret htpasswd :
+#
+#   # Soit avec apache2-utils (paquet htpasswd) :
+#   htpasswd -c auth bmarty
+#   # → tape ton mot de passe deux fois
+#
+#   # Soit en pur openssl/Python (si htpasswd absent) :
+#   python3 -c "import crypt, getpass; \
+#     print('bmarty:' + crypt.crypt(getpass.getpass(), crypt.mksalt(crypt.METHOD_SHA512)))" > auth
+#
+#   kubectl create secret generic metgate-basic-auth --from-file=auth
+#   rm auth                            # ⚠️ ne pas laisser traîner le fichier en clair
+#
+# Pour ajouter d'autres utilisateurs plus tard :
+#   htpasswd auth alice                # sans -c (n'écrase pas)
+#   kubectl create secret generic metgate-basic-auth --from-file=auth \
+#     --dry-run=client -o yaml | kubectl apply -f -
+#
+# Adapter `metgate.example.com` à ton domaine réel.
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: metgate
+  labels:
+    app: metgate
+  annotations:
+    # Basic auth via le Secret metgate-basic-auth (clé "auth" = fichier htpasswd)
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: metgate-basic-auth
+    nginx.ingress.kubernetes.io/auth-realm: "MetGate Portal — login requis"
+    # Cache : on évite que nginx mette en cache /api/* qui dépend du token
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    # TLS auto via cert-manager (commenter si pas de cert-manager)
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # Headers sécu minimaux ajoutés par nginx
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-Frame-Options: DENY";
+      more_set_headers "Referrer-Policy: strict-origin-when-cross-origin";
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - metgate.example.com
+      secretName: metgate-tls
+  rules:
+    - host: metgate.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: metgate
+                port:
+                  number: 80
