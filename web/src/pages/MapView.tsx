@@ -399,6 +399,8 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [popup, setPopup] = useState<PopupState | null>(null)
+  // Fenêtre flottante affichant la source IWXXM XML d'un message OPMET.
+  const [xmlView, setXmlView] = useState<{ title: string; xml: string } | null>(null)
   // Probe vent : MapView interroge la grille gérée par WindLayer au clic carte.
   const windProbeRef = useRef<WindProbeFn | null>(null)
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null)
@@ -1146,6 +1148,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
                     icao={icaos[0]}
                     items={popup.items}
                     onClose={() => setPopup(null)}
+                    onShowXml={(title, xml) => setXmlView({ title, xml })}
                   />
                 ) : (
                   <FeaturePopup
@@ -1156,12 +1159,21 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
                     onPrev={popup.items.length > 1 ? () => setPopup(p => p ? { ...p, idx: (p.idx - 1 + p.items.length) % p.items.length } : null) : undefined}
                     onNext={popup.items.length > 1 ? () => setPopup(p => p ? { ...p, idx: (p.idx + 1) % p.items.length } : null) : undefined}
                     onClose={() => setPopup(null)}
+                    onShowXml={(title, xml) => setXmlView({ title, xml })}
                   />
                 )}
               </DraggableShell>
             </Popup>
           )
         })()}
+
+        {xmlView && (
+          <XmlSourceWindow
+            title={xmlView.title}
+            xml={xmlView.xml}
+            onClose={() => setXmlView(null)}
+          />
+        )}
 
         {ogcPanelOpen && (
           <OGCFilterPanel
@@ -1563,6 +1575,7 @@ const POPUP_EXCLUDE_KEYS = new Set([
   'ogc_fid',
   'swpid',
   'opmet_msg',
+  'iwxxm_xml',
   // Doublons SA_last/FT_last (déjà mappés vers les champs structurés standard)
   'pressure',
   'wind_dir',
@@ -1610,6 +1623,7 @@ function FeaturePopup({
   onPrev,
   onNext,
   onClose,
+  onShowXml,
 }: {
   family: string
   props: Record<string, unknown>
@@ -1618,6 +1632,7 @@ function FeaturePopup({
   onPrev?: () => void
   onNext?: () => void
   onClose: () => void
+  onShowXml?: (title: string, xml: string) => void
 }) {
   const icao = props.locationIndicatorICAO as string | undefined
   const obsTime = props.observationTime as string | undefined
@@ -1626,6 +1641,7 @@ function FeaturePopup({
   const status = props.status as string | undefined
   const cavok = props.cavok === true || props.cavok === 'true'
 
+  const iwxxmXml = typeof props.iwxxm_xml === 'string' ? (props.iwxxm_xml as string) : undefined
   const headerTitle = icao ?? (props.trackingid as string | undefined) ?? family.replace(/_last$/, '')
   // Nom complet de l'aérodrome (OurAirports, enrichi côté backend). Affiché
   // sous l'ICAO si présent, avec la ville quand disponible.
@@ -1824,6 +1840,15 @@ function FeaturePopup({
             {status}
           </span>
         )}
+        {iwxxmXml && onShowXml && (
+          <button
+            onClick={() => onShowXml(`${headerTitle} · ${family.replace(/_last$/, '')}`, iwxxmXml)}
+            className="ml-auto px-1.5 py-0.5 rounded bg-sky-900/40 text-sky-300 border border-sky-800/60 hover:bg-sky-800/60 hover:text-sky-100 transition uppercase tracking-wider font-medium"
+            title="Afficher la source IWXXM XML brute"
+          >
+            Source XML
+          </button>
+        )}
       </div>
     </div>
   )
@@ -1832,7 +1857,7 @@ function FeaturePopup({
 // ─── Vue aéroport groupée ─────────────────────────────────────────────────────
 // Affichée quand plusieurs couches (METAR, TAF, WL…) partagent le même ICAO.
 
-function AirportPopup({ icao, items, onClose }: { icao: string; items: PopupItem[]; onClose: () => void }) {
+function AirportPopup({ icao, items, onClose, onShowXml }: { icao: string; items: PopupItem[]; onClose: () => void; onShowXml?: (title: string, xml: string) => void }) {
   const [openIdx, setOpenIdx] = useState<number | null>(0)
 
   return (
@@ -1868,7 +1893,7 @@ function AirportPopup({ icao, items, onClose }: { icao: string; items: PopupItem
               </button>
               {isOpen && (
                 <div className="px-2 pb-2 border-t border-slate-800/40">
-                  <FeaturePopupBody props={item.props} family={item.family} />
+                  <FeaturePopupBody props={item.props} family={item.family} onShowXml={onShowXml ? (xml) => onShowXml(`${icao} · ${label}`, xml) : undefined} />
                 </div>
               )}
             </div>
@@ -1880,11 +1905,12 @@ function AirportPopup({ icao, items, onClose }: { icao: string; items: PopupItem
 }
 
 // Corps réutilisable de FeaturePopup (sans header ni bouton fermer)
-function FeaturePopupBody({ props }: { props: Record<string, unknown>; family: string }) {
+function FeaturePopupBody({ props, onShowXml }: { props: Record<string, unknown>; family: string; onShowXml?: (xml: string) => void }) {
   const tac = props.tac as string | undefined
   const decoded = props.decoded as string | undefined
   const cavok = props.cavok === true || props.cavok === 'true'
   const status = props.status as string | undefined
+  const iwxxmXml = typeof props.iwxxm_xml === 'string' ? (props.iwxxm_xml as string) : undefined
 
   const metarFields: Array<[string, string]> = []
   const push = (label: string, key: string, suffix = '') => {
@@ -1940,10 +1966,83 @@ function FeaturePopupBody({ props }: { props: Record<string, unknown>; family: s
           ))}
         </dl>
       )}
-      {cavok && (
-        <span className="inline-block mt-1 px-1.5 py-0.5 rounded bg-emerald-900/40 text-emerald-300 border border-emerald-800/60 text-[0.5625rem]">CAVOK</span>
-      )}
+      <div className="mt-1 flex items-center gap-1.5">
+        {cavok && (
+          <span className="inline-block px-1.5 py-0.5 rounded bg-emerald-900/40 text-emerald-300 border border-emerald-800/60 text-[0.5625rem]">CAVOK</span>
+        )}
+        {iwxxmXml && onShowXml && (
+          <button
+            onClick={() => onShowXml(iwxxmXml)}
+            className="ml-auto px-1.5 py-0.5 rounded bg-sky-900/40 text-sky-300 border border-sky-800/60 hover:bg-sky-800/60 hover:text-sky-100 transition text-[0.5625rem] uppercase tracking-wider font-medium"
+            title="Afficher la source IWXXM XML brute"
+          >
+            Source XML
+          </button>
+        )}
+      </div>
     </div>
+  )
+}
+
+// ─── Fenêtre flottante : source IWXXM XML d'un message OPMET ──────────────────
+// Indente naïvement le XML (split sur '<' avec compteur de profondeur) pour
+// donner un aperçu lisible sans dépendance externe.
+function prettyXml(xml: string): string {
+  const tokens = xml.replace(/>\s*</g, '>\n<').split('\n')
+  let depth = 0
+  return tokens
+    .map((line) => {
+      const trimmed = line.trim()
+      if (!trimmed) return ''
+      const isClosing = /^<\//.test(trimmed)
+      const isSelfClosing = /\/>$/.test(trimmed)
+      const isDecl = /^<\?|^<!/.test(trimmed)
+      const isOpening = /^<[^/?!]/.test(trimmed) && !isSelfClosing
+      if (isClosing) depth = Math.max(0, depth - 1)
+      const indented = '  '.repeat(depth) + trimmed
+      if (isOpening && !isDecl) depth++
+      return indented
+    })
+    .filter(Boolean)
+    .join('\n')
+}
+
+function XmlSourceWindow({ title, xml, onClose }: { title: string; xml: string; onClose: () => void }) {
+  const pretty = (() => {
+    try { return prettyXml(xml) } catch { return xml }
+  })()
+  const copy = () => { navigator.clipboard?.writeText(xml).catch(() => {}) }
+  return (
+    <DraggableWindow
+      storageKey="metgate.xmlSource.pos"
+      className="absolute top-20 right-6 z-30 w-[min(680px,90vw)] max-h-[80vh] flex flex-col rounded-xl border border-slate-800/70 bg-slate-950/90 backdrop-blur-md shadow-2xl"
+    >
+      <div className="flex items-center justify-between gap-3 px-3 py-2 border-b border-slate-800/60">
+        <div className="min-w-0">
+          <div className="text-[0.625rem] uppercase tracking-wider text-slate-500">Source IWXXM XML</div>
+          <div className="text-sm font-semibold text-sky-300 truncate" title={title}>{title}</div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={copy}
+            className="px-2 py-1 rounded bg-slate-800/60 hover:bg-slate-700/60 text-slate-300 hover:text-slate-100 text-[0.625rem] uppercase tracking-wider transition"
+            title="Copier le XML brut"
+          >
+            Copier
+          </button>
+          <button
+            onClick={onClose}
+            className="text-slate-500 hover:text-slate-200 transition"
+            aria-label="Fermer"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+      </div>
+      <pre className="flex-1 overflow-auto px-3 py-2 text-[0.625rem] font-mono text-slate-200 whitespace-pre leading-snug">
+        {pretty}
+      </pre>
+    </DraggableWindow>
   )
 }
 

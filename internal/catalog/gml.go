@@ -96,6 +96,9 @@ func parseMember(dec *xml.Decoder, typeName string) (map[string]any, error) {
 				trimmed := strings.TrimSpace(txt)
 				if strings.HasPrefix(trimmed, "<") {
 					enrichFromIWXXM(props, trimmed)
+					// Conserve le XML brut pour permettre au frontend d'ouvrir
+					// une fenêtre « Source XML » à la demande.
+					props["iwxxm_xml"] = trimmed
 				} else if trimmed != "" {
 					props["tac"] = trimmed
 				}
