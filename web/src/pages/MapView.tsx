@@ -106,6 +106,22 @@ const LAYER_STYLES: Record<string, LayerStyle> = {
   QVACIS: { color: '#fb923c', glow: '#f97316' },
 }
 
+// Familles dont les features proviennent de deux sources distinctes (IWXXM XML
+// principal + produit plat TAC en complément). On colore et filtre par source.
+const SOURCE_AWARE_FAMILIES = new Set(['METAR', 'TAF'])
+
+interface SourceStyle { iwxxm: LayerStyle; tac: LayerStyle }
+const SOURCE_STYLES: Record<string, SourceStyle> = {
+  METAR: {
+    iwxxm: { color: '#38bdf8', glow: '#0ea5e9' },
+    tac:   { color: '#fbbf24', glow: '#f59e0b' },
+  },
+  TAF: {
+    iwxxm: { color: '#a78bfa', glow: '#8b5cf6' },
+    tac:   { color: '#34d399', glow: '#10b981' },
+  },
+}
+
 const styleFor = (familyName: string): LayerStyle => {
   const stripped = familyName.replace(/_last$/, '')
   for (const key of Object.keys(LAYER_STYLES)) {
@@ -345,6 +361,9 @@ interface PopupState {
 
 export default function MapView({ data, theme = 'dark' }: MapViewProps) {
   const [active, setActive] = useState<Set<string>>(new Set())
+  // Filtre par source (IWXXM/TAC) pour les familles SOURCE_AWARE. Clé = nom de
+  // famille. Défaut implicite : les deux sources affichées.
+  const [sourceFilter, setSourceFilter] = useState<Record<string, { iwxxm: boolean; tac: boolean }>>({})
   const [loaded, setLoaded] = useState<Record<string, FetchedLayer>>({})
   const [loading, setLoading] = useState<Set<string>>(new Set())
   const [errors, setErrors] = useState<Record<string, string>>({})
@@ -569,9 +588,20 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
           ...qnh,
           ...vis,
           ...cavokNorm,
+          _src: 'tac',
         },
       }
     }
+
+    // Tag chaque feature avec sa source (IWXXM) pour pouvoir filtrer/colorer
+    // par origine. N'altère pas les autres familles.
+    const tagIwxxm = (geo: GeoJSON.FeatureCollection): GeoJSON.FeatureCollection => ({
+      ...geo,
+      features: (geo.features ?? []).map((f) => ({
+        ...f,
+        properties: { ...(f.properties ?? {}), _src: 'iwxxm' },
+      })),
+    })
 
     active.forEach(async (name) => {
       const typeName = typeNameOf[name]
@@ -595,7 +625,8 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
           const detail = await r.text()
           throw new Error(`HTTP ${r.status}: ${detail.slice(0, 80)}`)
         }
-        const geo = (await r.json()) as GeoJSON.FeatureCollection
+        const geoRaw = (await r.json()) as GeoJSON.FeatureCollection
+        const geo = SOURCE_AWARE_FAMILIES.has(name) ? tagIwxxm(geoRaw) : geoRaw
         const filtered = filterBySlot(geo, selectedSlot, showTrails)
         setLoaded((prev) => ({
           ...prev,
@@ -812,6 +843,41 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
           const layer = loaded[name]
           if (!layer) return null
           const s = styleFor(name)
+          // Filtrage par source (IWXXM/TAC) pour les familles SOURCE_AWARE.
+          // Si l'utilisateur a décoché une source, on l'enlève du rendu sans
+          // toucher au cache `rawData`.
+          const srcStyle = SOURCE_AWARE_FAMILIES.has(name) ? SOURCE_STYLES[name] : null
+          const srcSel = sourceFilter[name]
+          const layerData = (srcStyle && srcSel && (!srcSel.iwxxm || !srcSel.tac))
+            ? {
+                ...layer.data,
+                features: layer.data.features.filter((f) => {
+                  const src = (f.properties as Record<string, unknown> | null)?._src
+                  if (src === 'tac') return srcSel.tac
+                  if (src === 'iwxxm') return srcSel.iwxxm
+                  return true
+                }),
+              }
+            : layer.data
+          // Expression de couleur cercle dépendant de la source si applicable.
+          const circleColorExpr = srcStyle
+            ? ['case',
+                ['==', ['get', 'status'], 'TEST'],     '#fbbf24',
+                ['==', ['get', 'status'], 'EXERCISE'], '#38bdf8',
+                ['==', ['get', '_src'], 'tac'],        srcStyle.tac.color,
+                srcStyle.iwxxm.color,
+              ] as unknown as string
+            : ['case',
+                ['==', ['get', 'status'], 'TEST'],     '#fbbf24',
+                ['==', ['get', 'status'], 'EXERCISE'], '#38bdf8',
+                s.color,
+              ] as unknown as string
+          const glowColorExpr = srcStyle
+            ? ['case',
+                ['==', ['get', '_src'], 'tac'], srcStyle.tac.glow,
+                srcStyle.iwxxm.glow,
+              ] as unknown as string
+            : (s.glow as unknown as string)
           // Mode trails : on lit directement les properties précalculées
           // (_fillOp, _lineOp, _lineW) injectées par decorateTrailFeature.
           const fillOpacity = showTrails ? (['get', '_fillOp'] as unknown as number) : 0.18
@@ -820,7 +886,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
 
           const extrudable = extrude3D && EXTRUDABLE_FAMILIES.has(name)
           return (
-            <Source key={name} id={`src-${name}`} type="geojson" data={layer.data}>
+            <Source key={name} id={`src-${name}`} type="geojson" data={layerData}>
               {/* Polygones / multipolygones : remplissage + bordure.
                   Les features TEST/EXERCISE reçoivent une couleur distincte. */}
               <Layer
@@ -888,7 +954,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
                 filter={['==', ['geometry-type'], 'Point']}
                 paint={{
                   'circle-radius': 12,
-                  'circle-color': s.glow,
+                  'circle-color': glowColorExpr,
                   'circle-opacity': 0.15,
                   'circle-blur': 0.7,
                 }}
@@ -899,11 +965,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
                 filter={['==', ['geometry-type'], 'Point']}
                 paint={{
                   'circle-radius': 4.5,
-                  'circle-color': ['case',
-                    ['==', ['get', 'status'], 'TEST'],     '#fbbf24',
-                    ['==', ['get', 'status'], 'EXERCISE'], '#38bdf8',
-                    s.color,
-                  ] as unknown as string,
+                  'circle-color': circleColorExpr,
                   'circle-stroke-color': '#0f172a',
                   'circle-stroke-width': 1.5,
                   'circle-opacity': 0.95,
@@ -1080,6 +1142,14 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
         loaded={loaded}
         errors={errors}
         onToggleLayer={toggle}
+        sourceFilter={sourceFilter}
+        onToggleSource={(family, src) => setSourceFilter((prev) => {
+          const cur = prev[family] ?? { iwxxm: true, tac: true }
+          const next = { ...cur, [src]: !cur[src] }
+          // Ne pas autoriser à désactiver les deux : conserve au moins une source.
+          if (!next.iwxxm && !next.tac) return prev
+          return { ...prev, [family]: next }
+        })}
         additionalLayers={[
           {
             key: 'wind', label: 'Vent', icon: WindIcon, color: '#22d3ee',
@@ -1759,6 +1829,8 @@ interface SidebarProps {
   loaded: Record<string, FetchedLayer>
   errors: Record<string, string>
   onToggleLayer: (name: string) => void
+  sourceFilter: Record<string, { iwxxm: boolean; tac: boolean }>
+  onToggleSource: (family: string, src: 'iwxxm' | 'tac') => void
   additionalLayers: LayerToggleDef[]
 }
 
@@ -1771,6 +1843,8 @@ function Sidebar({
   loaded,
   errors,
   onToggleLayer,
+  sourceFilter,
+  onToggleSource,
   additionalLayers,
 }: SidebarProps) {
   if (!open) {
@@ -1900,6 +1974,40 @@ function Sidebar({
                         </div>
                       )}
                     </button>
+                    {isActive && SOURCE_AWARE_FAMILIES.has(f.name) && (() => {
+                      const ss = SOURCE_STYLES[f.name]
+                      const sel = sourceFilter[f.name] ?? { iwxxm: true, tac: true }
+                      const SubBtn = ({ src, label, color }: { src: 'iwxxm' | 'tac'; label: string; color: string }) => {
+                        const on = sel[src]
+                        return (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); onToggleSource(f.name, src) }}
+                            title={`${label} — afficher/masquer`}
+                            className={`flex-1 flex items-center gap-1.5 px-2 py-1 rounded-md border text-[0.625rem] uppercase tracking-wider transition ${
+                              on
+                                ? 'border-slate-700 bg-slate-900/60 text-slate-200'
+                                : 'border-transparent text-slate-500 hover:bg-slate-900/30'
+                            }`}
+                          >
+                            <span
+                              className="size-2 rounded-full shrink-0"
+                              style={{
+                                backgroundColor: color,
+                                boxShadow: on ? `0 0 6px ${color}cc` : 'none',
+                                opacity: on ? 1 : 0.35,
+                              }}
+                            />
+                            <span>{label}</span>
+                          </button>
+                        )
+                      }
+                      return (
+                        <div className="mt-1 ml-5 flex gap-1">
+                          <SubBtn src="iwxxm" label="IWXXM" color={ss.iwxxm.color} />
+                          <SubBtn src="tac" label="TAC" color={ss.tac.color} />
+                        </div>
+                      )
+                    })()}
                   </li>
                 )
               })}
