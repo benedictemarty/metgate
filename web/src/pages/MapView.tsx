@@ -892,8 +892,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
   const isLoading = loading.size > 0 || windLoading || tropoLoading || qvacisLoading || cthLoading
 
   return (
-    <div className="relative h-[calc(100vh-72px)] w-full overflow-hidden"
-      style={{ cursor: isLoading ? 'wait' : undefined }}>
+    <div className="relative h-[calc(100vh-72px)] w-full overflow-hidden">
       <MapGL
         initialViewState={{ longitude: 6, latitude: 47, zoom: 4 }}
         mapStyle={theme === 'light' ? MAP_STYLE_LIGHT : MAP_STYLE_DARK}
@@ -901,7 +900,7 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
         attributionControl={{ compact: true }}
         interactiveLayerIds={interactiveLayerIds}
         onClick={handleMapClick}
-        cursor={isLoading ? 'wait' : interactiveLayerIds.length > 0 ? 'pointer' : 'grab'}
+        cursor={interactiveLayerIds.length > 0 ? 'pointer' : 'grab'}
       >
         <NavigationControl position="bottom-right" />
         <ScaleControl position="bottom-left" />
