@@ -441,10 +441,10 @@ export default function MapView({ data, theme = 'dark' }: MapViewProps) {
   useEffect(() => {
     try { window.localStorage.setItem('metgate.mapLanguage', mapLanguage) } catch { /* no-op */ }
   }, [mapLanguage])
-  const [windLoading, setWindLoading] = useState(false)
-  const [tropoLoading, setTropoLoading] = useState(false)
-  const [qvacisLoading, setQvacisLoading] = useState(false)
-  const [cthLoading, setCthLoading] = useState(false)
+  const [, setWindLoading] = useState(false)
+  const [, setTropoLoading] = useState(false)
+  const [, setQvacisLoading] = useState(false)
+  const [, setCthLoading] = useState(false)
 
   // Mode synchronisé : un slider maître pilote toutes les couches WCS actives.
   // Chaque WCS layer remonte ses timestamps via onTimesLoaded ; le master
