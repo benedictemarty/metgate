@@ -1526,6 +1526,34 @@ function TimeSlider({
 
 // Champs verbeux à exclure de l'affichage générique (UUIDs, ids techniques
 // MetGate, attributs déjà rendus en haut de la popup, etc.).
+// Aide contextuelle par champ : libellé court survolé pour expliquer un terme
+// technique au lecteur. Indexé par nom de propriété brut (avant fmtKey).
+const FIELD_HELP: Record<string, string> = {
+  // Foudre MTG-LI (EUMETSAT)
+  time:
+    "Instant exact de l'éclair (UTC). Précision sub-seconde côté capteur ; arrondie à la seconde dans le flux.",
+  radiance:
+    "Radiance optique mesurée par le détecteur (mW·m⁻²·sr⁻¹). Proportionnelle à l'énergie lumineuse du flash : valeurs élevées = éclair intense.",
+  duration:
+    "Durée du flash en millisecondes. Les éclairs nuage-sol durent typiquement 100-500 ms ; les flashs intra-nuageux sont souvent plus courts.",
+  confidence:
+    "Indice de confiance de la détection (0-1). 1 = quasi-certitude, valeurs basses = signal proche du seuil de bruit (peut être un faux positif).",
+  // Vent (sondage WCS)
+  windDirection_deg:
+    "Direction d'où vient le vent (convention météo, en degrés). 0/360 = nord, 90 = est, 180 = sud, 270 = ouest.",
+  windSpeed_kt: "Vitesse du vent en nœuds (1 kt ≈ 1.852 km/h ≈ 0.514 m/s).",
+  speed_ms: "Vitesse du vent en mètres par seconde.",
+  u_ms: "Composante zonale (est-ouest) du vent en m/s. Positif = vent vers l'est.",
+  v_ms: "Composante méridienne (nord-sud) du vent en m/s. Positif = vent vers le nord.",
+  level_hPa: "Niveau isobare du sondage (hectopascals). 850 hPa ≈ FL050, 500 hPa ≈ FL180, 250 hPa ≈ FL340.",
+  step_time: "Instant prévu du champ de vent restitué (UTC). Peut différer de l'instant du clic si interpolation temporelle.",
+  // Validités IWXXM
+  validitystarttime: "Début de la fenêtre de validité du bulletin (UTC).",
+  validityendtime: "Fin de la fenêtre de validité du bulletin (UTC).",
+  forecasttime: "Horizon de la prévision en minutes par rapport à l'analyse.",
+  issueTime: "Heure d'émission du message (UTC).",
+}
+
 const POPUP_EXCLUDE_KEYS = new Set([
   'locationIndicatorICAO',
   'observationTime',
@@ -1608,10 +1636,10 @@ function FeaturePopup({
   const headerTime =
     obsTime ?? (props.timeposition as string | undefined) ?? (props.analysistime as string | undefined)
 
-  const metarFields: Array<[string, string]> = []
+  const metarFields: Array<[string, string, string]> = [] // [label, value, rawKey]
   const pushMetar = (label: string, key: string, suffix = '') => {
     const v = props[key]
-    if (typeof v === 'string' && v !== '') metarFields.push([label, v + suffix])
+    if (typeof v === 'string' && v !== '') metarFields.push([label, v + suffix, key])
   }
   pushMetar('T', 'airTemperature_C', '°C')
   pushMetar('Td', 'dewpointTemperature_C', '°C')
@@ -1630,14 +1658,14 @@ function FeaturePopup({
     if (n >= 1000) return `${+(n / 1000).toFixed(1)} km`
     return `${Math.round(n)} m`
   })()
-  if (visiText) metarFields.push(['Visi', visiText])
+  if (visiText) metarFields.push(['Visi', visiText, 'visibility_m'])
 
   const cloudsDecoded = props.clouds as string | undefined
-  if (cloudsDecoded) metarFields.push(['Nuages', cloudsDecoded])
+  if (cloudsDecoded) metarFields.push(['Nuages', cloudsDecoded, 'clouds'])
 
   // Toutes les autres props scalaires non exclues, hors champs *_uom
   // (déjà concaténés à leur valeur principale).
-  const otherFields: Array<[string, string]> = []
+  const otherFields: Array<[string, string, string]> = [] // [label, value, rawKey]
   for (const [k, v] of Object.entries(props)) {
     if (POPUP_EXCLUDE_KEYS.has(k)) continue
     if (k.endsWith('_uom')) continue
@@ -1647,7 +1675,7 @@ function FeaturePopup({
     if (k === 'clouds' || k === 'cloud') continue
     if (typeof v === 'object') continue
     const s = fmtVal(v, k, props)
-    if (s !== '') otherFields.push([fmtKey(k), s])
+    if (s !== '') otherFields.push([fmtKey(k), s, k])
   }
 
   const s = styleFor(family)
@@ -1737,25 +1765,53 @@ function FeaturePopup({
 
       {metarFields.length > 0 && (
         <dl className="grid grid-cols-2 gap-x-3 gap-y-1 mt-2 text-[0.6875rem]">
-          {metarFields.map(([k, v]) => (
-            <div key={k} className="flex justify-between">
-              <dt className="text-slate-500">{k}</dt>
-              <dd className="text-slate-200 font-mono">{v}</dd>
-            </div>
-          ))}
+          {metarFields.map(([label, val, rawKey]) => {
+            const help = FIELD_HELP[rawKey]
+            return (
+              <div key={rawKey} className="flex justify-between">
+                <dt className="text-slate-500 flex items-center gap-1">
+                  {label}
+                  {help && (
+                    <span
+                      className="inline-flex items-center justify-center size-3 rounded-full bg-slate-800/80 border border-slate-700 text-[0.5rem] text-slate-400 cursor-help select-none"
+                      title={help}
+                      aria-label={help}
+                    >
+                      ?
+                    </span>
+                  )}
+                </dt>
+                <dd className="text-slate-200 font-mono">{val}</dd>
+              </div>
+            )
+          })}
         </dl>
       )}
 
       {otherFields.length > 0 && (
         <dl className="mt-2 text-[0.625rem] max-h-56 overflow-y-auto pr-1">
-          {otherFields.map(([k, v]) => (
-            <div key={k} className="flex justify-between gap-3 py-0.5 border-b border-slate-800/40 last:border-0">
-              <dt className="text-slate-500 shrink-0">{k}</dt>
-              <dd className="text-slate-200 font-mono text-right truncate" title={v}>
-                {v}
-              </dd>
-            </div>
-          ))}
+          {otherFields.map(([label, val, rawKey]) => {
+            const help = FIELD_HELP[rawKey]
+            return (
+              <div key={rawKey} className="flex justify-between gap-3 py-0.5 border-b border-slate-800/40 last:border-0">
+                <dt className="text-slate-500 shrink-0 flex items-center gap-1">
+                  {label}
+                  {help && (
+                    <span
+                      className="inline-flex items-center justify-center size-3 rounded-full bg-slate-800/80 border border-slate-700 text-[0.5rem] text-slate-400 cursor-help select-none"
+                      title={help}
+                      aria-label={help}
+                    >
+                      ?
+                    </span>
+                  )}
+                </dt>
+                <dd className="text-slate-200 font-mono text-right truncate" title={val}>
+                  {val}
+                </dd>
+              </div>
+            )
+          })}
         </dl>
       )}
 
