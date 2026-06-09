@@ -1,0 +1,107 @@
+# Manifest K8s minimal pour MetGate.
+# Usage :
+#   1) Créer le Secret avec le token MetGate (jamais committé) :
+#      kubectl create secret generic metgate-secret \
+#        --from-literal=METGATE_TOKEN='xxxxx' \
+#        --from-literal=OPENSKY_CLIENT_ID='' \
+#        --from-literal=OPENSKY_CLIENT_SECRET=''
+#   2) Appliquer :
+#      kubectl apply -f deploy/k8s/metgate.yaml
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metgate
+  labels:
+    app: metgate
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: metgate
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: metgate
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: portal
+          image: ghcr.io/benedictemarty/metgate:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: PORT
+              value: "8080"
+            - name: METGATE_BASE_URL
+              value: "https://metgate-mf.meteo.fr"
+            - name: METGATE_CACHE_TTL_SECONDS
+              value: "60"
+            - name: METGATE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: metgate-secret
+                  key: METGATE_TOKEN
+            - name: OPENSKY_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: metgate-secret
+                  key: OPENSKY_CLIENT_ID
+                  optional: true
+            - name: OPENSKY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: metgate-secret
+                  key: OPENSKY_CLIENT_SECRET
+                  optional: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: metgate
+  labels:
+    app: metgate
+spec:
+  type: ClusterIP
+  selector:
+    app: metgate
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
