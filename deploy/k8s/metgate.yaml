@@ -1,10 +1,14 @@
 # Manifest K8s minimal pour MetGate.
 # Usage :
-#   1) Créer le Secret avec le token MetGate (jamais committé) :
+#   1) Créer le Secret avec les tokens (jamais committé) :
 #      kubectl create secret generic metgate-secret \
 #        --from-literal=METGATE_TOKEN='xxxxx' \
+#        --from-literal=EUMETSAT_CONSUMER_KEY='xxxxx' \
+#        --from-literal=EUMETSAT_CONSUMER_SECRET='xxxxx' \
 #        --from-literal=OPENSKY_CLIENT_ID='' \
 #        --from-literal=OPENSKY_CLIENT_SECRET=''
+#      Les clés OPENSKY_* et EUMETSAT_* sont optionnelles : si absentes les
+#      endpoints associés renvoient 503 (comportement volontaire).
 #   2) Appliquer :
 #      kubectl apply -f deploy/k8s/metgate.yaml
 ---
@@ -54,6 +58,18 @@ spec:
                 secretKeyRef:
                   name: metgate-secret
                   key: METGATE_TOKEN
+            - name: EUMETSAT_CONSUMER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: metgate-secret
+                  key: EUMETSAT_CONSUMER_KEY
+                  optional: true
+            - name: EUMETSAT_CONSUMER_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: metgate-secret
+                  key: EUMETSAT_CONSUMER_SECRET
+                  optional: true
             - name: OPENSKY_CLIENT_ID
               valueFrom:
                 secretKeyRef:
