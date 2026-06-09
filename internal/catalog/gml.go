@@ -489,6 +489,19 @@ func enrichFromIWXXM(props map[string]any, opmet string) {
 		return
 	}
 
+	// À partir d'ici on est sur la branche METAR/SPECI : on n'y rentre que si
+	// le message est explicitement un de ces deux types. Sans cette garde, les
+	// IWXXM non gérés (VolcanicAshAdvisory, TropicalCycloneAdvisory,
+	// SpaceWeatherAdvisory…) tomberaient ici et hériteraient à tort du libellé
+	// « Observation régulière (METAR) ».
+	isMETARorSPECI := strings.Contains(opmet, "<iwxxm:METAR") ||
+		strings.Contains(opmet, "<iwxxm:SPECI") ||
+		strings.Contains(opmet, ":METAR ") ||
+		strings.Contains(opmet, ":SPECI ")
+	if !isMETARorSPECI {
+		return
+	}
+
 	get := func(rx *regexp.Regexp) (val, uom string) {
 		m := rx.FindStringSubmatch(opmet)
 		if len(m) >= 3 {
