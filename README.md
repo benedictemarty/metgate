@@ -85,70 +85,208 @@ Le frontend est embarqué dans le binaire via `go:embed` — **un seul fichier �
 
 ## Installation
 
-Trois voies possibles, par ordre de simplicité : **Docker** → **Kubernetes** → **build source**.
+L'installation se fait en **4 étapes** : récupérer les credentials → choisir un mode de déploiement → démarrer le service → valider.
+
+### Étape 1 — Obtenir les credentials
+
+Toutes les valeurs ci-dessous se mettent dans un fichier `.env` (ou un Secret Kubernetes selon le mode choisi). Le fichier `.env.example` du repo liste l'intégralité des variables avec leur commentaire.
+
+| Source | Comment l'obtenir | Indispensable ? |
+|---|---|---|
+| **MetGate** (Météo-France) | Demander un token applicatif au gestionnaire MetGate (`metgate.meteo.fr`). Deux environnements : `https://metgate-int.meteo.fr` (intégration / dev) et `https://metgate-mf.meteo.fr` (PROD). | ✅ Oui |
+| **EUMETSAT** | Créer un compte sur [eoportal.eumetsat.int](https://eoportal.eumetsat.int) → *My Profile* → *API Key* → générer un couple `consumer_key` / `consumer_secret`. | ⚠️ Optionnel — sans, `/api/lightning`, `/api/cloudtop`, `/api/satellite/tile` renvoient 503. |
+| **OpenSky Network** | Compte gratuit sur [opensky-network.org](https://opensky-network.org) → *Personal Account Settings* → *Download credentials* (JSON `{clientId, clientSecret}`). | ⚠️ Optionnel — sans, `/api/aircraft/*` renvoie 503. |
+
+> ⚠️ **Sécurité** : `chmod 600 .env` systématiquement. En K8s, utiliser un Secret (ou mieux : Sealed Secrets / External Secrets Operator).
+
+### Étape 2 — Choisir le mode de déploiement
+
+| Mode | Quand l'utiliser | Effort |
+|---|---|---|
+| **A. Docker** | Serveur unique, VM, Raspberry Pi, démo locale. C'est la voie recommandée par défaut. | 5 min |
+| **B. Kubernetes** | Cluster existant, plusieurs replicas, exposition Internet avec TLS / auth en frontal. | 10 min |
+| **C. Build source** | Dev local avec hot reload, modification du code, tests, contribution. | 10 min + dépendances Go/Node |
+
+---
 
 ### A. Docker (recommandé)
 
-Image multi-stage distroless (~32 MB, user 65532 non-root) publiée sur GHCR à chaque tag :
+Image multi-stage distroless publiée sur GHCR à chaque tag : **~32 MB**, user `nonroot` (uid 65532), pas de shell, base pinée par digest, scan Trivy CVE en CI.
 
 ```bash
-# 1) Préparer le fichier de configuration
+# 2.A.1 — Préparer le fichier de configuration
 curl -O https://raw.githubusercontent.com/benedictemarty/metgate/main/.env.example
-mv .env.example .env && $EDITOR .env
-chmod 600 .env
+mv .env.example .env
+$EDITOR .env                            # remplir METGATE_TOKEN, EUMETSAT_*, OPENSKY_*
+chmod 600 .env                          # ⚠️ contient des secrets
 
-# 2) Lancer
+# 2.A.2 — Lancer le conteneur
 docker run -d --name metgate \
   --env-file .env \
   -p 8080:8080 \
-  --read-only --tmpfs /tmp \
+  --restart unless-stopped \
+  --read-only --tmpfs /tmp:size=64m \
   --security-opt no-new-privileges \
+  --cap-drop ALL \
   ghcr.io/benedictemarty/metgate:latest
-
-# 3) Vérifier
-curl http://localhost:8080/healthz
 ```
 
-Tags disponibles : `latest`, `vX.Y.Z`, `X.Y`, `X`, `sha-<short>`.
-Build local possible : `docker build -t metgate:dev .`
+**Tags disponibles** : `latest` (HEAD de `main`), `vX.Y.Z` (release sémantique), `X.Y`, `X`, `sha-<short>` (commit GitHub).
+**Build local** (sans pull GHCR) : `docker build -t metgate:dev . && docker run … metgate:dev`.
+
+**Options recommandées** :
+- `--read-only --tmpfs /tmp` : rootfs immuable, seul `/tmp` accessible en écriture en mémoire.
+- `--security-opt no-new-privileges` : impossibilité de gagner des privilèges au runtime.
+- `--cap-drop ALL` : aucune capability Linux conservée.
+- `--restart unless-stopped` : redémarrage auto sauf arrêt manuel.
+
+**Docker Compose équivalent** (si tu préfères) :
+
+```yaml
+services:
+  metgate:
+    image: ghcr.io/benedictemarty/metgate:latest
+    env_file: .env
+    ports: ["8080:8080"]
+    read_only: true
+    tmpfs: ["/tmp:size=64m"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped
+```
+
+---
 
 ### B. Kubernetes
 
-Manifest minimal fourni dans `deploy/k8s/metgate.yaml` (Deployment 2 replicas + Service ClusterIP, securityContext durci : `runAsNonRoot`, `readOnlyRootFilesystem`, `drop ALL` capabilities, seccomp `RuntimeDefault`).
+Manifest minimal fourni dans `deploy/k8s/metgate.yaml` : Deployment 2 replicas + Service ClusterIP. SecurityContext durci : `runAsNonRoot` (uid 65532), `readOnlyRootFilesystem`, `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`, `seccompProfile: RuntimeDefault`. Probes HTTP `/healthz` (readiness 10 s, liveness 30 s), requests modestes (50m CPU / 64 Mi).
 
 ```bash
-# 1) Créer le Secret (jamais committé)
+# 2.B.1 — Créer le Secret (JAMAIS committé)
 kubectl create secret generic metgate-secret \
-  --from-literal=METGATE_TOKEN='xxxxx' \
-  --from-literal=EUMETSAT_CONSUMER_KEY='xxxxx' \
-  --from-literal=EUMETSAT_CONSUMER_SECRET='xxxxx' \
-  --from-literal=OPENSKY_CLIENT_ID='' \
-  --from-literal=OPENSKY_CLIENT_SECRET=''
+  --from-literal=METGATE_TOKEN='votre-token-metgate' \
+  --from-literal=EUMETSAT_CONSUMER_KEY='votre-key' \
+  --from-literal=EUMETSAT_CONSUMER_SECRET='votre-secret' \
+  --from-literal=OPENSKY_CLIENT_ID='votre-client-id' \
+  --from-literal=OPENSKY_CLIENT_SECRET='votre-client-secret'
 
-# 2) Appliquer
+# 2.B.2 — Appliquer le manifest
 kubectl apply -f deploy/k8s/metgate.yaml
 
-# 3) Vérifier
+# 2.B.3 — Vérifier
 kubectl get pods -l app=metgate
-kubectl port-forward svc/metgate 8080:80
+kubectl logs -l app=metgate --tail=20
 ```
 
-Pour exposer sur Internet : ajouter un Ingress + cert-manager (TLS) + auth en frontal (oauth2-proxy, Authelia, etc.) — le portail **n'a pas d'auth applicative à ce stade**.
+**Pour modifier le namespace, l'image ou les replicas** : éditer `deploy/k8s/metgate.yaml` (champ `metadata.namespace`, `spec.template.spec.containers[0].image`, `spec.replicas`).
+
+**Pour exposer publiquement** (non inclus dans le manifest, à ajouter selon ton stack) :
+1. **Ingress** + **cert-manager** pour TLS Let's Encrypt.
+2. **oauth2-proxy** / **Authelia** / **Pomerium** en frontal — ⚠️ **le portail n'a pas d'auth applicative**, ne pas exposer sans rideau.
+3. **NetworkPolicy** egress restreinte aux IPs MetGate / OpenSky / EUMETSAT.
+
+Exemple snippet Ingress nginx + cert-manager (à adapter, non fourni par défaut) :
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: metgate
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/auth-url: "https://oauth2-proxy.example.com/oauth2/auth"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [metgate.example.com]
+      secretName: metgate-tls
+  rules:
+    - host: metgate.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: metgate
+                port: { number: 80 }
+```
+
+---
 
 ### C. Build source
 
+À utiliser pour le développement, la modification du code ou la contribution.
+
 ```bash
+# 2.C.1 — Cloner et configurer
 git clone https://github.com/benedictemarty/metgate
 cd metgate
+cp .env.example .env
+$EDITOR .env && chmod 600 .env
 
-cp .env.example .env && $EDITOR .env && chmod 600 .env
+# 2.C.2 — Dépendances frontend (lockfile committé : utiliser ci pour install reproductible)
+cd web && npm ci && cd ..
 
-cd web && npm install && cd ..
-make build              # frontend → embed → binaire ./bin/portal
+# 2.C.3 — Build complet (frontend → dist embarqué dans le binaire Go)
+make build              # produit ./bin/portal (~32 MB, statique, CGO=0)
 ./bin/portal
 ```
 
-Ouvrir [http://localhost:8080](http://localhost:8080).
+**Hot-reload pour le dev frontend** (2 terminaux) :
+
+```bash
+# Terminal 1 — backend Go
+make run                # :8080
+
+# Terminal 2 — Vite avec proxy /api → :8080
+make web-dev            # :5173
+```
+
+Ouvrir [http://localhost:5173](http://localhost:5173) (dev) ou [http://localhost:8080](http://localhost:8080) (prod).
+
+---
+
+### Étape 3 — Vérifier que ça tourne
+
+```bash
+# Sonde santé (toujours 200 si le binaire démarre)
+curl http://localhost:8080/healthz
+# → {"status":"ok"}
+
+# Vérifier la connexion à MetGate (token + base URL OK ?)
+curl 'http://localhost:8080/api/products' | jq '.[0]'
+
+# Vérifier EUMETSAT (si configuré)
+curl -I 'http://localhost:8080/api/cloudtop?bbox=-10,40,15,55&minfl=200'
+# → 200 OK si EUMETSAT_CONSUMER_KEY/SECRET valides
+# → 503 si clés absentes ou invalides
+
+# Vérifier OpenSky (si configuré)
+curl 'http://localhost:8080/api/aircraft/search?q=AFR'
+# → 200 OK si OAuth OpenSky OK ; 503 sinon
+```
+
+**Logs structurés** (slog JSON) à surveiller :
+
+| Niveau / message | Signification |
+|---|---|
+| `INFO eumetsat MTG: désactivé (clés absentes…)` | `EUMETSAT_CONSUMER_KEY/SECRET` vides — endpoints CTH / foudre / sat HS, normal en dev. |
+| `INFO opensky: désactivé (credentials absents)` | `OPENSKY_*` vides — endpoints `/api/aircraft/*` HS, normal en dev. |
+| `ERROR METGATE_BASE_URL et METGATE_TOKEN doivent être définis` | `.env` non chargé ou variables vides — vérifier `--env-file` ou le Secret. |
+| `WARN impossible de lire .env` | Mode Docker / K8s : normal (pas de fichier `.env` dans l'image, tout passe par les variables). |
+
+### Étape 4 — Dépannage
+
+| Symptôme | Cause probable | Action |
+|---|---|---|
+| `503 metgate WFS GetFeature` | Token MetGate invalide, expiré ou environnement faux (`int` vs `mf`). | Vérifier `METGATE_TOKEN` et `METGATE_BASE_URL`. |
+| `503 lightning indisponible` / `503 cloudtop indisponible` | `EUMETSAT_CONSUMER_KEY/SECRET` absents ou révoqués. | Régénérer les clés sur eoportal, mettre à jour Secret / `.env`, redémarrer le pod / conteneur. |
+| Carte vide, pas de POI | CORS / Content Security Policy bloqué par un reverse proxy. | Vérifier que le proxy laisse passer `application/geo+json` et `image/png`. |
+| Pod K8s en `CrashLoopBackOff` | Secret manquant ou nom de clé incorrect. | `kubectl describe pod -l app=metgate` puis `kubectl logs`. |
+| Conteneur Docker s'arrête tout de suite | `.env` non monté ou variables manquantes. | `docker logs metgate` : doit afficher l'erreur `METGATE_BASE_URL et METGATE_TOKEN doivent être définis`. |
+| Premier appel `/api/lightning` lent (~30 s) | Téléchargement du NetCDF MTG-LI initial chez EUMETSAT, comportement normal. | Le 2e appel passe par le cache (latence < 100 ms). |
+| Trace ADS-B disparaît au restart | Le buffer `history` est en mémoire (cf. CLAUDE.md). | Comportement attendu, persistance non implémentée. |
 
 ---
 
