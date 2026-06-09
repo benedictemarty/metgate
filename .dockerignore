@@ -1,0 +1,32 @@
+# Secrets — JAMAIS dans l'image
+.env
+.env.*
+!.env.example
+
+# Build artefacts (rebuild dans l'image)
+bin/
+portal
+web/node_modules/
+web/dist/
+internal/web/dist/*
+!internal/web/dist/.gitkeep
+
+# VCS / éditeurs / OS
+.git
+.github
+.gitignore
+.vscode
+.idea
+*.swp
+.DS_Store
+
+# Docs / scratch
+*.md
+!CLAUDE.md
+fir_world.kml
+api/openapi.json
+
+# Tests / coverage
+*.test
+*.out
+coverage.out
