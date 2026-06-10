@@ -41,7 +41,9 @@ spec:
           type: RuntimeDefault
       containers:
         - name: portal
-          image: ghcr.io/benedictemarty/metgate:latest
+          # Bumper la version explicitement plutôt que :latest (reproductibilité,
+          # rollback simple via kubectl rollout undo).
+          image: ghcr.io/benedictemarty/metgate:0.1.2
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
