@@ -1,0 +1,54 @@
+name: ✨ Évolution / nouvelle fonctionnalité
+description: Proposer une amélioration ou un nouveau produit MetGate / EUMETSAT
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Merci pour ta proposition ! Pense à vérifier les [issues existantes](https://github.com/benedictemarty/metgate/issues?q=is%3Aissue) et la [roadmap](https://github.com/benedictemarty/metgate/discussions) avant.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problème / besoin
+      description: Quel manque ou quelle douleur cherches-tu à résoudre ?
+      placeholder: "Les contrôleurs en région tropicale n'ont pas de visualisation des cyclones tropicaux..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Solution proposée
+      description: Décris la fonctionnalité telle que tu l'imagines.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives envisagées
+      description: Autres approches possibles, raisons de les écarter (optionnel).
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Périmètre
+      options:
+        - Nouveau produit MetGate (WFS / WCS / RAW)
+        - Nouveau produit EUMETSAT (Data Store / EUMETView)
+        - Suivi ADS-B / OpenSky
+        - UI carte (MapView)
+        - Vue 3D Tower / NavDisplay / RouteProfile
+        - Auth / multi-utilisateurs
+        - Déploiement / CI / image Docker
+        - Documentation / DX
+        - Autre
+    validations:
+      required: true
+
+  - type: textarea
+    id: refs
+    attributes:
+      label: Références
+      description: Liens documentation, spec OpenAPI, dataset, captures, etc.

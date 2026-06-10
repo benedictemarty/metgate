@@ -1,0 +1,99 @@
+name: 🐛 Bug
+description: Signaler un dysfonctionnement reproductible
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Merci de prendre le temps de remplir ce rapport. Avant de continuer :
+        - Vérifie qu'une [issue similaire](https://github.com/benedictemarty/metgate/issues?q=is%3Aissue) n'existe pas déjà.
+        - Pour une **faille de sécurité**, ouvre plutôt un [Security Advisory privé](https://github.com/benedictemarty/metgate/security/advisories/new), pas un bug public.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: Ce qui se passe
+      description: Décris le comportement observé.
+      placeholder: "Quand je clique sur un SIGMET, la popup reste vide."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Ce qui devrait se passer
+      description: Décris le comportement attendu.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Étapes pour reproduire
+      placeholder: |
+        1. Lancer ./bin/portal avec METGATE_BASE_URL=https://metgate-int.meteo.fr
+        2. Ouvrir http://localhost:8080
+        3. Activer la couche SIGMET
+        4. Cliquer sur le polygone EBBU
+        5. La popup affiche "—" au lieu du TAC
+    validations:
+      required: true
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Composant concerné
+      options:
+        - Backend Go (catalog / WCS / WFS)
+        - Backend Go (aircraft / OpenSky)
+        - Backend Go (eumetsat / lightning / satellite)
+        - Frontend (carte MapView / overlays)
+        - Frontend (Tour 3D / NavDisplay / RouteProfile)
+        - Frontend (Catalog / ATCView)
+        - Docker / image / CI
+        - Manifest K8s
+        - Documentation
+        - Autre / inconnu
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Tag, commit SHA, ou `docker inspect ... --format '{{index .Config.Labels "org.opencontainers.image.version"}}'`
+      placeholder: "0.1.2 / sha-86f0eef"
+    validations:
+      required: true
+
+  - type: textarea
+    id: env
+    attributes:
+      label: Environnement
+      placeholder: |
+        - Mode : Docker / K8s / binaire systemd / build source
+        - OS hôte : Debian 12 / Ubuntu 24.04 / ...
+        - Navigateur (si frontend) : Firefox 130 / Chrome 142 / ...
+        - Env MetGate : INT / PROD
+        - EUMETSAT / OpenSky : activés ? oui / non
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / captures
+      description: |
+        Coller les logs slog pertinents (`docker logs metgate` / `kubectl logs`), erreurs console navigateur, captures d'écran.
+        ⚠️ **Masquer tout token, clé API, URL contenant un token avant de coller.**
+      render: shell
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Checklist
+      options:
+        - label: J'ai vérifié qu'aucune issue similaire n'existe déjà.
+          required: true
+        - label: Mes logs ne contiennent ni token MetGate, ni clé EUMETSAT, ni credentials OpenSky.
+          required: true

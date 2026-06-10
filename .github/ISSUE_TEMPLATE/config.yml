@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Discussion / question d'usage
+    url: https://github.com/benedictemarty/metgate/discussions
+    about: Pour les questions d'utilisation, idées en cours d'incubation ou retours d'expérience.
+  - name: 🔐 Faille de sécurité (privée)
+    url: https://github.com/benedictemarty/metgate/security/advisories/new
+    about: Ne PAS ouvrir d'issue publique. Utilise les Security Advisories ou bmarty@mailo.com.
