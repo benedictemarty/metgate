@@ -5,6 +5,10 @@ Versionnage : [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+---
+
+## [0.4.0] — 2026-06-11 — Sprint « Proxy sortant »
+
 ### Added
 
 - **Proxy sortant pour les flux extérieurs** (`internal/httpx/`) : tous les
