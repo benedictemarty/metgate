@@ -18,6 +18,7 @@ import (
 	"github.com/bmarty/metgate/internal/airports"
 	"github.com/bmarty/metgate/internal/catalog"
 	httpapi "github.com/bmarty/metgate/internal/http"
+	"github.com/bmarty/metgate/internal/httpx"
 	"github.com/bmarty/metgate/internal/cloudtop"
 	"github.com/bmarty/metgate/internal/eumetsat"
 	"github.com/bmarty/metgate/internal/lightning"
@@ -33,6 +34,11 @@ func main() {
 	if err := loadDotenv(".env"); err != nil {
 		slog.Warn("impossible de lire .env", "err", err)
 	}
+
+	// Proxy sortant (OUTBOUND_PROXY_URL / HTTP_PROXY / NO_PROXY…) : la config
+	// est lue de l'environnement au premier client construit ; on logge ici la
+	// configuration effective, après chargement du .env.
+	httpx.LogConfig()
 
 	baseURL := os.Getenv("METGATE_BASE_URL")
 	token := os.Getenv("METGATE_TOKEN")

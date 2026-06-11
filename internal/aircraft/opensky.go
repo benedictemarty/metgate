@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/bmarty/metgate/internal/httpx"
 )
 
 // State est un état ADS-B aplati pour un avion. Convention :
@@ -68,13 +70,13 @@ type Client struct {
 
 func New(user, pass, clientID, clientSecret string) *Client {
 	return &Client{
-		baseURL:      "https://opensky-network.org",
-		authURL:      "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token",
+		baseURL:      httpx.EnvOr("OPENSKY_BASE_URL", "https://opensky-network.org"),
+		authURL:      httpx.EnvOr("OPENSKY_AUTH_URL", "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"),
 		user:         user,
 		pass:         pass,
 		clientID:     clientID,
 		clientSecret: clientSecret,
-		http:         &http.Client{Timeout: 30 * time.Second},
+		http:         httpx.NewClient(30 * time.Second),
 	}
 }
 

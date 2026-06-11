@@ -140,20 +140,12 @@ docker run -d --name metgate \
 - `--cap-drop ALL` : aucune capability Linux conservée.
 - `--restart unless-stopped` : redémarrage auto sauf arrêt manuel.
 
-**Docker Compose équivalent** (si tu préfères) :
-
-```yaml
-services:
-  metgate:
-    image: ghcr.io/benedictemarty/metgate:latest
-    env_file: .env
-    ports: ["8080:8080"]
-    read_only: true
-    tmpfs: ["/tmp:size=64m"]
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    restart: unless-stopped
-```
+**Docker Compose équivalent** (si tu préfères) : un `docker-compose.yml` prêt à
+l'emploi est fourni à la racine du repo — `docker compose up -d`. Il charge le
+`.env` et expose en `${VAR:-défaut}` les URLs des services extérieurs (MetGate,
+OpenSky, adsb.fi, EUMETSAT, EUMETView) ainsi que la configuration du proxy
+sortant (`OUTBOUND_PROXY_URL`, `NO_PROXY`, `OUTBOUND_CA_FILE`), pour pointer un
+miroir interne ou traverser un proxy d'entreprise sans rebuild.
 
 ---
 

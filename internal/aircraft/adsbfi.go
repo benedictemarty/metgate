@@ -9,11 +9,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/bmarty/metgate/internal/httpx"
 )
 
 // AdsbFiClient interroge api.adsb.fi — libre, sans compte requis.
 // Les positions ont ~15 s de latence par rapport au broadcast ADS-B brut.
 type AdsbFiClient struct {
+	baseURL  string
 	http     *http.Client
 	mu       sync.Mutex
 	cache    map[string]adsbCacheEntry
@@ -27,7 +30,8 @@ type adsbCacheEntry struct {
 
 func NewAdsbFi() *AdsbFiClient {
 	return &AdsbFiClient{
-		http:     &http.Client{Timeout: 15 * time.Second},
+		baseURL:  httpx.EnvOr("ADSBFI_BASE_URL", "https://api.adsb.fi"),
+		http:     httpx.NewClient(15 * time.Second),
 		cache:    make(map[string]adsbCacheEntry),
 		cacheTTL: 10 * time.Second,
 	}
@@ -46,7 +50,7 @@ func (c *AdsbFiClient) Nearby(ctx context.Context, lat, lon, rangeNm float64) ([
 	}
 	c.mu.Unlock()
 
-	u := fmt.Sprintf("https://api.adsb.fi/v1/lat/%.4f/lon/%.4f/dist/%.0f", lat, lon, rangeNm)
+	u := fmt.Sprintf("%s/v1/lat/%.4f/lon/%.4f/dist/%.0f", c.baseURL, lat, lon, rangeNm)
 	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
 		return nil, err

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/bmarty/metgate/internal/httpx"
 )
 
 type Client struct {
@@ -20,7 +22,7 @@ func New(baseURL, token string) *Client {
 	return &Client{
 		baseURL: baseURL,
 		token:   token,
-		http:    &http.Client{Timeout: 90 * time.Second},
+		http:    httpx.NewClient(90 * time.Second),
 	}
 }
 

@@ -18,6 +18,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/bmarty/metgate/internal/httpx"
 )
 
 // tileTimeout : délai max pour obtenir une tuile EUMETView. Doit être
@@ -34,7 +36,6 @@ var transparentPNG = func() []byte {
 }()
 
 const (
-	wmsURL  = "https://view.eumetsat.int/geoserver/wms"
 	mercMax = 20037508.342789244
 	tilePx  = 256
 )
@@ -54,6 +55,7 @@ var allowedLayers = map[string]bool{
 }
 
 type Proxy struct {
+	wmsURL     string
 	httpClient *http.Client
 
 	// Cache simple (layer+time+z/x/y) -> bytes PNG, TTL court.
@@ -68,7 +70,8 @@ type cacheEntry struct {
 
 func NewProxy() *Proxy {
 	return &Proxy{
-		httpClient: &http.Client{Timeout: 60 * time.Second},
+		wmsURL:     httpx.EnvOr("EUMETVIEW_WMS_URL", "https://view.eumetsat.int/geoserver/wms"),
+		httpClient: httpx.NewClient(60 * time.Second),
 		cache:      map[string]cacheEntry{},
 	}
 }
@@ -130,7 +133,7 @@ func (p *Proxy) HandleTile(w http.ResponseWriter, r *http.Request) {
 	// on renvoie une tuile transparente plutôt que de laisser nginx couper.
 	tileCtx, tileCancel := context.WithTimeout(context.Background(), tileTimeout)
 	defer tileCancel()
-	req, err := http.NewRequestWithContext(tileCtx, http.MethodGet, wmsURL+"?"+wmsQ.Encode(), nil)
+	req, err := http.NewRequestWithContext(tileCtx, http.MethodGet, p.wmsURL+"?"+wmsQ.Encode(), nil)
 	if err != nil {
 		w.Header().Set("Content-Type", "image/png")
 		_, _ = w.Write(transparentPNG)

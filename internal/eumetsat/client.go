@@ -16,12 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
-)
 
-const (
-	tokenURL     = "https://api.eumetsat.int/token"
-	searchURL    = "https://api.eumetsat.int/data/search-products/os"
-	downloadBase = "https://api.eumetsat.int/data/download/1.0.0/collections"
+	"github.com/bmarty/metgate/internal/httpx"
 )
 
 type Client struct {
@@ -29,16 +25,24 @@ type Client struct {
 	consumerSecret string
 	httpClient     *http.Client
 
+	tokenURL     string
+	searchURL    string
+	downloadBase string
+
 	mu       sync.Mutex
 	token    string
 	tokenExp time.Time
 }
 
 func New(consumerKey, consumerSecret string) *Client {
+	base := httpx.EnvOr("EUMETSAT_API_BASE_URL", "https://api.eumetsat.int")
 	return &Client{
 		consumerKey:    consumerKey,
 		consumerSecret: consumerSecret,
-		httpClient:     &http.Client{Timeout: 5 * time.Minute},
+		httpClient:     httpx.NewClient(5 * time.Minute),
+		tokenURL:       base + "/token",
+		searchURL:      base + "/data/search-products/os",
+		downloadBase:   base + "/data/download/1.0.0/collections",
 	}
 }
 
@@ -52,7 +56,7 @@ func (c *Client) Token(ctx context.Context) (string, error) {
 	if c.token != "" && time.Now().Before(c.tokenExp.Add(-30*time.Second)) {
 		return c.token, nil
 	}
-	req, err := http.NewRequestWithContext(ctx, "POST", tokenURL,
+	req, err := http.NewRequestWithContext(ctx, "POST", c.tokenURL,
 		strings.NewReader("grant_type=client_credentials"))
 	if err != nil {
 		return "", err
@@ -93,7 +97,7 @@ func (c *Client) LatestProduct(ctx context.Context, collection string) (id, dlUR
 	q.Set("pi", collection)
 	q.Set("si", "0")
 	q.Set("c", "1")
-	req, err := http.NewRequestWithContext(ctx, "GET", searchURL+"?"+q.Encode(), nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", c.searchURL+"?"+q.Encode(), nil)
 	if err != nil {
 		return "", "", err
 	}
@@ -139,7 +143,7 @@ func (c *Client) LatestProduct(ctx context.Context, collection string) (id, dlUR
 		}
 	}
 	if dlURL == "" {
-		dlURL = downloadBase + "/" + url.PathEscape(collection) + "/products/" + url.PathEscape(id)
+		dlURL = c.downloadBase + "/" + url.PathEscape(collection) + "/products/" + url.PathEscape(id)
 	}
 	return id, dlURL, nil
 }

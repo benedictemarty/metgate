@@ -1,0 +1,31 @@
+# Docker Compose — portail MetGate.
+#
+# Les secrets et la config viennent du fichier .env (cf .env.example, chmod 600).
+# Les URLs des services extérieurs sont surchargables ici (ou dans .env) :
+# la syntaxe ${VAR:-défaut} prend la valeur du .env si présente, sinon le
+# défaut public. Utile pour pointer un miroir interne ou un bouchon de test.
+services:
+  metgate:
+    image: ghcr.io/benedictemarty/metgate:latest
+    env_file: .env
+    environment:
+      # MetGate (Météo-France) — INT par défaut, mettre metgate-mf.meteo.fr en PROD
+      METGATE_BASE_URL: ${METGATE_BASE_URL:-https://metgate-int.meteo.fr}
+      # Suivi ADS-B
+      OPENSKY_BASE_URL: ${OPENSKY_BASE_URL:-https://opensky-network.org}
+      OPENSKY_AUTH_URL: ${OPENSKY_AUTH_URL:-https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token}
+      ADSBFI_BASE_URL: ${ADSBFI_BASE_URL:-https://api.adsb.fi}
+      # EUMETSAT (foudre LI, cloud top CTTH) et EUMETView (tuiles WMS satellite)
+      EUMETSAT_API_BASE_URL: ${EUMETSAT_API_BASE_URL:-https://api.eumetsat.int}
+      EUMETVIEW_WMS_URL: ${EUMETVIEW_WMS_URL:-https://view.eumetsat.int/geoserver/wms}
+      # Proxy sortant d'entreprise (vide = accès direct)
+      OUTBOUND_PROXY_URL: ${OUTBOUND_PROXY_URL:-}
+      NO_PROXY: ${NO_PROXY:-}
+      OUTBOUND_CA_FILE: ${OUTBOUND_CA_FILE:-}
+      OUTBOUND_TLS_INSECURE: ${OUTBOUND_TLS_INSECURE:-}
+    ports: ["8080:8080"]
+    read_only: true
+    tmpfs: ["/tmp:size=64m"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    restart: unless-stopped

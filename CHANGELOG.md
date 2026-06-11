@@ -5,6 +5,28 @@ Versionnage : [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Proxy sortant pour les flux extérieurs** (`internal/httpx/`) : tous les
+  clients HTTP du backend (MetGate, OpenSky, adsb.fi, EUMETSAT, EUMETView WMS)
+  partagent désormais un transport commun configurable par environnement —
+  `OUTBOUND_PROXY_URL` (http/https/socks5, prioritaire), variables standard
+  `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` (exact, suffixe `.domaine`, `*`),
+  `OUTBOUND_CA_FILE` (CA d'un proxy TLS interceptant), `OUTBOUND_TLS_INSECURE=1`
+  (dernier recours, loggé en Warn). Configuration effective loggée au démarrage,
+  credentials masqués. Une `OUTBOUND_PROXY_URL` invalide fait échouer les
+  requêtes sortantes avec une erreur explicite (pas de fallback silencieux).
+  Tests unitaires + test e2e de routage via proxy (`httptest`).
+- **URLs des services extérieurs externalisées** : `OPENSKY_BASE_URL`,
+  `OPENSKY_AUTH_URL`, `ADSBFI_BASE_URL`, `EUMETSAT_API_BASE_URL`,
+  `EUMETVIEW_WMS_URL` surchargables via `.env` (défauts publics codés dans le
+  binaire, slash final toléré). Permet miroir interne ou bouchon de test sans
+  rebuild.
+- **`docker-compose.yml` à la racine** : charge le `.env`, expose toutes les
+  URLs extérieures et la config proxy en `${VAR:-défaut}` ; remplace le
+  snippet YAML inline du README. Options durcies conservées (read_only,
+  cap_drop ALL, no-new-privileges, tmpfs /tmp).
+
 ---
 
 ## [0.3.0] — 2026-05-22 — Sprint « Filtrage OGC + FIR »
