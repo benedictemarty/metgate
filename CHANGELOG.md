@@ -5,6 +5,10 @@ Versionnage : [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+---
+
+## [0.5.0] — 2026-06-11 — Sprint « ATC Radar + déploiement »
+
 ### Added
 
 - **feat(web)** : vue **ATC Radar** (`ATCView.tsx`) — fond carto dark, couche
@@ -16,8 +20,8 @@ Versionnage : [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **deploy(k8s)** : image pinnée `0.1.2` → `0.4.0` (proxy sortant + URLs
-  configurables disponibles en cluster).
+- **deploy(k8s)** : image pinnée `0.1.2` → `0.4.0` puis `0.5.0` (proxy
+  sortant + URLs configurables disponibles en cluster).
 - **ci(release)** : bump des actions vers les majeures Node 24 (dépréciation
   Node 20 sur les runners GitHub au 16/06/2026) — checkout v6, setup-qemu v4,
   setup-buildx v4, login v4, metadata v6, build-push v7, codeql upload-sarif
