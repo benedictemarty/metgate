@@ -113,13 +113,16 @@ spec:
               port: http
             initialDelaySeconds: 10
             periodSeconds: 30
+          # Mémoire : le pré-chargement CTH au démarrage télécharge et décode
+          # un NetCDF EUMETSAT volumineux — 256Mi de limite provoquait des
+          # OOMKill au boot. L'emptyDir /tmp (disque) ne compte pas ici.
           resources:
             requests:
               cpu: 50m
-              memory: 64Mi
+              memory: 256Mi
             limits:
               cpu: 500m
-              memory: 256Mi
+              memory: 1024Mi
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
