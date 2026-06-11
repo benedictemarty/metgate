@@ -5,6 +5,15 @@ Versionnage : [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **feat(web)** : vue **ATC Radar** (`ATCView.tsx`) — fond carto dark, couche
+  FIR (`/api/fir`), suivi avions ; lazy-loadée depuis la nav.
+- **deploy(k8s)** : `envFrom` vers une ConfigMap optionnelle `metgate-config`
+  pour le proxy sortant et les URLs des services extérieurs (le pod démarre
+  sans elle ; accès direct + défauts publics). Mode d'emploi en tête du
+  manifest, y compris le montage volume requis pour `OUTBOUND_CA_FILE`.
+
 ### Changed
 
 - **deploy(k8s)** : image pinnée `0.1.2` → `0.4.0` (proxy sortant + URLs

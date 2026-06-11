@@ -9,7 +9,18 @@
 #        --from-literal=OPENSKY_CLIENT_SECRET=''
 #      Les clés OPENSKY_* et EUMETSAT_* sont optionnelles : si absentes les
 #      endpoints associés renvoient 503 (comportement volontaire).
-#   2) Appliquer :
+#   2) (Optionnel) Créer la ConfigMap metgate-config pour le proxy sortant
+#      et/ou surcharger les URLs des services extérieurs (miroir interne).
+#      Sans elle, accès direct + URLs publiques par défaut. Exemple :
+#      kubectl create configmap metgate-config \
+#        --from-literal=OUTBOUND_PROXY_URL='http://proxy.corp:3128' \
+#        --from-literal=NO_PROXY='.meteo.fr,.svc.cluster.local'
+#      Variables reconnues : OUTBOUND_PROXY_URL, NO_PROXY, OUTBOUND_CA_FILE,
+#      OUTBOUND_TLS_INSECURE, OPENSKY_BASE_URL, OPENSKY_AUTH_URL,
+#      ADSBFI_BASE_URL, EUMETSAT_API_BASE_URL, EUMETVIEW_WMS_URL.
+#      NB : OUTBOUND_CA_FILE pointe vers un fichier DANS le conteneur — monter
+#      le PEM via un volume (configMap/secret) et donner son mountPath ici.
+#   3) Appliquer :
 #      kubectl apply -f deploy/k8s/metgate.yaml
 ---
 apiVersion: apps/v1
@@ -48,6 +59,12 @@ spec:
           ports:
             - containerPort: 8080
               name: http
+          # ConfigMap optionnelle : proxy sortant + URLs des services extérieurs
+          # (cf. en-tête de ce fichier). Le pod démarre sans elle.
+          envFrom:
+            - configMapRef:
+                name: metgate-config
+                optional: true
           env:
             - name: PORT
               value: "8080"
