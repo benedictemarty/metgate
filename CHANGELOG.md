@@ -7,9 +7,11 @@ Versionnage : [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- **deploy(k8s)** : ressources mémoire relevées (requests 64Mi → 256Mi,
-  limits 256Mi → 1024Mi) — le pré-chargement CTH au démarrage (téléchargement
-  + décodage NetCDF EUMETSAT) provoquait des OOMKill avec la limite à 256Mi.
+- **deploy(k8s)** : ressources relevées (requests memory 64Mi → 256Mi,
+  limits cpu 500m → 2 / memory 256Mi → 4Gi) — le pré-chargement CTH au
+  démarrage (téléchargement + décodage NetCDF EUMETSAT) faisait tomber les
+  pods, le throttling CPU à 500m étant le facteur dominant constaté en
+  cluster.
 - **deploy(k8s)** : volume `emptyDir` monté sur `/tmp` (sizeLimit 256Mi).
   Avec `readOnlyRootFilesystem: true` et sans ce volume, tous les décodages
   NetCDF (vent, tropo, cendres, foudre, CTH) échouaient en

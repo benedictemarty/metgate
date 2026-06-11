@@ -113,16 +113,18 @@ spec:
               port: http
             initialDelaySeconds: 10
             periodSeconds: 30
-          # Mémoire : le pré-chargement CTH au démarrage télécharge et décode
-          # un NetCDF EUMETSAT volumineux — 256Mi de limite provoquait des
-          # OOMKill au boot. L'emptyDir /tmp (disque) ne compte pas ici.
+          # Le pré-chargement CTH au démarrage (téléchargement + décodage NetCDF
+          # EUMETSAT) est gourmand en CPU : une limite à 500m throttlait le boot
+          # et faisait tomber les pods (constaté en cluster). 2 CPU / 4Gi laissent
+          # la marge pour les décodages concurrents (vent + tropo + cendres).
+          # L'emptyDir /tmp (disque) ne compte pas dans la limite mémoire.
           resources:
             requests:
               cpu: 50m
               memory: 256Mi
             limits:
-              cpu: 500m
-              memory: 1024Mi
+              cpu: 2
+              memory: 4Gi
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
