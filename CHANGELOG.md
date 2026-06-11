@@ -5,6 +5,15 @@ Versionnage : [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **deploy(k8s)** : image pinnée `0.1.2` → `0.4.0` (proxy sortant + URLs
+  configurables disponibles en cluster).
+- **ci(release)** : bump des actions vers les majeures Node 24 (dépréciation
+  Node 20 sur les runners GitHub au 16/06/2026) — checkout v6, setup-qemu v4,
+  setup-buildx v4, login v4, metadata v6, build-push v7, codeql upload-sarif
+  v4 (v3 dépréciée déc. 2026).
+
 ---
 
 ## [0.4.0] — 2026-06-11 — Sprint « Proxy sortant »
