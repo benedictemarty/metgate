@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
-import { Cloud, FileText, Globe, Loader2, Map as MapIcon, Moon, Radar, Sun, TrendingUp, BookOpen } from 'lucide-react'
+import { Cloud, FileText, Globe, Loader2, Map as MapIcon, Moon, Radar, Sun, TrendingUp, BookOpen, MonitorDot } from 'lucide-react'
 import Catalog from './pages/Catalog'
 import type { Aggregate } from './types'
 
@@ -7,8 +7,9 @@ const MapView     = lazy(() => import('./pages/MapView'))
 const TowerGlobe  = lazy(() => import('./pages/TowerGlobe'))
 const RouteProfile = lazy(() => import('./pages/RouteProfile'))
 const NavDisplay  = lazy(() => import('./pages/NavDisplay'))
+const ATCView     = lazy(() => import('./pages/ATCView'))
 
-type View = 'catalog' | 'map' | 'tower' | 'profile' | 'nd'
+type View = 'catalog' | 'map' | 'tower' | 'profile' | 'nd' | 'atc'
 
 export type Theme = 'dark' | 'light'
 
@@ -76,7 +77,8 @@ export default function App() {
               <NavButton active={view === 'map'}     onClick={() => setView('map')}     icon={MapIcon}    label="Carte" />
               <NavButton active={view === 'tower'}   onClick={() => setView('tower')}   icon={Globe}      label="Tour 3D" />
               <NavButton active={view === 'profile'} onClick={() => setView('profile')} icon={TrendingUp} label="Profil" />
-              <NavButton active={view === 'nd'}      onClick={() => setView('nd')}      icon={Radar}      label="Nav Display" />
+              <NavButton active={view === 'nd'}      onClick={() => setView('nd')}      icon={Radar}       label="Nav Display" />
+              <NavButton active={view === 'atc'}     onClick={() => setView('atc')}     icon={MonitorDot}  label="ATC Radar" />
             </nav>
             <a
               href="/api/docs"
@@ -112,6 +114,11 @@ export default function App() {
       {view === 'nd' && (
         <Suspense fallback={<Spinner />}>
           <NavDisplay />
+        </Suspense>
+      )}
+      {view === 'atc' && (
+        <Suspense fallback={<Spinner />}>
+          <ATCView />
         </Suspense>
       )}
     </div>
