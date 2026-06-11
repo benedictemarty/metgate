@@ -5,6 +5,14 @@ Versionnage : [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **deploy(k8s)** : volume `emptyDir` monté sur `/tmp` (sizeLimit 256Mi).
+  Avec `readOnlyRootFilesystem: true` et sans ce volume, tous les décodages
+  NetCDF (vent, tropo, cendres, foudre, CTH) échouaient en
+  `read-only file system` (503). Le compose avait déjà son tmpfs `/tmp`,
+  le manifest K8s non.
+
 ---
 
 ## [0.5.0] — 2026-06-11 — Sprint « ATC Radar + déploiement »

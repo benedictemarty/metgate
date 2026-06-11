@@ -125,6 +125,17 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          # /tmp inscriptible obligatoire : les décodages NetCDF (vent, tropo,
+          # cendres, foudre, CTH) écrivent des fichiers temporaires
+          # metgate-nc-*.nc. Sans ce volume, rootfs read-only → 503
+          # « read-only file system ». Équivalent du tmpfs /tmp du compose.
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
 ---
 apiVersion: v1
 kind: Service
