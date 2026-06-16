@@ -5,6 +5,20 @@ Versionnage : [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-06-16 — Sprint « FIR officielles + stabilisation k8s »
+
+### Changed
+
+- **fix(fir)** : remplacement de la source des contours FIR/UIR. L'ancien jeu
+  VATSIM (vatspy-data-project, 1038 secteurs de simulation, ~20 points/zone,
+  contours en lignes droites grossières) est remplacé par les **FIR/UIR
+  officielles OACI d'EUROCONTROL** (atlas EAD, 336 zones, ~667 points/zone en
+  WGS84, simplifiées à ~500 m). Les frontières continentales épousent
+  désormais les frontières administratives des États, comme dans la réalité.
+  Couverture mondiale (Europe, Amériques, Asie, Afrique, Océanie). Script de
+  génération reproductible `internal/fir/gen_fir.py` + test `fir_test.go`.
+  Schéma de propriétés inchangé pour le frontend (`icao`, `uir`).
+
 ### Fixed
 
 - **deploy(k8s)** : ressources relevées (requests memory 64Mi → 256Mi,
