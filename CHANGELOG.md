@@ -5,6 +5,15 @@ Versionnage : [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-06-16
+
+### Changed
+
+- **fix(fir)** : tolérance de simplification des contours FIR/UIR réduite de
+  ~500 m à ~200 m (TOL 0.005 → 0.002 dans `gen_fir.py`). Tracé plus fidèle au
+  jeu officiel EAD, réduit l'écart visuel le long des frontières ; fichier
+  embarqué 1.0 Mo → 1.6 Mo.
+
 ## [0.6.0] — 2026-06-16 — Sprint « FIR officielles + stabilisation k8s »
 
 ### Changed

@@ -17,8 +17,8 @@ Prérequis : pip install pyshp shapely  (idéalement dans un venv).
 Usage     : python3 internal/fir/gen_fir.py
             (re-télécharge le zip dans un cache temporaire si absent)
 
-Le contour est simplifié à TOL degrés (~500 m) : invisible à l'échelle d'une
-carte de FIR, mais ramène le fichier de 4.7 Mo (brut) à ~1 Mo.
+Le contour est simplifié à TOL degrés (~200 m) : fidèle au tracé officiel
+tout en ramenant le fichier de 4.7 Mo (brut) à ~1.6 Mo.
 """
 import io
 import json
@@ -30,7 +30,7 @@ import shapefile  # pyshp
 from shapely.geometry import mapping, shape
 
 SRC_URL = "https://raw.githubusercontent.com/euctrl-pru/eurocontrol-atlas/master/zip/FirUir_EAD.zip"
-TOL = 0.005          # tolérance de simplification (degrés ; ~500 m)
+TOL = 0.002          # tolérance de simplification (degrés ; ~200 m)
 NDIGITS = 5          # arrondi des coordonnées (~1 m)
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "fir_world.geojson")
