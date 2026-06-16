@@ -918,7 +918,7 @@ func (a *API) handleAlerts(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleFIR sert les limites des FIR/UIR mondiales (GeoJSON statique embarqué).
-// Source : jaluebbe/FlightMapEuropeSimple + NFDC North America, licence ouverte.
+// Source : EUROCONTROL atlas/EAD (336 FIR/UIR OACI, MIT) ; cf. internal/fir/gen_fir.py.
 func (a *API) handleFIR(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/geo+json")
 	w.Header().Set("Cache-Control", "public, max-age=86400")

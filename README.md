@@ -45,7 +45,7 @@ Portail météo pour les services ATM — agrège [MetGate](https://metgate.mete
 - **Mode LIVE** : suivi ADS-B temps réel (polling OpenSky 15 s), données FL / GS / TRK / V/S / LAT / LON
 - Phénomènes météo calés sur l'ETA de l'avion : RDT T+0…T+60, SIGMET par fenêtre de validité, flashes MTG-LI avec fade temporel (blanc → rouge → masqué sur 10 min)
 - Contours pulsants alternés (cycle cos² par type), popup au survol
-- Mini-carte géographique (Natural Earth 110m + FIR VATSIM 1038 zones)
+- Mini-carte géographique (Natural Earth + FIR/UIR EUROCONTROL, 336 zones OACI)
 - Indicateur de mise à jour météo (heure + compteurs cellules / flashes)
 
 ---
@@ -63,7 +63,7 @@ internal/
   lightning/         EUMETSAT MTG-LI LFL, cache par product ID
   eumetsat/          client OAuth2 EUMETSAT (token cache)
   satellite/         proxy tuiles EUMETView WMS (cache 60 s / tuile)
-  fir/               FIR/UIR mondiaux embarqués (VATSIM, 1038 zones, GeoJSON)
+  fir/               FIR/UIR mondiaux embarqués (EUROCONTROL EAD, 336 zones, GeoJSON ; cf. gen_fir.py)
   geo/               pays Natural Earth 110m embarqués (GeoJSON)
   http/              routes HTTP, handlers, spec OpenAPI embarquée
   web/               go:embed du frontend buildé (dist/)
@@ -391,7 +391,7 @@ Le `Makefile` inclut une cible `make deploy` qui pousse le binaire sur un LXC Pr
 | [EUMETSAT Data Store](https://data.eumetsat.int) | MTG-FCI CTTH (sommets nuageux), MTG-LI (foudre) |
 | [EUMETView WMS](https://view.eumetsat.int) | Tuiles satellite FCI IR / RGB Convection |
 | [OurAirports](https://ourairports.com/data/) | Aérodromes, pistes, coordonnées (CC0) |
-| [VATSIM vatspy-data-project](https://github.com/vatsimnetwork/vatspy-data-project) | FIR/UIR mondiaux 1038 zones (MIT) |
+| [EUROCONTROL atlas (EAD)](https://github.com/euctrl-pru/eurocontrol-atlas) | FIR/UIR OACI mondiales, 336 zones, contours haute résolution (MIT) |
 | [Natural Earth](https://www.naturalearthdata.com) | Polygones pays 110m (domaine public) |
 
 > **Note EUMETSAT** : CTH, foudre et satellite MTG sont des données situationnelles **non OPMET**. Elles complètent la vision opérationnelle mais ne remplacent pas les produits OPMET officiels.
@@ -412,4 +412,4 @@ Le `Makefile` inclut une cible `make deploy` qui pousse le binaire sur un LXC Pr
 
 Licence officielle de l'Union Européenne — copyleft compatible AGPL/LGPL/MPL. Toute modification distribuée ou déployée en service doit être publiée sous EUPL-1.2 ou licence compatible.
 
-Les données tierces conservent leur licence d'origine : VATSIM Boundaries (MIT), Natural Earth (domaine public), OurAirports (CC0).
+Les données tierces conservent leur licence d'origine : FIR/UIR EUROCONTROL atlas/EAD (MIT), Natural Earth (domaine public), OurAirports (CC0).
